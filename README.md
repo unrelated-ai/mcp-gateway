@@ -1,26 +1,62 @@
+<div align="center">
+
 # MCP Gateway by unrelated.ai
 
 MCP infrastructure for turning existing systems into MCP servers and serving them safely at scale.
 
-## Quick Start (recommended): Docker Compose + Web UI
+[![CI](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/ci.yml)
+[![Security](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-If you just want to try the full product experience, this is the fastest path:
+![MCP Gateway UI](docs/assets/ui_main_screen.png)
 
-1. Start the demo stack (Gateway Mode 3 + Postgres + Web UI + example Adapters/backends):
+</div>
+
+## Quick Start (recommended): Docker (published images) + Web UI
+
+If you just want to try the product experience, this is the fastest path (no repo clone needed).
+
+This example pins component versions (adjust as desired):
+
+- Gateway + migrator: `0.8.0`
+- Web UI: `0.4.1`
+
+1. Download a Compose file that uses published images:
 
 ```bash
-make up
+curl -fsSL -o mcp-gateway-compose.yml \
+  https://raw.githubusercontent.com/unrelated-ai/mcp-gateway/main/docker-compose.quickstart.yml
 ```
 
-2. Open the Web UI:
+2. Start the stack:
+
+```bash
+GATEWAY_VERSION=0.8.0 UI_VERSION=0.4.1 \
+  docker compose -f mcp-gateway-compose.yml up -d
+```
+
+3. Open the Web UI:
 
 - `http://127.0.0.1:27102`
 
 On a fresh install (bootstrap enabled + empty DB), onboarding will guide you through creating the first tenant and profile.
 
-3. Connect your MCP client to the profile endpoint you created in the UI:
+4. Connect your MCP client to the profile endpoint you created in the UI:
 
 - `http://127.0.0.1:27100/<PROFILE_ID>/mcp`
+
+Useful commands:
+
+- `docker compose -f mcp-gateway-compose.yml down` (stop the stack)
+- `docker compose -f mcp-gateway-compose.yml down -v` (also wipe the DB volume)
+
+## Quick Start (from source): Docker Compose + Web UI
+
+If you're developing this repo locally, the Makefile-driven workflow is convenient:
+
+```bash
+make up
+```
 
 Useful commands:
 

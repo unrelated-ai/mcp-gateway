@@ -1,0 +1,77 @@
+services:
+  gateway_db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: gateway
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d gateway"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      # NOTE: unique name so onboarding starts from a clean slate.
+      - gateway_db_data_bootstrap_v1:/var/lib/postgresql/data
+
+  gateway_db_migrate:
+    image: ghcr.io/unrelated-ai/mcp-gateway-migrator:${GATEWAY_VERSION:-0.8.0}
+    depends_on:
+      gateway_db:
+        condition: service_healthy
+    restart: "no"
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@gateway_db:5432/gateway?sslmode=disable
+    command:
+      - up
+
+  gateway:
+    image: ghcr.io/unrelated-ai/mcp-gateway:${GATEWAY_VERSION:-0.8.0}
+    depends_on:
+      gateway_db:
+        condition: service_healthy
+      gateway_db_migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    ports:
+      - "27100:4000" # data plane
+      - "27101:4001" # admin/control plane
+    environment:
+      UNRELATED_GATEWAY_BIND: 0.0.0.0:4000
+      UNRELATED_GATEWAY_ADMIN_BIND: 0.0.0.0:4001
+      UNRELATED_GATEWAY_DATABASE_URL: postgres://postgres:postgres@gateway_db:5432/gateway?sslmode=disable
+      UNRELATED_GATEWAY_ADMIN_TOKEN: ${UNRELATED_GATEWAY_ADMIN_TOKEN:-dev-admin-token}
+      UNRELATED_GATEWAY_SESSION_SECRET: ${UNRELATED_GATEWAY_SESSION_SECRET:-dev-session-secret}
+      # Fresh-install bootstrap endpoint (create first tenant) is enabled only when:
+      # - this flag is true AND
+      # - there are no tenants in the DB.
+      UNRELATED_GATEWAY_BOOTSTRAP_ENABLED: "1"
+      # Mode 3 tenant secret encryption keyring (dev default; override for real deployments).
+      UNRELATED_GATEWAY_SECRET_KEYS: ${UNRELATED_GATEWAY_SECRET_KEYS:-dev-secret-keys}
+    healthcheck:
+      # Release images are alpine (busybox), so `wget` is available.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4001/health >/dev/null || exit 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+
+  gateway_ui:
+    image: ghcr.io/unrelated-ai/mcp-gateway-ui:${UI_VERSION:-0.4.1}
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+    ports:
+      - "27102:3000"
+    environment:
+      # UI server -> Gateway admin/control plane (internal docker network).
+      GATEWAY_ADMIN_BASE: http://gateway:4001
+      # What end-users copy into their MCP client config (host network).
+      NEXT_PUBLIC_GATEWAY_DATA_BASE: http://localhost:27100
+
+volumes:
+  gateway_db_data_bootstrap_v1:
