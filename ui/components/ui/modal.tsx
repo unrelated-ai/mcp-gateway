@@ -23,6 +23,7 @@ const sizeStyles = {
 };
 
 export function Modal({ open, onClose, children, title, description, size = "md" }: ModalProps) {
+  const hasHeader = Boolean(title || description);
   const handleEscape = useCallback(
     (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -63,7 +64,7 @@ export function Modal({ open, onClose, children, title, description, size = "md"
         `}
       >
         {/* Header */}
-        {(title || description) && (
+        {hasHeader && (
           <div className="px-6 pt-6 pb-4">
             {title && <h2 className="text-lg font-semibold text-zinc-100">{title}</h2>}
             {description && <p className="mt-1 text-sm text-zinc-400">{description}</p>}
@@ -71,7 +72,7 @@ export function Modal({ open, onClose, children, title, description, size = "md"
         )}
 
         {/* Content */}
-        <div className="px-6 pb-6">{children}</div>
+        <div className={`px-6 pb-6 ${hasHeader ? "" : "pt-6"}`.trim()}>{children}</div>
 
         {/* Close button */}
         <button
