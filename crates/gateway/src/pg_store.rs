@@ -1478,17 +1478,29 @@ order by created_at asc, id asc
         let profile_id = Uuid::parse_str(profile_id)
             .map_err(|_| anyhow::anyhow!("invalid profile id (expected UUID)"))?;
 
+        let mut tx: Transaction<'_, Postgres> = self.pool.begin().await?;
+
+        let _ = sqlx::query(
+            r"
+delete from contract_events
+where profile_id = $1
+",
+        )
+        .bind(profile_id)
+        .execute(&mut *tx)
+        .await?;
+
         let res = sqlx::query(
             r"
-update profiles
-set enabled = false,
-    updated_at = now()
+delete from profiles
 where id = $1
 ",
         )
         .bind(profile_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
         if res.rows_affected() > 0 {
             let _ = pg_invalidation::publish(
                 &self.pool,
