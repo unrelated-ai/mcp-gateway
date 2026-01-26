@@ -83,6 +83,13 @@ export default function ProfileDetailPage() {
   }, [profile?.name]);
 
   type SurfaceResponse = ProfileSurface;
+  const DISABLE_ALL_TOOLS_SENTINEL = "__none__:__none__";
+  const deleteRequireText = useMemo(() => {
+    if (!profile) return undefined;
+    const n = profile.name.trim();
+    // If the name is very long, prefer an ID confirmation (still copy/paste friendly).
+    return n && n.length <= 48 ? n : profile.id;
+  }, [profile]);
 
   const [surfaceByProfileId, setSurfaceByProfileId] = useState<
     Record<string, SurfaceResponse | undefined>
@@ -234,6 +241,54 @@ export default function ProfileDetailPage() {
       await tenantApi.putProfile(profile.id, buildPutProfileBody(profile, { tools: nextTools }));
       return nextTools;
     },
+    onMutate: async (nextTools) => {
+      await queryClient.cancelQueries({ queryKey: qk.profile(profileId) });
+      await queryClient.cancelQueries({ queryKey: qk.profiles() });
+
+      const prevProfile = queryClient.getQueryData<Profile>(qk.profile(profileId));
+      const prevProfiles = queryClient.getQueryData<{ profiles: Profile[] }>(qk.profiles());
+      const prevSurface = profileId ? (surfaceByProfileId[profileId] ?? undefined) : undefined;
+
+      queryClient.setQueryData(qk.profile(profileId), (old: Profile | undefined) => {
+        if (!old) return old;
+        return { ...old, tools: nextTools };
+      });
+
+      queryClient.setQueryData(qk.profiles(), (old: { profiles: Profile[] } | undefined) => {
+        if (!old) return old;
+        return {
+          ...old,
+          profiles: old.profiles.map((p) => (p.id === profileId ? { ...p, tools: nextTools } : p)),
+        };
+      });
+
+      // Optimistically update the probed surface so the UI doesn't flash/flicker.
+      setSurfaceByProfileId((prev) => {
+        const s = prev[profileId];
+        if (!s) return prev;
+
+        const allowAll = nextTools.length === 0;
+        const allowNone = nextTools.length === 1 && nextTools[0] === DISABLE_ALL_TOOLS_SENTINEL;
+        const allowSet = new Set(nextTools);
+
+        const nextAllTools = s.allTools.map((t) => {
+          const ref = `${t.sourceId}:${t.originalName}`;
+          const enabled = allowAll ? true : allowNone ? false : allowSet.has(ref);
+          return { ...t, enabled };
+        });
+
+        const nextEnabledTools = nextAllTools
+          .filter((t) => t.enabled)
+          .map((t) => ({
+            name: t.name,
+            description: t.description ?? t.originalDescription ?? null,
+          }));
+
+        return { ...prev, [profileId]: { ...s, allTools: nextAllTools, tools: nextEnabledTools } };
+      });
+
+      return { prevProfile, prevProfiles, prevSurface };
+    },
     onSuccess: async (nextTools) => {
       await invalidateProfile(queryClient, profileId);
       await invalidateProfiles(queryClient);
@@ -241,9 +296,13 @@ export default function ProfileDetailPage() {
         if (!old) return old;
         return { ...old, tools: nextTools };
       });
-      probeMutation.mutate();
     },
-    onError: (e) => {
+    onError: (e, _nextTools, ctx) => {
+      if (ctx?.prevProfile) queryClient.setQueryData(qk.profile(profileId), ctx.prevProfile);
+      if (ctx?.prevProfiles) queryClient.setQueryData(qk.profiles(), ctx.prevProfiles);
+      if (ctx?.prevSurface !== undefined) {
+        setSurfaceByProfileId((prev) => ({ ...prev, [profileId]: ctx.prevSurface }));
+      }
       pushToast({
         variant: "error",
         message: e instanceof Error ? e.message : "Failed to update tools",
@@ -279,15 +338,25 @@ export default function ProfileDetailPage() {
 
     const allRefs = allToolRefs;
     const current = profile.tools ?? [];
-    const currentSet = new Set(current);
+    const isAllowAll = current.length === 0;
+    const isAllowNone = current.length === 1 && current[0] === DISABLE_ALL_TOOLS_SENTINEL;
 
-    // Default state: empty allowlist means "all enabled".
-    if (current.length === 0) {
+    // Semantics:
+    // - [] => no allowlist configured (allow all tools)
+    // - [DISABLE_ALL_TOOLS_SENTINEL] => allowlist configured, but matches nothing (allow none)
+    if (isAllowAll) {
       if (enabled) return;
       const next = allRefs.filter((r) => r !== toolRef);
-      updateEnabledToolsMutation.mutate(next);
+      updateEnabledToolsMutation.mutate(next.length === 0 ? [DISABLE_ALL_TOOLS_SENTINEL] : next);
       return;
     }
+    if (isAllowNone) {
+      if (!enabled) return;
+      updateEnabledToolsMutation.mutate([toolRef]);
+      return;
+    }
+
+    const currentSet = new Set(current);
 
     if (enabled) {
       currentSet.add(toolRef);
@@ -298,7 +367,11 @@ export default function ProfileDetailPage() {
     const next = Array.from(currentSet);
     const nextSet = new Set(next);
     const isAllEnabled = allRefs.length > 0 && allRefs.every((r) => nextSet.has(r));
-    updateEnabledToolsMutation.mutate(isAllEnabled ? [] : next);
+    if (next.length === 0) {
+      updateEnabledToolsMutation.mutate([DISABLE_ALL_TOOLS_SENTINEL]);
+    } else {
+      updateEnabledToolsMutation.mutate(isAllEnabled ? [] : next);
+    }
   };
 
   return (
@@ -465,6 +538,7 @@ export default function ProfileDetailPage() {
         onConfirm={() => deleteMutation.mutate()}
         title="Delete profile?"
         description={`This will permanently delete "${profile?.name ?? profileId}". This action cannot be undone.`}
+        requireText={deleteRequireText}
         confirmLabel="Delete Profile"
         danger
         loading={deleteMutation.isPending}

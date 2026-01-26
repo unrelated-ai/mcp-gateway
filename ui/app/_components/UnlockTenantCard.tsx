@@ -2,11 +2,11 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { CheckCircleIconBold, CheckIcon, ExclamationIcon, UnlockIcon } from "@/components/icons";
+import { CopyBlock, Modal } from "@/components/ui";
 import {
   decodeTenantTokenPayload,
   setTenantSessionCookies,
@@ -22,6 +22,7 @@ type UnlockForm = z.infer<typeof unlockSchema>;
 export function UnlockTenantCard() {
   const router = useRouter();
   const [isValidating, setIsValidating] = useState(false);
+  const [showResetHelp, setShowResetHelp] = useState(false);
   const [tokenInfo, setTokenInfo] = useState<{
     payload: TenantTokenPayloadV1;
     expires_at: string;
@@ -166,14 +167,55 @@ export function UnlockTenantCard() {
       )}
 
       <div className="border-t border-zinc-800/80 bg-zinc-950/30 p-4 text-xs text-zinc-500">
-        Fresh install? You’ll be guided through onboarding automatically. If you need to start over,
-        reset the DB and revisit the UI.
-        <span className="mx-1">·</span>
-        <Link href="/settings" className="text-zinc-300 hover:text-white underline">
-          Settings
-        </Link>
+        Can&apos;t find your tenant token? If you want to start over, reset the DB and then revisit
+        this page to re-run onboarding.{" "}
+        <button
+          type="button"
+          onClick={() => setShowResetHelp(true)}
+          className="text-zinc-300 hover:text-white underline decoration-dotted underline-offset-4"
+        >
+          I want to know how
+        </button>
       </div>
+
+      <ResetDbHelpModal open={showResetHelp} onClose={() => setShowResetHelp(false)} />
     </div>
+  );
+}
+
+function ResetDbHelpModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Reset the DB (start over)"
+      description="This deletes ALL tenants and configuration in the docker-compose Postgres DB."
+      size="lg"
+    >
+      <div className="space-y-4 text-sm text-zinc-300">
+        <p className="text-zinc-400">
+          If you manage the machine running the stack (local/dev), you can wipe the database so the
+          Gateway boots into onboarding again.
+        </p>
+
+        <CopyBlock
+          label="Recommended (Makefile)"
+          language="bash"
+          value={`make up-reset\nmake up`}
+        />
+
+        <CopyBlock
+          label="Docker Compose (equivalent)"
+          language="bash"
+          value={`docker compose --profile manual run --rm gateway_db_reset\ndocker compose up -d --build`}
+        />
+
+        <p className="text-xs text-zinc-500">
+          After resetting, refresh this page. Onboarding will appear only if bootstrap is enabled
+          and the DB has zero tenants.
+        </p>
+      </div>
+    </Modal>
   );
 }
 

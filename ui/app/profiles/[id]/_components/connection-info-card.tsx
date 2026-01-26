@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import type { Profile } from "@/src/lib/types";
 import { formatDataPlaneAuthMode } from "@/src/lib/display";
-import { CopyButton, LockIcon } from "@/components/ui";
+import { CopyButton, LockIcon, Toggle } from "@/components/ui";
 import { InfoIconAlt } from "@/components/icons";
 
 function getMcpJsonText(
@@ -104,35 +104,13 @@ export function ConnectionInfoCard({
         <div>
           <div className="flex items-center justify-between gap-4 mb-2">
             <h2 className="text-sm font-medium text-zinc-400">MCP Endpoint URL</h2>
-            <div className="flex items-center gap-2">
-              <span
-                className={`text-xs font-medium ${profile?.enabled ? "text-emerald-400" : "text-zinc-400"}`}
-              >
-                {profile?.enabled ? "Enabled" : "Disabled"}
-              </span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={!!profile?.enabled}
-                disabled={!profile || toggleEnabledPending}
-                onClick={onToggleEnabled}
-                className={`
-                  relative inline-flex h-6 w-11 shrink-0 items-center rounded-full
-                  transition-colors duration-200 ease-in-out
-                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900
-                  ${profile?.enabled ? "bg-emerald-600" : "bg-zinc-700"}
-                  ${!profile || toggleEnabledPending ? "opacity-60" : ""}
-                `}
-              >
-                <span
-                  className={`
-                    inline-block h-4 w-4 transform rounded-full bg-white shadow-lg
-                    transition-transform duration-200 ease-in-out
-                    ${profile?.enabled ? "translate-x-6" : "translate-x-1"}
-                  `}
-                />
-              </button>
-            </div>
+            <Toggle
+              checked={!!profile?.enabled}
+              onChange={() => onToggleEnabled()}
+              disabled={!profile || toggleEnabledPending}
+              label={profile?.enabled ? "Enabled" : "Disabled"}
+              switchSide="right"
+            />
           </div>
           <div className="flex items-center gap-3">
             <code

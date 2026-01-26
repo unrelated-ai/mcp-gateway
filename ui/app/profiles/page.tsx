@@ -12,6 +12,7 @@ import { authModeTone, formatDataPlaneAuthMode } from "@/src/lib/display";
 import { buildPutProfileBody } from "@/src/lib/profilePut";
 import { GATEWAY_DATA_BASE } from "@/src/lib/env";
 import { useCopyToClipboard } from "@/src/lib/useCopyToClipboard";
+import { Toggle } from "@/components/ui";
 import {
   CheckCircleIcon,
   CheckIcon,
@@ -199,37 +200,21 @@ function ProfileCard({ profile, mcpUrl }: { profile: Profile; mcpUrl: string }) 
             </span>
 
             <div className="ml-auto flex items-center gap-2">
-              <span
-                className={`text-xs font-medium ${enabled ? "text-emerald-400" : "text-zinc-400"}`}
-              >
-                {enabled ? "Enabled" : "Disabled"}
-              </span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={enabled}
-                disabled={toggleEnabledMutation.isPending}
+              <div
                 onClick={(e) => {
+                  // Prevent the card link from navigating when toggling.
                   e.preventDefault();
                   e.stopPropagation();
-                  toggleEnabledMutation.mutate(!enabled);
                 }}
-                className={`
-                  relative inline-flex h-6 w-11 shrink-0 items-center rounded-full
-                  transition-colors duration-200 ease-in-out
-                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900
-                  ${enabled ? "bg-emerald-600" : "bg-zinc-700"}
-                  ${toggleEnabledMutation.isPending ? "opacity-60" : ""}
-                `}
               >
-                <span
-                  className={`
-                    inline-block h-4 w-4 transform rounded-full bg-white shadow-lg
-                    transition-transform duration-200 ease-in-out
-                    ${enabled ? "translate-x-6" : "translate-x-1"}
-                  `}
+                <Toggle
+                  checked={enabled}
+                  onChange={(next) => toggleEnabledMutation.mutate(next)}
+                  disabled={toggleEnabledMutation.isPending}
+                  label={enabled ? "Enabled" : "Disabled"}
+                  switchSide="right"
                 />
-              </button>
+              </div>
             </div>
           </div>
           {profile.description && (

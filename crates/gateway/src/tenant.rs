@@ -933,7 +933,7 @@ async fn delete_profile(
     }
 
     match store.delete_profile(&profile_id).await {
-        Ok(true) => (StatusCode::ACCEPTED, "").into_response(),
+        Ok(true) => Json(OkResponse { ok: true }).into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, "profile not found").into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
