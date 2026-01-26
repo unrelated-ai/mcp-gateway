@@ -21,10 +21,10 @@ Use component-scoped tags:
 
 Published images:
 
-- `ghcr.io/<owner>/mcp-adapter`
-- `ghcr.io/<owner>/mcp-gateway`
-- `ghcr.io/<owner>/mcp-gateway-migrator`
-- `ghcr.io/<owner>/mcp-gateway-ui`
+- `ghcr.io/unrelated-ai/mcp-adapter`
+- `ghcr.io/unrelated-ai/mcp-gateway`
+- `ghcr.io/unrelated-ai/mcp-gateway-migrator`
+- `ghcr.io/unrelated-ai/mcp-gateway-ui`
 
 All published runtime images are minimal and contain a **static** binary (or migrations for the migrator).
 
@@ -58,8 +58,8 @@ On `adapter-v*` tags, the release workflow also uploads a Linux **static** binar
 
 On `gateway-v*` tags, the release workflow publishes:
 
-- Gateway runtime image: `ghcr.io/<owner>/mcp-gateway`
-- Gateway migrator image: `ghcr.io/<owner>/mcp-gateway-migrator`
+- Gateway runtime image: `ghcr.io/unrelated-ai/mcp-gateway`
+- Gateway migrator image: `ghcr.io/unrelated-ai/mcp-gateway-migrator`
 - Gateway admin CLI release assets:
   - `unrelated-gateway-admin-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz`
   - `unrelated-gateway-admin-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz.sha256`
@@ -68,7 +68,7 @@ On `gateway-v*` tags, the release workflow publishes:
 
 On `ui-v*` tags, the release workflow publishes:
 
-- Web UI image: `ghcr.io/<owner>/mcp-gateway-ui`
+- Web UI image: `ghcr.io/unrelated-ai/mcp-gateway-ui`
 
 Tagging semantics match other components:
 

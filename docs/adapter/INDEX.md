@@ -1,6 +1,6 @@
 # Documentation Index
 
-This repository is a **Cargo workspace**. Today it primarily ships the **`unrelated-mcp-adapter`** binary ([`crates/adapter/`](../../crates/adapter/)).
+This documentation covers the **`unrelated-mcp-adapter`** binary in this repository ([`crates/adapter/`](../../crates/adapter/)).
 
 ## Start here
 

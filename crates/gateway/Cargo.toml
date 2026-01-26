@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "MCP Gateway (planned): authn/z + tenancy + policy + transforms"
+description = "MCP Gateway (beta): authn/z + tenancy + policy + transforms"
 
 [dependencies]
 tokio = { version = "1", features = ["full", "signal"] }

@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       image_name:
-        description: "Full image name, e.g. ghcr.io/<owner>/mcp-adapter"
+        description: "Full image name, e.g. ghcr.io/unrelated-ai/mcp-adapter"
         required: true
         type: string
       dockerfile:
