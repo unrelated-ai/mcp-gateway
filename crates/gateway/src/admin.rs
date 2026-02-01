@@ -94,6 +94,10 @@ pub fn router() -> Router {
             get(tool_call_stats_by_api_key),
         )
         .route(
+            "/admin/v1/tenants/{tenant_id}/audit/cleanup",
+            post(cleanup_tenant_audit_events),
+        )
+        .route(
             "/admin/v1/upstreams",
             post(put_upstream).get(list_upstreams),
         )
@@ -466,6 +470,13 @@ struct ToolCallStatsByToolResponse {
 #[serde(rename_all = "camelCase")]
 struct ToolCallStatsByApiKeyResponse {
     items: Vec<crate::store::ToolCallStatsByApiKey>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditCleanupResponse {
+    ok: bool,
+    deleted: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -2538,6 +2549,69 @@ async fn tool_call_stats_by_api_key(
         Ok(items) => Json(ToolCallStatsByApiKeyResponse { items }).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     }
+}
+
+async fn cleanup_tenant_audit_events(
+    Extension(state): Extension<Arc<AdminState>>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = authz(&headers, state.admin_token.as_deref()) {
+        return resp.into_response();
+    }
+    let Some(store) = &state.store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+    };
+    let started = Instant::now();
+
+    // Ensure tenant exists.
+    match store.get_tenant(&tenant_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return (StatusCode::NOT_FOUND, "tenant not found").into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+
+    let (status, ok, error, resp, deleted) =
+        match store.cleanup_audit_events_for_tenant(&tenant_id).await {
+            Ok(deleted) => (
+                StatusCode::OK,
+                true,
+                None,
+                Json(AuditCleanupResponse { ok: true, deleted }).into_response(),
+                deleted,
+            ),
+            Err(e) => {
+                let msg = e.to_string();
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    false,
+                    Some(AuditError::new("internal_error", msg.clone())),
+                    (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                    0,
+                )
+            }
+        };
+
+    state
+        .audit
+        .record(crate::audit::http_event(HttpAuditEvent {
+            tenant_id: tenant_id.clone(),
+            actor: AuditActor::default(),
+            action: "admin.audit_cleanup",
+            http_method: "POST",
+            http_route: "/admin/v1/tenants/{tenant_id}/audit/cleanup",
+            status_code: i32::from(status.as_u16()),
+            ok,
+            elapsed: started.elapsed(),
+            meta: serde_json::json!({
+                "tenant_id": tenant_id,
+                "deleted": deleted,
+            }),
+            error,
+        }))
+        .await;
+
+    resp
 }
 
 async fn get_profile_audit_settings(

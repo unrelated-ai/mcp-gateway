@@ -2470,6 +2470,38 @@ where tenant_id =
         }
         Ok(out)
     }
+
+    async fn cleanup_audit_events_for_tenant(&self, tenant_id: &str) -> anyhow::Result<u64> {
+        let row = sqlx::query(
+            r"
+select audit_retention_days
+from tenants
+where id = $1
+",
+        )
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            anyhow::bail!("tenant not found");
+        };
+        let retention_days: i32 = row.try_get("audit_retention_days")?;
+
+        let res = sqlx::query(
+            r"
+delete from audit_events
+where tenant_id = $1
+  and ts < now() - ($2::int * interval '1 day')
+",
+        )
+        .bind(tenant_id)
+        .bind(retention_days)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(res.rows_affected())
+    }
 }
 
 fn parse_data_plane_auth_mode(mode: &str) -> anyhow::Result<DataPlaneAuthMode> {

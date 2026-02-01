@@ -10,6 +10,7 @@ use tracing_subscriber::prelude::*;
 
 mod admin;
 mod audit;
+mod audit_retention;
 mod catalog;
 mod config;
 mod contracts;
@@ -129,6 +130,8 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
     let contracts = Arc::new(contracts::ContractTracker::new());
     let contract_fanout =
         build_contract_fanout(pg_pool.clone(), contracts.clone(), ct.clone()).await?;
+
+    audit_retention::spawn_audit_retention_task(pg_pool.clone(), ct.clone());
 
     let http = reqwest::Client::default();
     // OIDC discovery/JWKS fetch should never follow redirects (SSRF hardening).

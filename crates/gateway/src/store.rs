@@ -807,6 +807,11 @@ pub trait AdminStore: Send + Sync {
         tenant_id: &str,
         filter: AuditStatsFilter,
     ) -> anyhow::Result<Vec<ToolCallStatsByApiKey>>;
+
+    /// Delete audit events older than the configured tenant retention window.
+    ///
+    /// Returns the number of rows deleted.
+    async fn cleanup_audit_events_for_tenant(&self, tenant_id: &str) -> anyhow::Result<u64>;
 }
 
 /// In-memory store backed by a static config file (Mode 1).
