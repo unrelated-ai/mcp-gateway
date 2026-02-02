@@ -2,6 +2,27 @@
 
 This repository is newly public. Earlier internal iteration notes are intentionally omitted.
 
+## 2026-02-02
+
+- Gateway: `0.9.0`
+- Gateway admin CLI: `0.9.0`
+- Tenant-level Web UI: `0.5.0`
+
+### Gateway
+
+- Add audit logging for tenant and profile management operations (create, update, delete).
+- Add per-tenant audit settings (enable/disable, retention period).
+- Add audit event query endpoint with filtering and pagination.
+- Add audit analytics endpoints (tool calls by tool, tool calls by API key).
+- Add audit retention cleanup endpoint and automatic purge of expired events.
+- Add integration tests for audit events, audit retention, and tenant API audit trails.
+- Dockerfile/Makefile: security enhancements and improved test coverage targets.
+
+### Web UI
+
+- Add Audit page with event list, filtering, and detailed event view (summary, payload, metadata).
+- Add audit settings management (enable/disable logging, set retention period) on the Settings page.
+
 ## 2026-01-26
 
 - Gateway: `0.8.1`
