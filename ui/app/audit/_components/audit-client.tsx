@@ -80,13 +80,6 @@ function actionLabel(action: string): string {
 function eventSummary(e: AuditEventRow): string | null {
   const meta = (e.meta ?? {}) as Record<string, unknown>;
 
-  if (e.action === "tenant.profile_put" || e.action === "admin.profile_put") {
-    const name = asString(meta.name);
-    const enabled = asBool(meta.enabled);
-    if (name && enabled != null) return `${name} (${enabled ? "enabled" : "disabled"})`;
-    if (name) return name;
-  }
-
   if (e.action === "tenant.tool_source_put" || e.action === "admin.tool_source_put") {
     const sourceId = asString(meta.source_id);
     const kind = asString(meta.kind);
@@ -446,16 +439,63 @@ function EventDetailsDrawer({
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <Info label="HTTP method" value={event.httpMethod ?? "—"} mono />
-            <Info label="HTTP route" value={event.httpRoute ?? "—"} mono />
             <Info
               label="Status"
               value={event.statusCode != null ? String(event.statusCode) : "—"}
             />
+            <Info label="Error kind" value={event.errorKind ?? "—"} mono />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Info label="Error kind" value={event.errorKind ?? "—"} mono />
-            <Info label="Error message" value={event.errorMessage ?? "—"} />
+          <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 overflow-hidden">
+            <div className="px-4 py-3 border-b border-zinc-800/60 flex items-center justify-between">
+              <div className="text-sm font-semibold text-zinc-100">HTTP route</div>
+              <button
+                type="button"
+                onClick={async () => {
+                  const v = event.httpRoute ?? "";
+                  if (!v) return;
+                  try {
+                    await navigator.clipboard.writeText(v);
+                  } catch {
+                    // ignore
+                  }
+                }}
+                disabled={!event.httpRoute}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Copy
+              </button>
+            </div>
+            <div className="p-4">
+              <div className="text-sm text-zinc-200 font-mono overflow-x-auto whitespace-nowrap">
+                {event.httpRoute ?? "—"}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 overflow-hidden">
+            <div className="px-4 py-3 border-b border-zinc-800/60 flex items-center justify-between">
+              <div className="text-sm font-semibold text-zinc-100">Error message</div>
+              <button
+                type="button"
+                onClick={async () => {
+                  const v = event.errorMessage ?? "";
+                  if (!v) return;
+                  try {
+                    await navigator.clipboard.writeText(v);
+                  } catch {
+                    // ignore
+                  }
+                }}
+                disabled={!event.errorMessage}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Copy
+              </button>
+            </div>
+            <pre className="p-4 text-xs text-zinc-200 overflow-x-auto whitespace-pre-wrap break-words">
+              {event.errorMessage ?? "—"}
+            </pre>
           </div>
 
           <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 overflow-hidden">
