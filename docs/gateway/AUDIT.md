@@ -138,3 +138,4 @@ The Web UI exposes:
 
 - **Settings → Audit**: enable/disable + default level + retention (auto-saved)
 - **Audit**: tenant-wide event listing + analytics with filters (including per-profile filtering and deep-links from profile pages)
+- Clicking an event opens an **Event Details** view (raw fields + `meta` JSON with copy support).
