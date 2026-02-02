@@ -1,5 +1,6 @@
 export const qk = {
   gatewayStatus: () => ["gatewayStatus"] as const,
+  tenantAuditSettings: () => ["tenantAuditSettings"] as const,
 
   profiles: () => ["profiles"] as const,
   profile: (id: string) => ["profiles", id] as const,

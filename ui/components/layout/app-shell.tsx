@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   ChevronRightIcon,
+  ChartIcon,
   GridIcon,
   KeyIcon,
   LockIcon,
@@ -23,6 +24,7 @@ const navItems = [
   { href: "/sources", label: "Sources", icon: SourcesDbIcon },
   { href: "/api-keys", label: "API Keys", icon: KeyIcon },
   { href: "/secrets", label: "Secrets", icon: ShieldIcon },
+  { href: "/audit", label: "Audit", icon: ChartIcon },
   { href: "/settings", label: "Settings", icon: SettingsCogIcon },
 ];
 

@@ -407,6 +407,13 @@ export default function ProfileDetailPage() {
         actions={
           <div className="flex items-center gap-2">
             <button
+              type="button"
+              onClick={() => router.push(`/audit?profileId=${encodeURIComponent(profileId)}`)}
+              className="px-4 py-2 rounded-lg text-sm font-medium text-violet-300 hover:text-violet-200 hover:bg-violet-500/10 transition-colors"
+            >
+              Audit
+            </button>
+            <button
               onClick={() => setShowDeleteModal(true)}
               className="px-4 py-2 rounded-lg text-sm font-medium text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors"
             >

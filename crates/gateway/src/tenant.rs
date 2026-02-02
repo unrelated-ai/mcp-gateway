@@ -2864,7 +2864,6 @@ async fn put_audit_settings(
     let Some(store) = &state.store else {
         return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
     };
-    let started = Instant::now();
 
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
@@ -2886,46 +2885,13 @@ async fn put_audit_settings(
         default_level: req.default_level.trim().to_string(),
     };
 
-    let (status, ok, error, resp) =
-        match store.put_tenant_audit_settings(&tenant_id, &settings).await {
-            Ok(()) => (
-                StatusCode::OK,
-                true,
-                None,
-                Json(OkResponse { ok: true }).into_response(),
-            ),
-            Err(e) => {
-                let msg = e.to_string();
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    false,
-                    Some(AuditError::new("internal_error", msg.clone())),
-                    (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
-                )
-            }
-        };
-
-    state
-        .audit
-        .record(crate::audit::http_event(HttpAuditEvent {
-            tenant_id: tenant_id.clone(),
-            actor: AuditActor::default(),
-            action: "tenant.audit_settings_put",
-            http_method: "PUT",
-            http_route: "/tenant/v1/audit/settings",
-            status_code: i32::from(status.as_u16()),
-            ok,
-            elapsed: started.elapsed(),
-            meta: serde_json::json!({
-                "enabled": settings.enabled,
-                "retention_days": settings.retention_days,
-                "default_level": settings.default_level,
-            }),
-            error,
-        }))
-        .await;
-
-    resp
+    match store.put_tenant_audit_settings(&tenant_id, &settings).await {
+        Ok(()) => Json(OkResponse { ok: true }).into_response(),
+        Err(e) => {
+            let msg = e.to_string();
+            (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+        }
+    }
 }
 
 async fn list_audit_events(
