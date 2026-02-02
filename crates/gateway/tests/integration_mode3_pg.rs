@@ -369,6 +369,7 @@ async fn mode3_pg_profile_aggregates_two_upstreams_and_prefixes_on_collision() -
         "/admin/v1/profiles",
         json!({
             "tenantId": "t1",
+            "name": "p1",
             "allowPartialUpstreams": true,
             "upstreams": ["u1", "u2"]
         }),

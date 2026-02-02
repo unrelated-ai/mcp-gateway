@@ -172,24 +172,19 @@ function policySummary(p: ToolPolicy | null): ReactNode {
 export function ToolPolicyEditor({
   tool,
   policiesByToolRef,
-  saving,
   saveError,
   clearSaveError,
   onSave,
-  onClear,
 }: {
   tool: ProfileSurface["allTools"][number];
   policiesByToolRef: Map<string, ToolPolicy>;
-  saving: boolean;
   saveError: string | null;
   clearSaveError: () => void;
   onSave: (p: ToolPolicy) => void;
-  onClear: (stableToolRef: string) => void;
 }) {
   // Stable identifier: original tool name (independent of transforms).
   const stableRef = `${tool.sourceId}:${tool.originalName}`;
   const current = policiesByToolRef.get(stableRef) ?? null;
-  const hasAnyOverride = !!current;
 
   const [draft, setDraft] = useState<ToolPolicyDraft>(() => {
     if (current) return draftFromPolicy({ ...current, tool: stableRef });
@@ -212,11 +207,6 @@ export function ToolPolicyEditor({
     } catch (e) {
       setError(e instanceof Error ? e.message : "Invalid policy");
     }
-  };
-
-  const clear = () => {
-    clearSaveError();
-    onClear(stableRef);
   };
 
   return (
@@ -368,14 +358,6 @@ export function ToolPolicyEditor({
 
       <div className="flex items-center justify-between">
         <div className="text-xs text-zinc-500">{policySummary(current)}</div>
-        <button
-          type="button"
-          onClick={clear}
-          disabled={!hasAnyOverride || saving}
-          className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          Clear override
-        </button>
       </div>
     </div>
   );

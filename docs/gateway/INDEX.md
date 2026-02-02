@@ -32,6 +32,7 @@ The Adapter stays “dumb plumbing” on purpose: it turns systems into MCP and 
 - **Storage backends**:
   - Mode 1 (config file): implemented for the data plane (read-only); admin API is unavailable
   - Mode 3 (Postgres): implemented (shared state for HA deployments)
+- **Audit logging** (Mode 3): implemented (optional per tenant; retention cleanup)
 
 ## Docs
 
@@ -40,12 +41,13 @@ The Adapter stays “dumb plumbing” on purpose: it turns systems into MCP and 
 - MCP proxying & aggregation behavior: [`docs/gateway/MCP_PROXYING.md`](MCP_PROXYING.md)
 - Profile MCP settings (capabilities allow/deny, notifications, namespacing): [`docs/gateway/MCP_SETTINGS.md`](MCP_SETTINGS.md)
 - Outbound HTTP safety (SSRF hardening for gateway-native tool sources): [`docs/gateway/OUTBOUND_HTTP_SAFETY.md`](OUTBOUND_HTTP_SAFETY.md)
+- Audit logging (Mode 3 / Postgres): [`docs/gateway/AUDIT.md`](AUDIT.md)
 - CLI: [`docs/gateway-cli/INDEX.md`](../gateway-cli/INDEX.md)
 
 ## Current limitations
 
 - No server-side session token revocation list (rely on TTL + re-initialize).
-- Auditing / event trail is not implemented yet.
+- Audit event detail levels are still evolving (the current implementation stores safe, structured metadata by default).
 - Fine-grained allow/deny for **resources/prompts** is not implemented yet (tools have allowlisting + `tools/call` limits).
 - Tasks (SEP-1686) are not proxied end-to-end yet (blocked on published RMCP support beyond `rmcp 0.12.0`).
 - `notifications/roots/list_changed` is not forwarded yet (RMCP type exposure gap).

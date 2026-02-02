@@ -9,6 +9,7 @@
         test test-adapter test-gateway test-cli test-unit \
         test-integration test-integration-adapter test-integration-gateway \
         fmt fmt-check clippy lint \
+        security security-audit security-trivy \
         doc doc-open \
         adapter-run adapter-run-release \
         adapter-run-with-test-config adapter-run-release-with-test-config \
@@ -107,11 +108,13 @@ test-integration: test-integration-adapter test-integration-gateway
 
 ## Run adapter integration tests only (requires Docker)
 test-integration-adapter:
-	cargo test -p unrelated-mcp-adapter --tests -- --nocapture --test-threads=1
+	cargo test -p unrelated-mcp-adapter --tests -- --nocapture --test-threads=1 && \
+	cargo test -p unrelated-mcp-adapter --tests -- --ignored --nocapture --test-threads=1
 
 ## Run gateway integration tests only (requires Docker)
 test-integration-gateway:
-	cargo test -p unrelated-mcp-gateway --tests -- --nocapture --test-threads=1
+	cargo test -p unrelated-mcp-gateway --tests -- --nocapture --test-threads=1 && \
+	cargo test -p unrelated-mcp-gateway --tests -- --ignored --nocapture --test-threads=1
 
 # =============================================================================
 # Code Quality Targets
@@ -133,6 +136,28 @@ clippy:
 
 ## Run all lints (fmt + clippy)
 lint: fmt-check clippy
+
+# =============================================================================
+# Security
+# =============================================================================
+
+## Run security checks (mirrors .github/workflows/security.yml)
+security: security-audit security-trivy
+
+## Rust dependency audit (RustSec)
+security-audit:
+	cargo audit
+
+## Trivy scan local Docker images (requires docker + trivy)
+security-trivy:
+	docker build -t local/unrelated-mcp-adapter:pr .
+	docker build --target gateway-runtime -t local/unrelated-mcp-gateway:pr .
+	docker build --target gateway-migrator -t local/unrelated-mcp-gateway-migrator:pr .
+	docker build -f ui/Dockerfile -t local/unrelated-mcp-gateway-ui:pr ui
+	trivy image --format table --exit-code 1 --vuln-type os,library --severity CRITICAL,HIGH local/unrelated-mcp-adapter:pr
+	trivy image --format table --exit-code 1 --vuln-type os,library --severity CRITICAL,HIGH local/unrelated-mcp-gateway:pr
+	trivy image --format table --exit-code 1 --vuln-type os,library --severity CRITICAL,HIGH local/unrelated-mcp-gateway-migrator:pr
+	trivy image --format table --exit-code 1 --vuln-type os,library --severity CRITICAL,HIGH local/unrelated-mcp-gateway-ui:pr
 
 # =============================================================================
 # Documentation

@@ -516,6 +516,86 @@ pub enum ToolCallLimitRejection {
     QuotaExceeded,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TenantAuditSettings {
+    pub enabled: bool,
+    pub retention_days: i32,
+    pub default_level: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AuditEventFilter {
+    pub from_unix_secs: Option<i64>,
+    pub to_unix_secs: Option<i64>,
+    pub before_id: Option<i64>,
+    pub profile_id: Option<String>,
+    pub api_key_id: Option<String>,
+    pub tool_ref: Option<String>,
+    pub action: Option<String>,
+    pub ok: Option<bool>,
+    pub limit: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditEventRow {
+    pub id: i64,
+    pub ts_unix_secs: i64,
+    pub tenant_id: String,
+    pub profile_id: Option<String>,
+    pub api_key_id: Option<String>,
+    pub oidc_issuer: Option<String>,
+    pub oidc_subject: Option<String>,
+    pub action: String,
+    pub http_method: Option<String>,
+    pub http_route: Option<String>,
+    pub status_code: Option<i32>,
+    pub tool_ref: Option<String>,
+    pub tool_name_at_time: Option<String>,
+    pub ok: bool,
+    pub duration_ms: Option<i64>,
+    pub error_kind: Option<String>,
+    pub error_message: Option<String>,
+    pub meta: Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct AuditStatsFilter {
+    pub from_unix_secs: Option<i64>,
+    pub to_unix_secs: Option<i64>,
+    pub profile_id: Option<String>,
+    pub api_key_id: Option<String>,
+    pub tool_ref: Option<String>,
+    pub limit: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallStatsByTool {
+    pub tool_ref: String,
+    pub total: i64,
+    pub ok: i64,
+    pub err: i64,
+    pub avg_duration_ms: Option<i64>,
+    pub p95_duration_ms: Option<i64>,
+    pub p99_duration_ms: Option<i64>,
+    pub max_duration_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallStatsByApiKey {
+    pub api_key_id: String,
+    pub total: i64,
+    pub ok: i64,
+    pub err: i64,
+    pub avg_duration_ms: Option<i64>,
+    pub p95_duration_ms: Option<i64>,
+    pub p99_duration_ms: Option<i64>,
+    pub max_duration_ms: Option<i64>,
+}
+
 #[async_trait]
 pub trait Store: Send + Sync {
     async fn get_profile(&self, profile_id: &str) -> anyhow::Result<Option<Profile>>;
@@ -686,6 +766,52 @@ pub trait AdminStore: Send + Sync {
         subject: &str,
         profile_id: Option<&str>,
     ) -> anyhow::Result<u64>;
+
+    // ---------------------------------------------------------------------
+    // Audit settings + audit event querying (Mode 3 only)
+    // ---------------------------------------------------------------------
+
+    async fn get_tenant_audit_settings(
+        &self,
+        tenant_id: &str,
+    ) -> anyhow::Result<Option<TenantAuditSettings>>;
+
+    async fn put_tenant_audit_settings(
+        &self,
+        tenant_id: &str,
+        settings: &TenantAuditSettings,
+    ) -> anyhow::Result<()>;
+
+    async fn get_profile_audit_settings(&self, profile_id: &str) -> anyhow::Result<Option<Value>>;
+
+    async fn put_profile_audit_settings(
+        &self,
+        profile_id: &str,
+        audit_settings: Value,
+    ) -> anyhow::Result<()>;
+
+    async fn list_audit_events(
+        &self,
+        tenant_id: &str,
+        filter: AuditEventFilter,
+    ) -> anyhow::Result<Vec<AuditEventRow>>;
+
+    async fn tool_call_stats_by_tool(
+        &self,
+        tenant_id: &str,
+        filter: AuditStatsFilter,
+    ) -> anyhow::Result<Vec<ToolCallStatsByTool>>;
+
+    async fn tool_call_stats_by_api_key(
+        &self,
+        tenant_id: &str,
+        filter: AuditStatsFilter,
+    ) -> anyhow::Result<Vec<ToolCallStatsByApiKey>>;
+
+    /// Delete audit events older than the configured tenant retention window.
+    ///
+    /// Returns the number of rows deleted.
+    async fn cleanup_audit_events_for_tenant(&self, tenant_id: &str) -> anyhow::Result<u64>;
 }
 
 /// In-memory store backed by a static config file (Mode 1).

@@ -128,3 +128,57 @@ export type CreateApiKeyResponse = {
   prefix: string;
   profileId: string | null;
 };
+
+export type TenantAuditSettings = {
+  enabled: boolean;
+  retentionDays: number;
+  defaultLevel: "off" | "summary" | "metadata" | "payload" | string;
+};
+
+export type AuditEventRow = {
+  id: number;
+  tsUnixSecs: number;
+  tenantId: string;
+  profileId: string | null;
+  apiKeyId: string | null;
+  oidcIssuer: string | null;
+  oidcSubject: string | null;
+  action: string;
+  httpMethod: string | null;
+  httpRoute: string | null;
+  statusCode: number | null;
+  toolRef: string | null;
+  toolNameAtTime: string | null;
+  ok: boolean;
+  durationMs: number | null;
+  errorKind: string | null;
+  errorMessage: string | null;
+  meta: unknown;
+};
+
+export type AuditEventsResponse = { events: AuditEventRow[] };
+
+export type ToolCallStatsByTool = {
+  toolRef: string;
+  total: number;
+  ok: number;
+  err: number;
+  avgDurationMs: number | null;
+  p95DurationMs: number | null;
+  p99DurationMs: number | null;
+  maxDurationMs: number | null;
+};
+
+export type ToolCallStatsByApiKey = {
+  apiKeyId: string;
+  total: number;
+  ok: number;
+  err: number;
+  avgDurationMs: number | null;
+  p95DurationMs: number | null;
+  p99DurationMs: number | null;
+  maxDurationMs: number | null;
+};
+
+export type ToolCallStatsByToolResponse = { items: ToolCallStatsByTool[] };
+export type ToolCallStatsByApiKeyResponse = { items: ToolCallStatsByApiKey[] };

@@ -1,3 +1,4 @@
+use crate::audit::AuditSink;
 use crate::catalog::SharedCatalog;
 use crate::contracts::ContractTracker;
 use crate::oidc::OidcValidator;
@@ -66,6 +67,7 @@ pub struct McpState {
     pub http: reqwest::Client,
     pub oidc: Option<OidcValidator>,
     pub shutdown: CancellationToken,
+    pub audit: Arc<dyn AuditSink>,
     pub catalog: Arc<SharedCatalog>,
     pub tenant_catalog: Arc<TenantCatalog>,
     pub contracts: Arc<ContractTracker>,
@@ -2699,6 +2701,7 @@ mod tests {
             http: reqwest::Client::default(),
             oidc: None,
             shutdown: CancellationToken::new(),
+            audit: Arc::new(crate::audit::NoopAuditSink),
             catalog: Arc::new(SharedCatalog::default()),
             tenant_catalog: Arc::new(TenantCatalog::new()),
             contracts: Arc::new(ContractTracker::new()),
@@ -2908,6 +2911,7 @@ sharedSources:
             http: reqwest::Client::default(),
             oidc: None,
             shutdown: CancellationToken::new(),
+            audit: Arc::new(crate::audit::NoopAuditSink),
             catalog: Arc::new(shared),
             tenant_catalog: Arc::new(TenantCatalog::new()),
             contracts: Arc::new(ContractTracker::new()),
@@ -3005,6 +3009,7 @@ sharedSources:
             http: reqwest::Client::default(),
             oidc: None,
             shutdown: CancellationToken::new(),
+            audit: Arc::new(crate::audit::NoopAuditSink),
             catalog: Arc::new(shared),
             tenant_catalog: Arc::new(TenantCatalog::new()),
             contracts: Arc::new(ContractTracker::new()),
@@ -3092,6 +3097,7 @@ sharedSources:
             http: reqwest::Client::default(),
             oidc: None,
             shutdown: CancellationToken::new(),
+            audit: Arc::new(crate::audit::NoopAuditSink),
             catalog: Arc::new(shared),
             tenant_catalog: Arc::new(TenantCatalog::new()),
             contracts: Arc::new(ContractTracker::new()),
@@ -3210,6 +3216,7 @@ sharedSources:
             http: reqwest::Client::default(),
             oidc: None,
             shutdown: CancellationToken::new(),
+            audit: Arc::new(crate::audit::NoopAuditSink),
             catalog: Arc::new(SharedCatalog::default()),
             tenant_catalog: Arc::new(TenantCatalog::new()),
             contracts: Arc::new(ContractTracker::new()),

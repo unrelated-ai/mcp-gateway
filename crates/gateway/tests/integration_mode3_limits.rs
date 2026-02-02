@@ -664,6 +664,7 @@ async fn mode3_quota_blocks_second_tools_call() -> anyhow::Result<()> {
         &gw.admin_base,
         json!({
             "tenantId": "t1",
+            "name": "p1",
             "enabled": true,
             "allowPartialUpstreams": true,
             "upstreams": ["u1"],
@@ -742,6 +743,7 @@ async fn mode3_rate_limit_blocks_subsequent_tools_call_and_sets_retry_after() ->
         &gw.admin_base,
         json!({
             "tenantId": "t1",
+            "name": "p1",
             "enabled": true,
             "allowPartialUpstreams": true,
             "upstreams": ["u1"],
@@ -839,6 +841,7 @@ async fn mode3_revoked_api_key_breaks_session_for_initialize_only_mode() -> anyh
         &gw.admin_base,
         json!({
             "tenantId": "t1",
+            "name": "p1",
             "enabled": true,
             "allowPartialUpstreams": true,
             "upstreams": ["u1"],
@@ -944,14 +947,17 @@ async fn mode3_jwt_every_request_enforces_profile_scoped_and_tenant_wide_oidc_bi
 
     let profile_body = json!({
         "tenantId": "t1",
+        "name": "p1",
         "enabled": true,
         "allowPartialUpstreams": true,
         "upstreams": ["u1"],
         "tools": [],
         "dataPlaneAuth": { "mode": "jwtEveryRequest" }
     });
-    let p1_id = admin_create_profile(&client, &gw.admin_base, profile_body.clone()).await?;
-    let p2_id = admin_create_profile(&client, &gw.admin_base, profile_body).await?;
+    let mut profile_body_2 = profile_body.clone();
+    profile_body_2["name"] = json!("p2");
+    let p1_id = admin_create_profile(&client, &gw.admin_base, profile_body).await?;
+    let p2_id = admin_create_profile(&client, &gw.admin_base, profile_body_2).await?;
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

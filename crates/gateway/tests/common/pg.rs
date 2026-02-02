@@ -31,12 +31,31 @@ pub fn extract_dbmate_up(sql: &str) -> anyhow::Result<String> {
     Ok(up.trim().to_string())
 }
 
+fn strip_sql_line_comments(sql: &str) -> String {
+    // NOTE: This is a deliberately small helper for our migrations:
+    // - It removes `-- ...` comments so semicolons in comments don't break statement splitting.
+    // - It does not attempt to understand string literals; our migrations avoid `--` inside strings.
+    let mut out = String::with_capacity(sql.len());
+    for line in sql.lines() {
+        let code = line.split_once("--").map_or(line, |(code, _)| code);
+        out.push_str(code);
+        out.push('\n');
+    }
+    out
+}
+
 pub async fn apply_dbmate_migrations(database_url: &str) -> anyhow::Result<()> {
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
         .connect(database_url)
         .await
         .context("connect to Postgres for migrations")?;
+
+    // Ensure required extensions exist (UUIDs are used as primary keys).
+    sqlx::query("create extension if not exists pgcrypto")
+        .execute(&pool)
+        .await
+        .context("create extension pgcrypto")?;
 
     // In gateway tests, CARGO_MANIFEST_DIR points at `crates/gateway`.
     let migrations_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
@@ -52,16 +71,23 @@ pub async fn apply_dbmate_migrations(database_url: &str) -> anyhow::Result<()> {
         let sql = std::fs::read_to_string(&path)
             .with_context(|| format!("read migration {}", path.display()))?;
         let up = extract_dbmate_up(&sql)?;
+        let up = strip_sql_line_comments(&up);
+        // Execute each migration inside a transaction for better failure isolation.
+        let mut tx = pool.begin().await.context("begin migration tx")?;
         for stmt in up.split(';') {
             let stmt = stmt.trim();
             if stmt.is_empty() {
                 continue;
             }
-            sqlx::query(stmt)
-                .execute(&pool)
-                .await
-                .with_context(|| format!("execute migration statement from {}", path.display()))?;
+            sqlx::query(stmt).execute(&mut *tx).await.with_context(|| {
+                format!(
+                    "execute migration statement from {}:\n{}",
+                    path.display(),
+                    stmt
+                )
+            })?;
         }
+        tx.commit().await.context("commit migration tx")?;
     }
 
     Ok(())

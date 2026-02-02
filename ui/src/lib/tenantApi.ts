@@ -2,6 +2,10 @@ import { tenantFetchJson } from "@/src/lib/tenantFetch";
 import type {
   ApiKeyMetadata,
   CreateApiKeyResponse,
+  TenantAuditSettings,
+  AuditEventsResponse,
+  ToolCallStatsByApiKeyResponse,
+  ToolCallStatsByToolResponse,
   Profile,
   ToolSourceSummary,
 } from "@/src/lib/types";
@@ -247,4 +251,92 @@ export async function createApiKey(body: unknown): Promise<CreateApiKeyResponse>
 
 export async function revokeApiKey(id: string): Promise<void> {
   await tenantFetchJson(`/api/tenant/api-keys/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export async function getTenantAuditSettings(): Promise<TenantAuditSettings> {
+  return await tenantFetchJson<TenantAuditSettings>("/api/tenant/audit/settings", {
+    cache: "no-store",
+  });
+}
+
+export async function putTenantAuditSettings(body: TenantAuditSettings): Promise<{ ok: boolean }> {
+  return await tenantFetchJson<{ ok: boolean }>("/api/tenant/audit/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listAuditEvents(params: {
+  fromUnixSecs?: number;
+  toUnixSecs?: number;
+  beforeId?: number;
+  profileId?: string;
+  apiKeyId?: string;
+  toolRef?: string;
+  action?: string;
+  ok?: boolean;
+  limit?: number;
+}): Promise<AuditEventsResponse> {
+  const sp = new URLSearchParams();
+  if (params.fromUnixSecs != null) sp.set("fromUnixSecs", String(params.fromUnixSecs));
+  if (params.toUnixSecs != null) sp.set("toUnixSecs", String(params.toUnixSecs));
+  if (params.beforeId != null) sp.set("beforeId", String(params.beforeId));
+  if (params.profileId) sp.set("profileId", params.profileId);
+  if (params.apiKeyId) sp.set("apiKeyId", params.apiKeyId);
+  if (params.toolRef) sp.set("toolRef", params.toolRef);
+  if (params.action) sp.set("action", params.action);
+  if (params.ok != null) sp.set("ok", params.ok ? "true" : "false");
+  if (params.limit != null) sp.set("limit", String(params.limit));
+  const qs = sp.toString();
+  return await tenantFetchJson<AuditEventsResponse>(
+    `/api/tenant/audit/events${qs ? `?${qs}` : ""}`,
+    {
+      cache: "no-store",
+    },
+  );
+}
+
+export async function toolCallStatsByTool(params: {
+  fromUnixSecs?: number;
+  toUnixSecs?: number;
+  profileId?: string;
+  apiKeyId?: string;
+  toolRef?: string;
+  limit?: number;
+}): Promise<ToolCallStatsByToolResponse> {
+  const sp = new URLSearchParams();
+  if (params.fromUnixSecs != null) sp.set("fromUnixSecs", String(params.fromUnixSecs));
+  if (params.toUnixSecs != null) sp.set("toUnixSecs", String(params.toUnixSecs));
+  if (params.profileId) sp.set("profileId", params.profileId);
+  if (params.apiKeyId) sp.set("apiKeyId", params.apiKeyId);
+  if (params.toolRef) sp.set("toolRef", params.toolRef);
+  if (params.limit != null) sp.set("limit", String(params.limit));
+  const qs = sp.toString();
+  return await tenantFetchJson<ToolCallStatsByToolResponse>(
+    `/api/tenant/audit/analytics/tool-calls/by-tool${qs ? `?${qs}` : ""}`,
+    { cache: "no-store" },
+  );
+}
+
+export async function toolCallStatsByApiKey(params: {
+  fromUnixSecs?: number;
+  toUnixSecs?: number;
+  profileId?: string;
+  apiKeyId?: string;
+  toolRef?: string;
+  limit?: number;
+}): Promise<ToolCallStatsByApiKeyResponse> {
+  const sp = new URLSearchParams();
+  if (params.fromUnixSecs != null) sp.set("fromUnixSecs", String(params.fromUnixSecs));
+  if (params.toUnixSecs != null) sp.set("toUnixSecs", String(params.toUnixSecs));
+  if (params.profileId) sp.set("profileId", params.profileId);
+  if (params.apiKeyId) sp.set("apiKeyId", params.apiKeyId);
+  if (params.toolRef) sp.set("toolRef", params.toolRef);
+  if (params.limit != null) sp.set("limit", String(params.limit));
+  const qs = sp.toString();
+  return await tenantFetchJson<ToolCallStatsByApiKeyResponse>(
+    `/api/tenant/audit/analytics/tool-calls/by-api-key${qs ? `?${qs}` : ""}`,
+    { cache: "no-store" },
+  );
 }

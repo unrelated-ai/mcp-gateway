@@ -39,6 +39,7 @@ function isProtectedPath(pathname: string): boolean {
     pathname.startsWith("/sources") ||
     pathname.startsWith("/api-keys") ||
     pathname.startsWith("/secrets") ||
+    pathname.startsWith("/audit") ||
     pathname.startsWith("/settings")
   );
 }

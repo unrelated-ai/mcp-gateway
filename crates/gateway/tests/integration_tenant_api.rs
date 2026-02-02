@@ -148,6 +148,19 @@ impl MockUpstream {
         }
 
         match message {
+            ClientJsonRpcMessage::Notification(n) => {
+                if matches!(
+                    n.notification,
+                    rmcp::model::ClientNotification::InitializedNotification(_)
+                ) {
+                    return (axum::http::StatusCode::ACCEPTED, "").into_response();
+                }
+                (
+                    axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                    "unexpected notification",
+                )
+                    .into_response()
+            }
             ClientJsonRpcMessage::Request(JsonRpcRequest { id, request, .. }) => {
                 if let ClientRequest::ListToolsRequest(_) = request {
                     let tool = Tool::new(
@@ -169,7 +182,7 @@ impl MockUpstream {
                     *resp.status_mut() = axum::http::StatusCode::OK;
                     resp.headers_mut().insert(
                         "Content-Type",
-                        axum::http::HeaderValue::from_static("text/event-stream"),
+                        axum::http::HeaderValue::from_static("application/json"),
                     );
                     resp
                 } else {
@@ -294,7 +307,7 @@ async fn tenant_profiles_are_scoped_and_cross_tenant_access_is_404() -> anyhow::
             "name": "My first profile",
             "enabled": true,
             "allowPartialUpstreams": true,
-            "upstreams": ["u1"],
+            "upstreams": [],
             "tools": []
         }))
         .send()
@@ -624,11 +637,7 @@ async fn tenant_can_create_upstream_and_attach_to_profile() -> anyhow::Result<()
         .to_string();
 
     // Data-plane initialize + tools/list should succeed.
-    let mcp = McpSession::connect(
-        format!("{data_base}/{profile_id}/mcp"),
-        Some(format!("Bearer {secret}")),
-    )
-    .await?;
+    let mcp = McpSession::connect(format!("{data_base}/{profile_id}/mcp"), Some(secret)).await?;
     let tools = mcp
         .request_value_no_auth(1, "tools/list", json!({}))
         .await?;

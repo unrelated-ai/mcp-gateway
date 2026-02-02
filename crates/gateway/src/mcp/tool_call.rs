@@ -1,5 +1,6 @@
 use super::McpState;
 use super::streamable_http;
+use crate::audit::{AuditActor, AuditError, McpToolsCallAuditEvent};
 use crate::session_token::TokenPayloadV1;
 use crate::tool_policy::RetryPolicy;
 use crate::tools_cache::{CachedToolsSurface, ToolRoute, ToolRouteKind, profile_fingerprint};
@@ -10,6 +11,8 @@ use rmcp::{
     transport::streamable_http_client::StreamableHttpPostResponse,
 };
 use std::borrow::Cow;
+use std::time::Instant;
+use uuid::Uuid;
 
 pub(super) async fn route_and_proxy_tools_call(
     state: &McpState,
@@ -20,76 +23,42 @@ pub(super) async fn route_and_proxy_tools_call(
     message: &mut ClientJsonRpcMessage,
     hop: u32,
 ) -> Result<Response, Response> {
-    let Some((tool_name, req_id, args_value)) = super::extract_call_tool(message) else {
-        return Err((StatusCode::BAD_REQUEST, "invalid tools/call request").into_response());
+    let started = Instant::now();
+    let audit_ctx = ToolsCallAuditCtx {
+        state,
+        profile,
+        payload,
+        profile_id,
     };
-
-    let (mut surface, built_now) =
-        get_or_build_tools_surface_for_call(state, profile_id, profile, payload, &token, hop)
-            .await?;
-
-    // Resolve tool owner via cached routing table.
-    let missing = surface.routes.get(&tool_name).is_none();
-    if missing && !built_now {
-        // JIT refresh on miss: invalidate and rebuild once.
-        state.tools_cache.invalidate(&token);
-        surface = Box::pin(super::surface::build_tools_surface(
-            state, profile_id, profile, payload, hop,
-        ))
+    let ctx = ToolsCallCtx {
+        audit_ctx,
+        started: &started,
+        token: &token,
+        hop,
+    };
+    let (tool_name, req_id, args_value) = tools_call_extract_or_reject(ctx, message).await?;
+    let (mut surface, built_now) = tools_call_get_surface_or_reject(&tool_name, ctx).await?;
+    tools_call_refresh_surface_on_miss_or_reject(&tool_name, ctx, &mut surface, built_now).await?;
+    let route = tools_call_resolve_route_or_reject(&tool_name, &req_id, ctx, &surface).await?;
+    tools_call_validate_args_or_reject(&tool_name, &req_id, ctx, &surface, &route, &args_value)
         .await?;
-        state.tools_cache.put(
-            profile_id,
-            token.clone(),
-            profile_fingerprint(profile),
-            surface.clone(),
-        );
-    }
 
-    let route = match resolve_tool_route(&surface, &tool_name) {
-        Ok(r) => r,
-        Err(ToolRouteLookupError::Ambiguous) => {
-            return Err(super::jsonrpc_error_response(
-                req_id.clone(),
-                ErrorCode::INVALID_PARAMS,
-                format!("ambiguous tool name '{tool_name}'; use '<source_id>:{tool_name}'"),
-            ));
-        }
-        Err(ToolRouteLookupError::Unknown) => {
-            return Err(super::jsonrpc_error_response(
-                req_id.clone(),
-                ErrorCode::INVALID_PARAMS,
-                format!("unknown tool: {tool_name}"),
-            ));
-        }
-    };
-
-    // Validate incoming args against the *advertised* (post-transform) tool schema.
-    if let Some(tool_def) = surface.tools.iter().find(|t| t.name == tool_name)
-        && let Err((msg, data)) = validate_tool_arguments(tool_def, &args_value)
-    {
-        return Err(super::jsonrpc_error_response_with_data(
-            req_id.clone(),
-            ErrorCode::INVALID_PARAMS,
-            msg,
-            Some(data),
-        ));
-    }
-
-    // Rewrite exposed arguments (post-transform surface) back into original tool args.
     let args = build_transformed_call_args(profile, &route.original_name, args_value);
-
     let tool_ref = stable_tool_ref(&route.source_id, &route.original_name);
     let timeout_secs = tool_call_timeout_secs_for(profile, &tool_ref);
     let timeout = std::time::Duration::from_secs(timeout_secs);
 
-    if let Some(resp) = execute_local_tool_call(
-        state,
-        profile,
-        &route,
-        &args,
-        req_id.clone(),
-        timeout,
-        timeout_secs,
+    if let Some(resp) = tools_call_try_local_or_reject(
+        ctx,
+        ToolsCallLocalInputs {
+            tool_ref: &tool_ref,
+            tool_name: &tool_name,
+            req_id: &req_id,
+            route: &route,
+            args: &args,
+            timeout,
+            timeout_secs,
+        },
     )
     .await?
     {
@@ -102,7 +71,7 @@ pub(super) async fn route_and_proxy_tools_call(
         call.arguments = Some(args);
     }
 
-    proxy_upstream_tool_call_with_retry(UpstreamToolCall {
+    let result = proxy_upstream_tool_call_with_retry(UpstreamToolCall {
         state,
         profile_id,
         profile,
@@ -114,7 +83,343 @@ pub(super) async fn route_and_proxy_tools_call(
         timeout_secs,
         hop,
     })
+    .await;
+
+    record_tools_call_audit(
+        ctx.audit_ctx,
+        ToolsCallAuditEvent {
+            tool_ref: Some(&tool_ref),
+            tool_name_at_time: Some(&tool_name),
+            ok: result.is_ok(),
+            elapsed: started.elapsed(),
+            error: if result.is_ok() {
+                None
+            } else {
+                Some(AuditError::new(
+                    "upstream_tool_call_failed",
+                    "upstream tool call failed",
+                ))
+            },
+            meta: serde_json::json!({}),
+        },
+    )
+    .await;
+
+    result
+}
+
+#[derive(Clone, Copy)]
+struct ToolsCallCtx<'a> {
+    audit_ctx: ToolsCallAuditCtx<'a>,
+    started: &'a Instant,
+    token: &'a str,
+    hop: u32,
+}
+
+async fn tools_call_extract_or_reject(
+    ctx: ToolsCallCtx<'_>,
+    message: &mut ClientJsonRpcMessage,
+) -> Result<(String, RequestId, serde_json::Value), Response> {
+    let Some((tool_name, req_id, args_value)) = super::extract_call_tool(message) else {
+        record_tools_call_audit(
+            ctx.audit_ctx,
+            ToolsCallAuditEvent {
+                tool_ref: None,
+                tool_name_at_time: None,
+                ok: false,
+                elapsed: ctx.started.elapsed(),
+                error: Some(AuditError::new("bad_request", "invalid tools/call request")),
+                meta: serde_json::json!({}),
+            },
+        )
+        .await;
+        return Err((StatusCode::BAD_REQUEST, "invalid tools/call request").into_response());
+    };
+    Ok((tool_name, req_id, args_value))
+}
+
+async fn tools_call_get_surface_or_reject(
+    tool_name: &str,
+    ctx: ToolsCallCtx<'_>,
+) -> Result<(CachedToolsSurface, bool), Response> {
+    match get_or_build_tools_surface_for_call(
+        ctx.audit_ctx.state,
+        ctx.audit_ctx.profile_id,
+        ctx.audit_ctx.profile,
+        ctx.audit_ctx.payload,
+        ctx.token,
+        ctx.hop,
+    )
     .await
+    {
+        Ok(v) => Ok(v),
+        Err(resp) => {
+            record_tools_call_audit(
+                ctx.audit_ctx,
+                ToolsCallAuditEvent {
+                    tool_ref: None,
+                    tool_name_at_time: Some(tool_name),
+                    ok: false,
+                    elapsed: ctx.started.elapsed(),
+                    error: Some(AuditError::new(
+                        "surface_build_failed",
+                        "failed to build tools surface",
+                    )),
+                    meta: serde_json::json!({}),
+                },
+            )
+            .await;
+            Err(resp)
+        }
+    }
+}
+
+async fn tools_call_refresh_surface_on_miss_or_reject(
+    tool_name: &str,
+    ctx: ToolsCallCtx<'_>,
+    surface: &mut CachedToolsSurface,
+    built_now: bool,
+) -> Result<(), Response> {
+    let missing = surface.routes.get(tool_name).is_none();
+    if !missing || built_now {
+        return Ok(());
+    }
+
+    // JIT refresh on miss: invalidate and rebuild once.
+    ctx.audit_ctx.state.tools_cache.invalidate(ctx.token);
+    *surface = match Box::pin(super::surface::build_tools_surface(
+        ctx.audit_ctx.state,
+        ctx.audit_ctx.profile_id,
+        ctx.audit_ctx.profile,
+        ctx.audit_ctx.payload,
+        ctx.hop,
+    ))
+    .await
+    {
+        Ok(s) => s,
+        Err(resp) => {
+            record_tools_call_audit(
+                ctx.audit_ctx,
+                ToolsCallAuditEvent {
+                    tool_ref: None,
+                    tool_name_at_time: Some(tool_name),
+                    ok: false,
+                    elapsed: ctx.started.elapsed(),
+                    error: Some(AuditError::new(
+                        "surface_build_failed",
+                        "failed to rebuild tools surface",
+                    )),
+                    meta: serde_json::json!({}),
+                },
+            )
+            .await;
+            return Err(resp);
+        }
+    };
+    ctx.audit_ctx.state.tools_cache.put(
+        ctx.audit_ctx.profile_id,
+        ctx.token.to_string(),
+        profile_fingerprint(ctx.audit_ctx.profile),
+        surface.clone(),
+    );
+
+    Ok(())
+}
+
+async fn tools_call_resolve_route_or_reject(
+    tool_name: &str,
+    req_id: &RequestId,
+    ctx: ToolsCallCtx<'_>,
+    surface: &CachedToolsSurface,
+) -> Result<ToolRoute, Response> {
+    match resolve_tool_route(surface, tool_name) {
+        Ok(r) => Ok(r),
+        Err(ToolRouteLookupError::Ambiguous) => {
+            record_tools_call_audit(
+                ctx.audit_ctx,
+                ToolsCallAuditEvent {
+                    tool_ref: None,
+                    tool_name_at_time: Some(tool_name),
+                    ok: false,
+                    elapsed: ctx.started.elapsed(),
+                    error: Some(AuditError::new("ambiguous_tool", "ambiguous tool name")),
+                    meta: serde_json::json!({ "tool_name": tool_name.to_string() }),
+                },
+            )
+            .await;
+            Err(super::jsonrpc_error_response(
+                req_id.clone(),
+                ErrorCode::INVALID_PARAMS,
+                format!("ambiguous tool name '{tool_name}'; use '<source_id>:{tool_name}'"),
+            ))
+        }
+        Err(ToolRouteLookupError::Unknown) => {
+            record_tools_call_audit(
+                ctx.audit_ctx,
+                ToolsCallAuditEvent {
+                    tool_ref: None,
+                    tool_name_at_time: Some(tool_name),
+                    ok: false,
+                    elapsed: ctx.started.elapsed(),
+                    error: Some(AuditError::new("unknown_tool", "unknown tool")),
+                    meta: serde_json::json!({ "tool_name": tool_name.to_string() }),
+                },
+            )
+            .await;
+            Err(super::jsonrpc_error_response(
+                req_id.clone(),
+                ErrorCode::INVALID_PARAMS,
+                format!("unknown tool: {tool_name}"),
+            ))
+        }
+    }
+}
+
+async fn tools_call_validate_args_or_reject(
+    tool_name: &str,
+    req_id: &RequestId,
+    ctx: ToolsCallCtx<'_>,
+    surface: &CachedToolsSurface,
+    route: &ToolRoute,
+    args_value: &serde_json::Value,
+) -> Result<(), Response> {
+    // Validate incoming args against the *advertised* (post-transform) tool schema.
+    if let Some(tool_def) = surface.tools.iter().find(|t| t.name == tool_name)
+        && let Err((msg, data)) = validate_tool_arguments(tool_def, args_value)
+    {
+        let tool_ref = stable_tool_ref(&route.source_id, &route.original_name);
+        record_tools_call_audit(
+            ctx.audit_ctx,
+            ToolsCallAuditEvent {
+                tool_ref: Some(&tool_ref),
+                tool_name_at_time: Some(tool_name),
+                ok: false,
+                elapsed: ctx.started.elapsed(),
+                error: Some(AuditError::new("invalid_params", msg.clone())),
+                meta: serde_json::json!({ "validation": data }),
+            },
+        )
+        .await;
+        return Err(super::jsonrpc_error_response_with_data(
+            req_id.clone(),
+            ErrorCode::INVALID_PARAMS,
+            msg,
+            Some(data),
+        ));
+    }
+    Ok(())
+}
+
+struct ToolsCallLocalInputs<'a> {
+    tool_ref: &'a str,
+    tool_name: &'a str,
+    req_id: &'a RequestId,
+    route: &'a ToolRoute,
+    args: &'a serde_json::Map<String, serde_json::Value>,
+    timeout: std::time::Duration,
+    timeout_secs: u64,
+}
+
+async fn tools_call_try_local_or_reject(
+    ctx: ToolsCallCtx<'_>,
+    input: ToolsCallLocalInputs<'_>,
+) -> Result<Option<Response>, Response> {
+    match execute_local_tool_call(
+        ctx.audit_ctx.state,
+        ctx.audit_ctx.profile,
+        input.route,
+        input.args,
+        input.req_id.clone(),
+        input.timeout,
+        input.timeout_secs,
+    )
+    .await
+    {
+        Ok(Some(resp)) => {
+            record_tools_call_audit(
+                ctx.audit_ctx,
+                ToolsCallAuditEvent {
+                    tool_ref: Some(input.tool_ref),
+                    tool_name_at_time: Some(input.tool_name),
+                    ok: true,
+                    elapsed: ctx.started.elapsed(),
+                    error: None,
+                    meta: serde_json::json!({}),
+                },
+            )
+            .await;
+            Ok(Some(resp))
+        }
+        Ok(None) => Ok(None),
+        Err(resp) => {
+            record_tools_call_audit(
+                ctx.audit_ctx,
+                ToolsCallAuditEvent {
+                    tool_ref: Some(input.tool_ref),
+                    tool_name_at_time: Some(input.tool_name),
+                    ok: false,
+                    elapsed: ctx.started.elapsed(),
+                    error: Some(AuditError::new(
+                        "local_tool_call_failed",
+                        "local tool call failed",
+                    )),
+                    meta: serde_json::json!({}),
+                },
+            )
+            .await;
+            Err(resp)
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ToolsCallAuditCtx<'a> {
+    state: &'a McpState,
+    profile: &'a crate::store::Profile,
+    payload: &'a TokenPayloadV1,
+    profile_id: &'a str,
+}
+
+struct ToolsCallAuditEvent<'a> {
+    tool_ref: Option<&'a str>,
+    tool_name_at_time: Option<&'a str>,
+    ok: bool,
+    elapsed: std::time::Duration,
+    error: Option<AuditError>,
+    meta: serde_json::Value,
+}
+
+async fn record_tools_call_audit(ctx: ToolsCallAuditCtx<'_>, ev: ToolsCallAuditEvent<'_>) {
+    // Per-tenant gating is enforced inside the sink (DB-backed, cached).
+    let tenant_id = ctx.profile.tenant_id.clone();
+    let profile_uuid = Uuid::parse_str(ctx.profile_id).ok();
+
+    let api_key_id = ctx
+        .payload
+        .auth
+        .as_ref()
+        .and_then(|a| Uuid::parse_str(&a.api_key_id).ok());
+    let oidc_issuer = ctx.payload.oidc.as_ref().map(|o| o.issuer.clone());
+    let oidc_subject = ctx.payload.oidc.as_ref().map(|o| o.subject.clone());
+
+    ctx.state
+        .audit
+        .record(crate::audit::mcp_tools_call_event(McpToolsCallAuditEvent {
+            tenant_id,
+            actor: AuditActor {
+                profile_id: profile_uuid,
+                api_key_id,
+                oidc_issuer,
+                oidc_subject,
+            },
+            tool_ref: ev.tool_ref.map(str::to_string),
+            tool_name_at_time: ev.tool_name_at_time.map(str::to_string),
+            ok: ev.ok,
+            elapsed: ev.elapsed,
+            meta: ev.meta,
+            error: ev.error,
+        }))
+        .await;
 }
 
 async fn get_or_build_tools_surface_for_call(

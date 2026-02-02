@@ -9,6 +9,8 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
 mod admin;
+mod audit;
+mod audit_retention;
 mod catalog;
 mod config;
 mod contracts;
@@ -123,10 +125,13 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
 
     // Graceful shutdown coordination for all long-lived tasks (servers + streams).
     let ct = CancellationToken::new();
+    let audit = build_audit_sink(pg_pool.clone(), &ct);
 
     let contracts = Arc::new(contracts::ContractTracker::new());
     let contract_fanout =
         build_contract_fanout(pg_pool.clone(), contracts.clone(), ct.clone()).await?;
+
+    audit_retention::spawn_audit_retention_task(pg_pool.clone(), ct.clone());
 
     let http = reqwest::Client::default();
     // OIDC discovery/JWKS fetch should never follow redirects (SSRF hardening).
@@ -144,6 +149,7 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
         http,
         oidc,
         shutdown: ct.clone(),
+        audit: audit.clone(),
         catalog,
         tenant_catalog: Arc::new(tenant_catalog::TenantCatalog::new()),
         contracts,
@@ -170,6 +176,7 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
         tenant_signer: tenant_token::TenantSigner::new(session_secrets[0].clone()),
         shared_source_ids: shared_source_ids.clone(),
         oidc_issuer: oidc_issuer.clone(),
+        audit: audit.clone(),
     });
 
     let tenant_state = Arc::new(tenant::TenantState {
@@ -177,6 +184,7 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
         signer: tenant_token::TenantSigner::new(session_secrets[0].clone()),
         shared_source_ids,
         mcp_state: mcp_state.clone(),
+        audit,
     });
 
     let data_bind = parse_socket_addr(&args.bind, "bind")?;
@@ -225,6 +233,16 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
 
     tracing::info!("Gateway shut down gracefully");
     Ok(())
+}
+
+fn build_audit_sink(
+    pg_pool: Option<sqlx::PgPool>,
+    ct: &CancellationToken,
+) -> Arc<dyn audit::AuditSink> {
+    match pg_pool {
+        Some(pool) => audit::PostgresAuditSink::new(pool, ct.clone()),
+        None => Arc::new(audit::NoopAuditSink),
+    }
 }
 
 async fn start_mode3_ha_tasks(

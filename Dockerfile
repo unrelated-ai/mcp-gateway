@@ -117,7 +117,7 @@ ENTRYPOINT ["/app/unrelated-mcp-gateway"]
 # -----------------------------------------------------------------------------
 # Stage 4: Gateway migrator (dbmate + baked migrations)
 # -----------------------------------------------------------------------------
-FROM amacneil/dbmate:2.29.2 AS gateway-migrator
+FROM amacneil/dbmate:2.29.4 AS gateway-migrator
 
 WORKDIR /db
 

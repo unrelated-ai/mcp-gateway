@@ -508,6 +508,7 @@ async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
         "/admin/v1/profiles",
         json!({
             "tenantId": "t1",
+            "name": "p1",
             "allowPartialUpstreams": true,
             "upstreams": ["u1"],
             "tools": []
@@ -776,6 +777,7 @@ async fn pg_replay_replays_missed_contract_notifications() -> anyhow::Result<()>
         "/admin/v1/profiles",
         json!({
             "tenantId": "t1",
+            "name": "p1",
             "allowPartialUpstreams": true,
             "upstreams": ["u1"],
             "tools": []
