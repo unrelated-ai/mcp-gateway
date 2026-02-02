@@ -546,11 +546,9 @@ export function ToolsNewTab({
                   key={`${selected.sourceId}:${selected.originalName}`}
                   tool={selected}
                   policiesByToolRef={policiesByToolRef}
-                  saving={savePoliciesMutation.isPending}
                   saveError={toolPoliciesError}
                   clearSaveError={() => setToolPoliciesError(null)}
                   onSave={savePolicy}
-                  onClear={clearPolicy}
                 />
               )}
             </div>

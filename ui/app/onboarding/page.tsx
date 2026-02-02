@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { CheckIcon, CopyIcon, SparkIcon } from "@/components/icons";
 import { useCopyToClipboard } from "@/src/lib/useCopyToClipboard";
 
@@ -14,8 +13,6 @@ type BootstrapStatusResponse =
   | { ok: false; error?: string; status?: number; body?: string };
 
 export default function OnboardingPage() {
-  const router = useRouter();
-
   const [step, setStep] = useState<Step>(1);
   const [createLoading, setCreateLoading] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
