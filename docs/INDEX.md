@@ -25,6 +25,7 @@ Common use cases:
   - Data-plane auth (API keys + OIDC/JWT): [`docs/gateway/DATA_PLANE_AUTH.md`](gateway/DATA_PLANE_AUTH.md)
   - Profile MCP settings (capabilities/notifications/namespacing): [`docs/gateway/MCP_SETTINGS.md`](gateway/MCP_SETTINGS.md)
   - Mode 3 tenant overlay (tool sources + secrets): [`docs/gateway/MODE3_TENANT_OVERLAY.md`](gateway/MODE3_TENANT_OVERLAY.md)
+  - Audit logging (Mode 3 / Postgres): [`docs/gateway/AUDIT.md`](gateway/AUDIT.md)
 - **Gateway admin CLI (implemented)**: [`docs/gateway-cli/INDEX.md`](gateway-cli/INDEX.md)
   - Commands: [`docs/gateway-cli/COMMANDS.md`](gateway-cli/COMMANDS.md)
   - Config/auth precedence: [`docs/gateway-cli/CONFIG.md`](gateway-cli/CONFIG.md)

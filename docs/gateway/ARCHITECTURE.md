@@ -6,7 +6,7 @@ The Gateway is the **public-facing** MCP endpoint for clients.
 
 Today it provides **profile-based MCP proxying + upstream aggregation** and **HA-ready session routing** (stateless session tokens), plus a bearer-token-protected **admin/control plane** (Mode 3 / Postgres).
 
-Tenant-facing **data-plane authn/z** is implemented (API keys + OIDC/JWT, configured per profile). Broader policy (auditing, resources/prompts allow/deny) is still evolving.
+Tenant-facing **data-plane authn/z** is implemented (API keys + OIDC/JWT, configured per profile). Broader policy (audit detail levels, resources/prompts allow/deny) is still evolving.
 
 ## Key concepts
 
@@ -78,7 +78,7 @@ Notes:
 - Admin UI (operator-scoped) is not implemented (CLI is the primary admin interface).
 - Tenant-scoped Web UI exists (beta): [`docs/ui/INDEX.md`](../ui/INDEX.md).
 - Claim-based RBAC is not implemented (current model is API key + OIDC principal bindings).
-- Auditing/event trail is not implemented yet.
+- Audit logging (Mode 3 / Postgres): [`docs/gateway/AUDIT.md`](AUDIT.md).
 
 ### Ports (from the start)
 
