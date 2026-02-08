@@ -20,12 +20,15 @@ import { EditProfilePanel } from "./_components/edit-profile-panel";
 import { McpSurfaceSection } from "./_components/mcp-surface-section";
 import { ProfileKeysSection } from "./_components/profile-keys-section";
 import { SourcesTab } from "./_components/sources-tab";
+import { SecurityTab } from "./_components/security-tab";
 
 export default function ProfileDetailPage() {
   const params = useParams();
   const router = useRouter();
   const profileId = String(params.id ?? "");
-  const [activeTab, setActiveTab] = useState<"tools" | "sources" | "keys" | "other">("tools");
+  const [activeTab, setActiveTab] = useState<"tools" | "sources" | "keys" | "security" | "other">(
+    "tools",
+  );
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showMcpAuthHelp, setShowMcpAuthHelp] = useState(false);
   const [showAuthSettings, setShowAuthSettings] = useState(false);
@@ -474,6 +477,7 @@ export default function ProfileDetailPage() {
               { key: "tools", label: "Tools" },
               { key: "sources", label: "Sources" },
               { key: "keys", label: "API Keys" },
+              { key: "security", label: "Security" },
               { key: "other", label: "MCP Settings" },
             ] as const
           ).map((tab) => (
@@ -526,6 +530,8 @@ export default function ProfileDetailPage() {
             onProbe={() => probeMutation.mutate()}
           />
         )}
+
+        {activeTab === "security" && <SecurityTab profile={profile} />}
 
         {/* `Transforms` and `Tool calls` tabs removed (merged into Tools). */}
 

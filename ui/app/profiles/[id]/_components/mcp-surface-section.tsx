@@ -103,9 +103,10 @@ export function McpSurfaceSection({
           <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-5">
             <div className="text-sm font-semibold text-zinc-100 mb-2">Interactive flows</div>
             <div className="text-sm text-zinc-500">
-              The Gateway can proxy upstream server → client requests by namespacing JSON-RPC IDs so
-              replies are routed back correctly. These flows are only used when the MCP client
-              advertises support in its `initialize` request and an upstream chooses to call them.
+              The Gateway can proxy upstream server → client requests by namespacing (and optionally
+              signing) JSON-RPC IDs so replies are routed back correctly. Whether these requests are
+              forwarded is controlled by the profile’s Security policy (per-upstream) and what
+              client capabilities the Gateway advertises upstream during `initialize`.
             </div>
             <ul className="mt-3 space-y-1 text-sm text-zinc-300 font-mono">
               <li>sampling/createMessage</li>

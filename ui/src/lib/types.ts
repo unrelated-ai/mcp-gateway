@@ -68,10 +68,39 @@ export type McpNamespacing = {
   sseEventId: SseEventIdNamespacing;
 };
 
+export type UpstreamClientCapabilitiesMode = "passthrough" | "strip" | "allowlist";
+export type McpPolicyAction = "allow" | "deny";
+
+export type McpServerRequestFilter = {
+  defaultAction: McpPolicyAction;
+  allow: string[];
+  deny: string[];
+};
+
+export type UpstreamSecurityPolicy = {
+  clientCapabilitiesMode: UpstreamClientCapabilitiesMode;
+  /**
+   * For `clientCapabilitiesMode = "allowlist"`, only these top-level capability keys are forwarded
+   * upstream (e.g. `sampling`, `roots`, `elicitation`).
+   */
+  clientCapabilitiesAllow: string[];
+  /** Filter for upstream server→client JSON-RPC request methods forwarded downstream. */
+  serverRequests: McpServerRequestFilter;
+  /** If true, replace downstream `clientInfo` before sending `initialize` upstream (privacy). */
+  rewriteClientInfo: boolean;
+};
+
+export type McpSecuritySettings = {
+  signedProxiedRequestIds: boolean;
+  upstreamDefault: UpstreamSecurityPolicy;
+  upstreamOverrides: Record<string, UpstreamSecurityPolicy>;
+};
+
 export type McpProfileSettings = {
   capabilities: McpCapabilitiesPolicy;
   notifications: McpNotificationFilter;
   namespacing: McpNamespacing;
+  security: McpSecuritySettings;
 };
 
 // NOTE: For v0 design work, we intentionally keep advanced fields loosely typed.

@@ -9,6 +9,7 @@ import * as tenantApi from "@/src/lib/tenantApi";
 import type { McpCapability, McpProfileSettings, Profile } from "@/src/lib/types";
 import { buildPutProfileBody } from "@/src/lib/profilePut";
 import { useQueuedAutosave } from "@/src/lib/useQueuedAutosave";
+import { asMcpSettings, defaultMcpSettings, normalizeMcpSettings } from "@/src/lib/mcpSettings";
 
 const ALL_CAPABILITIES: Array<{
   key: McpCapability;
@@ -54,90 +55,9 @@ const ALL_CAPABILITIES: Array<{
   },
 ];
 
-const DEFAULT_MCP: McpProfileSettings = {
-  capabilities: { allow: [], deny: [] },
-  notifications: { allow: [], deny: [] },
-  namespacing: { requestId: "opaque", sseEventId: "upstream-slash" },
-};
-
 function uniqSortedCaps(xs: McpCapability[]): McpCapability[] {
   const order = new Map<McpCapability, number>(ALL_CAPABILITIES.map((c, i) => [c.key, i]));
   return [...new Set(xs)].sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
-}
-
-function normalizeMcp(s: McpProfileSettings): McpProfileSettings {
-  return {
-    capabilities: {
-      allow: uniqSortedCaps(s.capabilities.allow),
-      deny: uniqSortedCaps(s.capabilities.deny),
-    },
-    notifications: {
-      allow: [...new Set(s.notifications.allow.map((x) => String(x).trim()).filter(Boolean))].sort(
-        (a, b) => a.localeCompare(b),
-      ),
-      deny: [...new Set(s.notifications.deny.map((x) => String(x).trim()).filter(Boolean))].sort(
-        (a, b) => a.localeCompare(b),
-      ),
-    },
-    namespacing: {
-      requestId: s.namespacing.requestId,
-      sseEventId: s.namespacing.sseEventId,
-    },
-  };
-}
-
-function asMcpSettings(input: unknown): McpProfileSettings {
-  // Defensive parsing: tolerate missing fields and fall back to defaults.
-  const obj = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
-  const capabilities =
-    typeof obj.capabilities === "object" && obj.capabilities !== null
-      ? (obj.capabilities as Record<string, unknown>)
-      : {};
-  const notifications =
-    typeof obj.notifications === "object" && obj.notifications !== null
-      ? (obj.notifications as Record<string, unknown>)
-      : {};
-  const namespacing =
-    typeof obj.namespacing === "object" && obj.namespacing !== null
-      ? (obj.namespacing as Record<string, unknown>)
-      : {};
-
-  const allowCaps = Array.isArray(capabilities.allow) ? capabilities.allow : [];
-  const denyCaps = Array.isArray(capabilities.deny) ? capabilities.deny : [];
-
-  const allowNotifs = Array.isArray(notifications.allow) ? notifications.allow : [];
-  const denyNotifs = Array.isArray(notifications.deny) ? notifications.deny : [];
-
-  const pickCap = (v: unknown): v is McpCapability =>
-    typeof v === "string" && (ALL_CAPABILITIES.some((c) => c.key === v) as boolean);
-
-  const pickString = (v: unknown): v is string => typeof v === "string";
-
-  const requestId = namespacing.requestId;
-  const sseEventId = namespacing.sseEventId;
-  const requestIdNs =
-    requestId === "readable" || requestId === "opaque"
-      ? requestId
-      : DEFAULT_MCP.namespacing.requestId;
-  const sseEventIdNs =
-    sseEventId === "none" || sseEventId === "upstream-slash"
-      ? sseEventId
-      : DEFAULT_MCP.namespacing.sseEventId;
-
-  return normalizeMcp({
-    capabilities: {
-      allow: allowCaps.filter(pickCap),
-      deny: denyCaps.filter(pickCap),
-    },
-    notifications: {
-      allow: allowNotifs.filter(pickString),
-      deny: denyNotifs.filter(pickString),
-    },
-    namespacing: {
-      requestId: requestIdNs,
-      sseEventId: sseEventIdNs,
-    },
-  });
 }
 
 function enabledCapsFrom(settings: McpProfileSettings): Set<McpCapability> {
@@ -152,7 +72,7 @@ export function McpSettingsCard({ profile }: { profile: Profile | null }) {
   const queryClient = useQueryClient();
 
   const initial = useMemo(() => {
-    return normalizeMcp(asMcpSettings(profile?.mcp ?? DEFAULT_MCP));
+    return asMcpSettings(profile?.mcp ?? defaultMcpSettings());
   }, [profile?.mcp]);
 
   const initialEnabled = useMemo(() => enabledCapsFrom(initial), [initial]);
@@ -162,7 +82,7 @@ export function McpSettingsCard({ profile }: { profile: Profile | null }) {
   const buildNext = useCallback(
     (nextEnabledCaps: Set<McpCapability>): McpProfileSettings => {
       // Keep other (currently-hidden) MCP settings intact for now.
-      return normalizeMcp({
+      return normalizeMcpSettings({
         ...initial,
         capabilities: {
           allow: [],
