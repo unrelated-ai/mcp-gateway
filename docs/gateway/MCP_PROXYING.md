@@ -86,6 +86,16 @@ On each proxy hop, the Gateway increments the value and rejects forwarding once 
 
 **Future improvement recommendation**: standardize this hop header across gateways/proxies so multi-gateway deployments can prevent loops deterministically, and consider making the max configurable per environment.
 
+## Outbound safety for upstream MCP endpoints (implemented)
+
+The Gateway applies its outbound HTTP safety policy (SSRF hardening) to **upstream MCP endpoint URLs**:
+
+- non-`http(s)` schemes are rejected
+- private/loopback/link-local/reserved destinations are blocked by default (unless explicitly allowed)
+- redirects are not followed for upstream MCP proxying
+
+See: [`docs/gateway/OUTBOUND_HTTP_SAFETY.md`](OUTBOUND_HTTP_SAFETY.md)
+
 ## Config knobs that improve UX
 
 All of these are per-profile settings under `mcp:` (see [`docs/gateway/MCP_SETTINGS.md`](MCP_SETTINGS.md)):

@@ -9,6 +9,8 @@ Source of truth: [`crates/adapter/src/config.rs`](../../../crates/adapter/src/co
 ```yaml
 adapter:
   bind: 127.0.0.1:3000
+  # Optional: protect HTTP endpoints (including /mcp) with a static bearer token.
+  # mcpBearerToken: ${ADAPTER_BEARER_TOKEN}
   logLevel: info
   callTimeout: 60
   startupTimeout: 30
@@ -37,6 +39,23 @@ adapter:
 - **Type**: string (`ip:port`)
 - **Default**: `127.0.0.1:3000`
 - **Notes**: can contain `${ENV}` (see [`ENV_AND_PRECEDENCE.md`](ENV_AND_PRECEDENCE.md)).
+
+### `mcpBearerToken`
+
+- **Type**: string (optional)
+- **Default**: none
+- **Meaning**: when set, the adapter requires:
+
+  - `Authorization: Bearer <token>`
+
+  for **all** HTTP endpoints except:
+
+  - `/health*`
+  - `/ready`
+
+- **Overrides**:
+  - CLI: `--mcp-bearer-token <token>`
+  - Env: `UNRELATED_MCP_BEARER_TOKEN=<token>`
 
 ### `logLevel`
 

@@ -33,6 +33,11 @@ The Adapter supports **outbound auth injection** for HTTP/OpenAPI backends via `
 
 See: [`docs/adapter/config/AUTH.md`](config/AUTH.md).
 
+Inbound note:
+
+- The adapter can optionally require a **static bearer token** for HTTP endpoints (including `/mcp`)
+  via `adapter.mcpBearerToken` (see [`config/ADAPTER.md`](config/ADAPTER.md)).
+
 ## CI/CD & releases
 
 - **CI/CD overview**: [`docs/CICD.md`](../CICD.md)

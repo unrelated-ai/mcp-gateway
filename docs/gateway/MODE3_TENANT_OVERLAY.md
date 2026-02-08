@@ -120,7 +120,7 @@ The Gateway resolves these placeholders at runtime when building cached tool sou
 
 ### 5.2 Outbound safety
 
-Gateway-native execution uses a restrictive outbound policy by default (SSRF protections, redirects disabled, response size capped). See [`docs/gateway/ARCHITECTURE.md`](ARCHITECTURE.md).
+Gateway-native execution and upstream MCP proxying use a restrictive outbound policy by default (SSRF protections, redirects disabled, response size capped for HTTP/OpenAPI tools). See [`docs/gateway/OUTBOUND_HTTP_SAFETY.md`](OUTBOUND_HTTP_SAFETY.md).
 
 ---
 
