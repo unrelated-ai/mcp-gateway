@@ -83,14 +83,6 @@ pub fn with_optional_bearer_auth(router: Router, state: Arc<AppState>) -> Router
         response::{IntoResponse as _, Response},
     };
 
-    if state
-        .mcp_bearer_token
-        .as_deref()
-        .is_none_or(|t| t.trim().is_empty())
-    {
-        return router;
-    }
-
     async fn require_bearer(
         State(state): State<Arc<AppState>>,
         request: Request<Body>,
@@ -117,6 +109,14 @@ pub fn with_optional_bearer_auth(router: Router, state: Arc<AppState>) -> Router
         }
 
         (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
+    }
+
+    if state
+        .mcp_bearer_token
+        .as_deref()
+        .is_none_or(|t| t.trim().is_empty())
+    {
+        return router;
     }
 
     router.layer(from_fn_with_state(state, require_bearer))

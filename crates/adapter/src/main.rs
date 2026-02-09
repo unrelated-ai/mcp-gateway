@@ -146,7 +146,10 @@ async fn main() -> anyhow::Result<()> {
     // Build combined router: auxiliary endpoints + MCP endpoint.
     let http_router = create_router(state.clone());
     let app = with_request_counting(
-        with_optional_bearer_auth(http_router.nest_service("/mcp", streamable_http_service), state.clone()),
+        with_optional_bearer_auth(
+            http_router.nest_service("/mcp", streamable_http_service),
+            state.clone(),
+        ),
         state.clone(),
     );
 

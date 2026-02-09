@@ -1,4 +1,3 @@
-use crate::serde_helpers::default_true;
 use crate::store::DataPlaneAuthMode;
 use crate::timeouts::tool_call_timeout_max_secs;
 use crate::tool_policy::ToolPolicy;
@@ -35,7 +34,7 @@ pub(crate) const fn default_data_plane_auth_mode() -> DataPlaneAuthMode {
 pub(crate) struct DataPlaneAuthSettings {
     #[serde(default = "default_data_plane_auth_mode")]
     pub(crate) mode: DataPlaneAuthMode,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub(crate) accept_x_api_key: bool,
 }
 

@@ -244,8 +244,9 @@ async fn bootstrap_tenant(
                 transforms: &transforms,
                 enabled_tools: &[],
                 data_plane_auth: PutProfileDataPlaneAuth {
-                    mode: DataPlaneAuthMode::ApiKeyInitializeOnly,
-                    accept_x_api_key: true,
+                    // Security posture: strict mode by default for newly created starter profiles.
+                    mode: DataPlaneAuthMode::ApiKeyEveryRequest,
+                    accept_x_api_key: false,
                 },
                 limits: PutProfileLimits {
                     rate_limit_enabled: false,
@@ -771,7 +772,10 @@ async fn put_upstream(
         if let Err(e) = crate::outbound_safety::check_url_allowed(&safety, &ep.url).await {
             return (
                 StatusCode::BAD_REQUEST,
-                format!("upstream endpoint '{}' blocked by outbound safety: {e}", ep.id),
+                format!(
+                    "upstream endpoint '{}' blocked by outbound safety: {e}",
+                    ep.id
+                ),
             )
                 .into_response();
         }
@@ -863,7 +867,7 @@ fn resolve_data_plane_auth_settings(
                 existing.map_or(
                     DataPlaneAuthSettings {
                         mode: default_data_plane_auth_mode(),
-                        accept_x_api_key: default_true(),
+                        accept_x_api_key: false,
                     },
                     |p| DataPlaneAuthSettings {
                         mode: p.data_plane_auth_mode,
@@ -873,7 +877,7 @@ fn resolve_data_plane_auth_settings(
             } else {
                 DataPlaneAuthSettings {
                     mode: default_data_plane_auth_mode(),
-                    accept_x_api_key: default_true(),
+                    accept_x_api_key: false,
                 }
             }
         }

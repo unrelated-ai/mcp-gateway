@@ -400,7 +400,10 @@ async fn put_upstream(
         if let Err(e) = crate::outbound_safety::check_url_allowed(&safety, &ep.url).await {
             return (
                 StatusCode::BAD_REQUEST,
-                format!("upstream endpoint '{}' blocked by outbound safety: {e}", ep.id),
+                format!(
+                    "upstream endpoint '{}' blocked by outbound safety: {e}",
+                    ep.id
+                ),
             )
                 .into_response();
         }
@@ -757,7 +760,7 @@ async fn create_profile(
     let enabled_tools = req.tools.unwrap_or_default();
     let data_plane_auth = req.data_plane_auth.unwrap_or(DataPlaneAuthSettings {
         mode: default_data_plane_auth_mode(),
-        accept_x_api_key: default_true(),
+        accept_x_api_key: false,
     });
     if data_plane_auth.mode == DataPlaneAuthMode::JwtEveryRequest && state.mcp_state.oidc.is_none()
     {
@@ -1523,7 +1526,7 @@ async fn get_upstream_surface(
         transforms: TransformPipeline::default(),
         enabled_tools: vec![],
         data_plane_auth_mode: DataPlaneAuthMode::Disabled,
-        accept_x_api_key: true,
+        accept_x_api_key: false,
         rate_limit_enabled: false,
         rate_limit_tool_calls_per_minute: None,
         quota_enabled: false,

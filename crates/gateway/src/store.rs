@@ -993,7 +993,7 @@ impl ConfigStore {
             enabled_tools: cfg.tools.clone().unwrap_or_default(),
             // Mode 1 defaults: data plane is unauthenticated unless configured otherwise.
             data_plane_auth_mode: DataPlaneAuthMode::Disabled,
-            accept_x_api_key: true,
+            accept_x_api_key: false,
             // Mode 1: limits are disabled by default (and currently not configurable via config).
             rate_limit_enabled: false,
             rate_limit_tool_calls_per_minute: None,

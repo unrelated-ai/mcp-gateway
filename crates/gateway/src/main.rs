@@ -134,19 +134,8 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
 
     audit_retention::spawn_audit_retention_task(pg_pool.clone(), ct.clone());
 
-    // Upstream MCP proxy client.
-    //
-    // Redirects are disabled (SSRF hardening). Upstream endpoints should be configured with their
-    // final URL.
-    let http = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .context("build upstream HTTP client")?;
-    // OIDC discovery/JWKS fetch should never follow redirects (SSRF hardening).
-    let oidc_http = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .context("build OIDC HTTP client")?;
+    let http = build_no_redirect_http_client("upstream HTTP client")?;
+    let oidc_http = build_no_redirect_http_client("OIDC HTTP client")?;
     let oidc = oidc::OidcValidator::from_env(oidc_http).await?;
     let oidc_issuer = oidc.as_ref().map(|o| o.issuer().to_string());
 
@@ -174,13 +163,7 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
     let admin_state = Arc::new(admin::AdminState {
         store: admin_store,
         admin_token: std::env::var("UNRELATED_GATEWAY_ADMIN_TOKEN").ok(),
-        bootstrap_enabled: matches!(
-            std::env::var("UNRELATED_GATEWAY_BOOTSTRAP_ENABLED")
-                .unwrap_or_default()
-                .to_ascii_lowercase()
-                .as_str(),
-            "1" | "true" | "yes" | "on"
-        ),
+        bootstrap_enabled: env_truthy("UNRELATED_GATEWAY_BOOTSTRAP_ENABLED"),
         tenant_signer: tenant_token::TenantSigner::new(session_secrets[0].clone()),
         shared_source_ids: shared_source_ids.clone(),
         oidc_issuer: oidc_issuer.clone(),
@@ -241,6 +224,26 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
 
     tracing::info!("Gateway shut down gracefully");
     Ok(())
+}
+
+fn build_no_redirect_http_client(label: &'static str) -> anyhow::Result<reqwest::Client> {
+    // Redirects are disabled (SSRF hardening). Upstream endpoints should be configured with their
+    // final URL.
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .with_context(|| format!("build {label}"))
+}
+
+fn env_truthy(name: &str) -> bool {
+    let Ok(v) = std::env::var(name) else {
+        return false;
+    };
+    let s = v.trim();
+    s == "1"
+        || s.eq_ignore_ascii_case("true")
+        || s.eq_ignore_ascii_case("yes")
+        || s.eq_ignore_ascii_case("on")
 }
 
 fn build_audit_sink(

@@ -57,9 +57,6 @@ pub fn gateway_outbound_http_safety() -> OutboundHttpSafety {
 /// consistent parsing + error strings.
 pub async fn check_url_allowed(safety: &OutboundHttpSafety, url: &str) -> Result<(), String> {
     let u = reqwest::Url::parse(url).map_err(|e| format!("invalid URL: {e}"))?;
-    safety
-        .check_url(&u)
-        .await
-        .map_err(|e| e.to_string())?;
+    safety.check_url(&u).await.map_err(|e| e.to_string())?;
     Ok(())
 }
