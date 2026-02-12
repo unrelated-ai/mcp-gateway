@@ -6,11 +6,11 @@
 
 use crate::error::{AdapterError, Result};
 use clap::Parser;
-use serde::de::Error as DeError;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
+use unrelated_env::serde_helpers::{deserialize_option_bool_env, deserialize_option_u64_env};
 use unrelated_tool_transforms::TransformPipeline;
 
 // Re-export shared HTTP/OpenAPI config types so the Adapter keeps its current config schema,
@@ -23,57 +23,7 @@ pub use unrelated_openapi_tools::config::{
     OpenApiOverridesConfig,
 };
 
-fn deserialize_option_u64_env<'de, D>(deserializer: D) -> std::result::Result<Option<u64>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    match value {
-        None | Some(serde_json::Value::Null) => Ok(None),
-        Some(serde_json::Value::Number(n)) => n
-            .as_u64()
-            .map(Some)
-            .ok_or_else(|| D::Error::custom("expected unsigned integer")),
-        Some(serde_json::Value::String(s)) => {
-            let expanded = expand_env_string(&s).map_err(D::Error::custom)?;
-            let expanded = expanded.trim();
-            let n = expanded.parse::<u64>().map_err(|e| {
-                D::Error::custom(format!("expected unsigned integer, got '{expanded}': {e}"))
-            })?;
-            Ok(Some(n))
-        }
-        Some(other) => Err(D::Error::custom(format!(
-            "expected unsigned integer or string, got {other}"
-        ))),
-    }
-}
-
-fn deserialize_option_bool_env<'de, D>(
-    deserializer: D,
-) -> std::result::Result<Option<bool>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    match value {
-        None | Some(serde_json::Value::Null) => Ok(None),
-        Some(serde_json::Value::Bool(b)) => Ok(Some(b)),
-        Some(serde_json::Value::String(s)) => {
-            let expanded = expand_env_string(&s).map_err(D::Error::custom)?;
-            let expanded = expanded.trim().to_lowercase();
-            match expanded.as_str() {
-                "true" | "1" | "yes" | "y" | "on" => Ok(Some(true)),
-                "false" | "0" | "no" | "n" | "off" => Ok(Some(false)),
-                _ => Err(D::Error::custom(format!(
-                    "expected boolean, got '{expanded}'"
-                ))),
-            }
-        }
-        Some(other) => Err(D::Error::custom(format!(
-            "expected boolean or string, got {other}"
-        ))),
-    }
-}
+// NOTE: env-backed deserializers live in `unrelated-env` so they can be shared across crates.
 
 // ============================================================================
 // CLI Arguments
@@ -889,31 +839,7 @@ fn expand_auth_env_vars(auth: AuthConfig) -> Result<AuthConfig> {
 
 /// Expand ${VAR} patterns in a string.
 pub fn expand_env_string(s: &str) -> Result<String> {
-    let mut result = s.to_string();
-    let mut start = 0;
-
-    while let Some(dollar_pos) = result[start..].find("${") {
-        let abs_pos = start + dollar_pos;
-        if let Some(end_pos) = result[abs_pos..].find('}') {
-            let var_name = &result[abs_pos + 2..abs_pos + end_pos];
-            let var_value = std::env::var(var_name).map_err(|_| {
-                AdapterError::Config(format!(
-                    "Environment variable '{var_name}' not found (referenced in config)",
-                ))
-            })?;
-            result = format!(
-                "{}{}{}",
-                &result[..abs_pos],
-                var_value,
-                &result[abs_pos + end_pos + 1..]
-            );
-            start = abs_pos + var_value.len();
-        } else {
-            start = abs_pos + 2;
-        }
-    }
-
-    Ok(result)
+    unrelated_env::expand_env_string(s).map_err(AdapterError::Config)
 }
 
 // ============================================================================

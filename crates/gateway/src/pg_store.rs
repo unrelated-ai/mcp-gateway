@@ -912,6 +912,30 @@ where tenant_id = $1
         Ok(None)
     }
 
+    async fn get_tenant_transport_limits(
+        &self,
+        tenant_id: &str,
+    ) -> anyhow::Result<Option<crate::store::TransportLimitsSettings>> {
+        let row = sqlx::query(
+            r"
+select transport_limits
+from tenants
+where id = $1
+  and enabled = true
+",
+        )
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        let v: Value = row.try_get("transport_limits")?;
+        Ok(Some(serde_json::from_value(v)?))
+    }
+
     async fn authenticate_api_key(
         &self,
         tenant_id: &str,
@@ -2120,6 +2144,52 @@ where tenant_id = $1
         };
 
         Ok(res.rows_affected())
+    }
+
+    async fn get_tenant_transport_limits(
+        &self,
+        tenant_id: &str,
+    ) -> anyhow::Result<Option<crate::store::TransportLimitsSettings>> {
+        let row = sqlx::query(
+            r"
+select transport_limits
+from tenants
+where id = $1
+",
+        )
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        let v: Value = row.try_get("transport_limits")?;
+        Ok(Some(serde_json::from_value(v)?))
+    }
+
+    async fn put_tenant_transport_limits(
+        &self,
+        tenant_id: &str,
+        limits: &crate::store::TransportLimitsSettings,
+    ) -> anyhow::Result<()> {
+        let res = sqlx::query(
+            r"
+update tenants
+set transport_limits = $2
+where id = $1
+",
+        )
+        .bind(tenant_id)
+        .bind(serde_json::to_value(limits)?)
+        .execute(&self.pool)
+        .await?;
+
+        if res.rows_affected() == 0 {
+            anyhow::bail!("tenant not found");
+        }
+        Ok(())
     }
 
     async fn get_tenant_audit_settings(

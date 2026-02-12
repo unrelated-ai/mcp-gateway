@@ -44,6 +44,14 @@ pub struct McpSecuritySettings {
     /// Per-upstream overrides keyed by upstream id.
     #[serde(default)]
     pub upstream_overrides: std::collections::HashMap<String, UpstreamSecurityPolicy>,
+
+    /// Transport / payload safety limits (`DoS` hardening).
+    ///
+    /// These limits are enforced by the Gateway when parsing downstream JSON-RPC requests and when
+    /// proxying SSE events. Tenant-level defaults can be configured; per-profile overrides live
+    /// here.
+    #[serde(default)]
+    pub transport_limits: TransportLimitsSettings,
 }
 
 impl Default for McpSecuritySettings {
@@ -52,6 +60,7 @@ impl Default for McpSecuritySettings {
             signed_proxied_request_ids: true,
             upstream_default: UpstreamSecurityPolicy::default(),
             upstream_overrides: std::collections::HashMap::new(),
+            transport_limits: TransportLimitsSettings::default(),
         }
     }
 }
@@ -63,6 +72,28 @@ impl McpSecuritySettings {
             .cloned()
             .unwrap_or_else(|| self.upstream_default.clone())
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+#[allow(clippy::struct_field_names)]
+pub struct TransportLimitsSettings {
+    /// Max bytes for a single downstream JSON-RPC POST body (`POST /{profile_id}/mcp`).
+    #[serde(default)]
+    pub max_post_body_bytes: Option<u64>,
+    /// Max bytes for a single SSE event `data:` payload (upstream → Gateway → downstream).
+    #[serde(default)]
+    pub max_sse_event_bytes: Option<u64>,
+
+    /// JSON complexity caps applied after parse (optional).
+    #[serde(default)]
+    pub max_json_depth: Option<u32>,
+    #[serde(default)]
+    pub max_json_array_len: Option<u32>,
+    #[serde(default)]
+    pub max_json_object_keys: Option<u32>,
+    #[serde(default)]
+    pub max_json_string_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -755,6 +786,15 @@ pub trait Store: Send + Sync {
         name: &str,
     ) -> anyhow::Result<Option<String>>;
 
+    /// Tenant-level defaults for transport limits (Mode 3).
+    ///
+    /// In Mode 1, implementations may return `Ok(None)` and callers should fall back to process
+    /// defaults.
+    async fn get_tenant_transport_limits(
+        &self,
+        tenant_id: &str,
+    ) -> anyhow::Result<Option<TransportLimitsSettings>>;
+
     /// Validate a data-plane API key secret for a tenant/profile context.
     ///
     /// IMPORTANT: the caller's secret MUST NOT be forwarded to any upstream.
@@ -888,6 +928,17 @@ pub trait AdminStore: Send + Sync {
     // ---------------------------------------------------------------------
     // Audit settings + audit event querying (Mode 3 only)
     // ---------------------------------------------------------------------
+
+    async fn get_tenant_transport_limits(
+        &self,
+        tenant_id: &str,
+    ) -> anyhow::Result<Option<TransportLimitsSettings>>;
+
+    async fn put_tenant_transport_limits(
+        &self,
+        tenant_id: &str,
+        limits: &TransportLimitsSettings,
+    ) -> anyhow::Result<()>;
 
     async fn get_tenant_audit_settings(
         &self,
@@ -1077,6 +1128,13 @@ impl Store for ConfigStore {
         _tenant_id: &str,
         _name: &str,
     ) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+
+    async fn get_tenant_transport_limits(
+        &self,
+        _tenant_id: &str,
+    ) -> anyhow::Result<Option<TransportLimitsSettings>> {
         Ok(None)
     }
 

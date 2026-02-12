@@ -327,6 +327,13 @@ mod tests {
             Ok(self.secrets.lock().get(name).cloned())
         }
 
+        async fn get_tenant_transport_limits(
+            &self,
+            _tenant_id: &str,
+        ) -> anyhow::Result<Option<crate::store::TransportLimitsSettings>> {
+            Ok(None)
+        }
+
         async fn authenticate_api_key(
             &self,
             _tenant_id: &str,

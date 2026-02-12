@@ -37,6 +37,7 @@ hex = "0.4"
 unrelated-http-tools = { path = "../http-tools" }
 unrelated-openapi-tools = { path = "../openapi-tools" }
 unrelated-tool-transforms = { path = "../tool-transforms" }
+unrelated-env = { path = "../env" }
 
 [dev-dependencies]
 tempfile = "3"

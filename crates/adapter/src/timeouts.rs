@@ -2,10 +2,7 @@
 pub const DEFAULT_TOOL_CALL_TIMEOUT_SECS: u64 = 60;
 
 fn read_positive_u64_env(var: &str) -> Option<u64> {
-    std::env::var(var)
-        .ok()
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .filter(|v| *v > 0)
+    unrelated_env::positive_u64(var)
 }
 
 /// Global maximum allowed timeout for `tools/call` (seconds).

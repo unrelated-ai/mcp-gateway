@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7-labs
+#
 # =============================================================================
 # Unrelated MCP Workspace - Multi-stage Dockerfile
 # =============================================================================
@@ -25,6 +27,10 @@ FROM rust:1.92.0-slim AS builder
 ARG TARGET=x86_64-unknown-linux-musl
 ENV RUSTFLAGS="-C strip=symbols"
 
+ENV CARGO_NET_RETRY=10
+ENV CARGO_HTTP_TIMEOUT=120
+ENV CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         musl-tools \
@@ -37,20 +43,17 @@ WORKDIR /app
 
 # Copy manifests first (for better layer caching)
 COPY Cargo.toml Cargo.lock ./
-COPY crates/adapter/Cargo.toml crates/adapter/Cargo.toml
-COPY crates/gateway/Cargo.toml crates/gateway/Cargo.toml
-COPY crates/gateway-cli/Cargo.toml crates/gateway-cli/Cargo.toml
-COPY crates/http-tools/Cargo.toml crates/http-tools/Cargo.toml
-COPY crates/openapi-tools/Cargo.toml crates/openapi-tools/Cargo.toml
-COPY crates/test-support/Cargo.toml crates/test-support/Cargo.toml
-COPY crates/tool-transforms/Cargo.toml crates/tool-transforms/Cargo.toml
+COPY --parents crates/*/Cargo.toml ./
 
 # Create common mount points (scratch can't mkdir)
 RUN mkdir -p /config
 
 # Create dummy source files to build dependencies (and satisfy workspace members).
-RUN mkdir -p crates/adapter/src crates/gateway/src crates/gateway-cli/src crates/http-tools/src crates/openapi-tools/src crates/test-support/src crates/tool-transforms/src && \
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    mkdir -p crates/adapter/src crates/env/src crates/gateway/src crates/gateway-cli/src crates/http-tools/src crates/openapi-tools/src crates/test-support/src crates/tool-transforms/src && \
     echo "fn main() {}" > crates/adapter/src/main.rs && \
+    echo "pub fn _dummy() {}" > crates/env/src/lib.rs && \
     echo "fn main() {}" > crates/gateway/src/main.rs && \
     echo "fn main() {}" > crates/gateway-cli/src/main.rs && \
     echo "pub fn _dummy() {}" > crates/http-tools/src/lib.rs && \
@@ -59,10 +62,11 @@ RUN mkdir -p crates/adapter/src crates/gateway/src crates/gateway-cli/src crates
     echo "pub fn _dummy() {}" > crates/tool-transforms/src/lib.rs && \
     cargo build --release --target "${TARGET}" -p unrelated-mcp-adapter --bin unrelated-mcp-adapter && \
     cargo build --release --target "${TARGET}" -p unrelated-mcp-gateway --bin unrelated-mcp-gateway && \
-    rm -rf crates/adapter/src crates/gateway/src crates/gateway-cli/src crates/http-tools/src crates/openapi-tools/src crates/test-support/src crates/tool-transforms/src
+    rm -rf crates/adapter/src crates/env/src crates/gateway/src crates/gateway-cli/src crates/http-tools/src crates/openapi-tools/src crates/test-support/src crates/tool-transforms/src
 
 # Copy actual source code
 COPY crates/adapter/src ./crates/adapter/src
+COPY crates/env/src ./crates/env/src
 COPY crates/gateway/src ./crates/gateway/src
 COPY crates/gateway-cli/src ./crates/gateway-cli/src
 COPY crates/http-tools/src ./crates/http-tools/src
@@ -70,11 +74,15 @@ COPY crates/openapi-tools/src ./crates/openapi-tools/src
 COPY crates/test-support/src ./crates/test-support/src
 COPY crates/tool-transforms/src ./crates/tool-transforms/src
 
-RUN touch crates/http-tools/src/lib.rs crates/openapi-tools/src/lib.rs crates/tool-transforms/src/lib.rs
+RUN touch crates/env/src/lib.rs crates/http-tools/src/lib.rs crates/openapi-tools/src/lib.rs crates/tool-transforms/src/lib.rs
 
 # Build the actual binaries (touch to invalidate cache)
-RUN touch crates/adapter/src/main.rs && cargo build --release --target "${TARGET}" -p unrelated-mcp-adapter --bin unrelated-mcp-adapter
-RUN touch crates/gateway/src/main.rs && cargo build --release --target "${TARGET}" -p unrelated-mcp-gateway --bin unrelated-mcp-gateway
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    touch crates/adapter/src/main.rs && cargo build --release --target "${TARGET}" -p unrelated-mcp-adapter --bin unrelated-mcp-adapter
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    touch crates/gateway/src/main.rs && cargo build --release --target "${TARGET}" -p unrelated-mcp-gateway --bin unrelated-mcp-gateway
 
 # -----------------------------------------------------------------------------
 # Stage 2: Stdio integration image (adds extra runtimes; used for local testing)

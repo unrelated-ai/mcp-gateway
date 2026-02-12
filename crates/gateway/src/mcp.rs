@@ -17,7 +17,7 @@ use crate::{
 };
 use axum::{
     body::Bytes,
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response, Sse},
 };
@@ -70,6 +70,97 @@ const PROXY_KEY_BYTES: usize = 32;
 const CONTRACT_REPLAY_LIMIT: i64 = 1000;
 const SSE_PRIMING_RETRY_MS: u64 = 3_000;
 
+fn truncate_string_to_bytes(mut s: String, max_bytes: usize) -> (String, bool) {
+    if s.len() <= max_bytes {
+        return (s, false);
+    }
+    let mut cut = max_bytes;
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    s.truncate(cut);
+    (s, true)
+}
+
+fn truncate_bytes_lossy(bytes: &[u8], max_bytes: usize) -> (String, bool) {
+    let truncated = bytes.len() > max_bytes;
+    let slice = if truncated {
+        &bytes[..max_bytes]
+    } else {
+        bytes
+    };
+    (String::from_utf8_lossy(slice).to_string(), truncated)
+}
+
+#[derive(Debug)]
+struct PayloadLimitExceededAudit<'a> {
+    tenant_id: &'a str,
+    profile_id: &'a str,
+    http_method: &'static str,
+    http_route: &'static str,
+    status_code: Option<i32>,
+    direction: &'static str,
+    action_taken: &'static str,
+    reason: &'static str,
+    metric: &'static str,
+    observed: u64,
+    limit: u64,
+    upstream_id: Option<&'a str>,
+    sample: Option<(String, bool)>,
+}
+
+async fn record_payload_limit_exceeded(audit: &dyn AuditSink, a: PayloadLimitExceededAudit<'_>) {
+    let include_sample = matches!(
+        audit.tenant_default_level(a.tenant_id).await,
+        crate::audit::AuditLevel::Payload
+    );
+
+    let profile_uuid = Uuid::parse_str(a.profile_id).ok();
+    let mut meta = serde_json::Map::new();
+    meta.insert("direction".to_string(), serde_json::json!(a.direction));
+    meta.insert("metric".to_string(), serde_json::json!(a.metric));
+    meta.insert("observed".to_string(), serde_json::json!(a.observed));
+    meta.insert("limit".to_string(), serde_json::json!(a.limit));
+    meta.insert("actionTaken".to_string(), serde_json::json!(a.action_taken));
+    meta.insert("reason".to_string(), serde_json::json!(a.reason));
+    meta.insert("profileId".to_string(), serde_json::json!(a.profile_id));
+    if let Some(upstream_id) = a.upstream_id {
+        meta.insert("upstreamId".to_string(), serde_json::json!(upstream_id));
+    }
+
+    if include_sample && let Some((s, truncated)) = a.sample {
+        meta.insert("sample".to_string(), serde_json::json!(s));
+        meta.insert("sampleTruncated".to_string(), serde_json::json!(truncated));
+    }
+
+    // Convenience keys for byte-based limits (most common).
+    if a.metric == "bytes" {
+        meta.insert("bytesObserved".to_string(), serde_json::json!(a.observed));
+        meta.insert("limitBytes".to_string(), serde_json::json!(a.limit));
+    }
+
+    audit
+        .record(crate::audit::AuditEvent {
+            tenant_id: a.tenant_id.to_string(),
+            profile_id: profile_uuid,
+            api_key_id: None,
+            oidc_issuer: None,
+            oidc_subject: None,
+            action: "mcp.payload_limit_exceeded".to_string(),
+            http_method: Some(a.http_method.to_string()),
+            http_route: Some(a.http_route.to_string()),
+            status_code: a.status_code,
+            tool_ref: None,
+            tool_name_at_time: None,
+            ok: false,
+            duration_ms: None,
+            error_kind: Some("payload_limit_exceeded".to_string()),
+            error_message: None,
+            meta: serde_json::Value::Object(meta),
+        })
+        .await;
+}
+
 #[derive(Clone)]
 pub struct McpState {
     pub store: Arc<dyn Store>,
@@ -94,6 +185,11 @@ pub fn router(state: Arc<McpState>) -> axum::Router {
                 .get(get_mcp)
                 .delete(delete_mcp),
         )
+        // Hard cap to protect the process from unbounded request bodies.
+        .layer(DefaultBodyLimit::max(
+            usize::try_from(crate::transport_limits::HARD_MAX_POST_BODY_BYTES)
+                .unwrap_or(usize::MAX),
+        ))
         .with_state(state)
 }
 
@@ -128,37 +224,11 @@ async fn post_mcp(
     ensure_accepts_post(&headers).map_err(|(s, m)| (s, m).into_response())?;
     ensure_json_content_type(&headers).map_err(|(s, m)| (s, m).into_response())?;
 
-    let value: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
-        (
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            format!("invalid json: {e}"),
-        )
-            .into_response()
-    })?;
-    let message: ClientJsonRpcMessage = serde_json::from_value(value.clone()).map_err(|e| {
-        // Best-effort: if the message has a JSON-RPC `id`, return a JSON-RPC error instead of an
-        // HTTP 415 "invalid json" (the JSON *is* valid; the shape is not).
-        let req_id = value
-            .get("id")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<RequestId>(v).ok());
-        match req_id {
-            Some(id) => jsonrpc_error_response_with_data(
-                id,
-                ErrorCode::INVALID_REQUEST,
-                "Invalid request".to_string(),
-                Some(serde_json::json!({
-                    "type": "invalid-mcp-shape",
-                    "details": e.to_string(),
-                })),
-            ),
-            None => (
-                StatusCode::BAD_REQUEST,
-                format!("invalid MCP JSON-RPC message shape: {e}"),
-            )
-                .into_response(),
-        }
-    })?;
+    let (profile, limits) =
+        load_profile_and_effective_transport_limits(state.as_ref(), &profile_id).await?;
+    let message =
+        parse_post_body_message_with_limits(state.as_ref(), &profile_id, &profile, limits, &body)
+            .await?;
 
     let session_header = headers
         .get(HEADER_SESSION_ID)
@@ -190,6 +260,211 @@ async fn post_mcp(
         .instrument(span),
     )
     .await
+}
+
+async fn load_profile_and_effective_transport_limits(
+    state: &McpState,
+    profile_id: &str,
+) -> Result<
+    (
+        crate::store::Profile,
+        crate::transport_limits::EffectiveTransportLimits,
+    ),
+    Response,
+> {
+    // Load profile early so we can apply per-profile / per-tenant transport limits before parsing.
+    let profile = state
+        .store
+        .get_profile(profile_id)
+        .await
+        .map_err(internal_error_response("load profile"))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "profile not found").into_response())?;
+
+    let tenant_limits = match state
+        .store
+        .get_tenant_transport_limits(&profile.tenant_id)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                tenant_id = %profile.tenant_id,
+                "load tenant transport limits failed; using defaults"
+            );
+            None
+        }
+    };
+    let limits = crate::transport_limits::EffectiveTransportLimits::from_profile_and_tenant(
+        &profile.mcp.security.transport_limits,
+        tenant_limits.as_ref(),
+    );
+
+    Ok((profile, limits))
+}
+
+async fn parse_post_body_message_with_limits(
+    state: &McpState,
+    profile_id: &str,
+    profile: &crate::store::Profile,
+    limits: crate::transport_limits::EffectiveTransportLimits,
+    body: &Bytes,
+) -> Result<ClientJsonRpcMessage, Response> {
+    let ctx = PostBodyLimitsCtx {
+        state,
+        profile_id,
+        profile,
+        limits,
+    };
+
+    enforce_post_body_bytes_limit(&ctx, body).await?;
+
+    let value: serde_json::Value = serde_json::from_slice(body).map_err(|e| {
+        (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            format!("invalid json: {e}"),
+        )
+            .into_response()
+    })?;
+
+    if limits.has_json_complexity_limits() {
+        enforce_post_json_complexity_limit(&ctx, &value, body).await?;
+    }
+
+    parse_client_jsonrpc_message(value)
+}
+
+struct PostBodyLimitsCtx<'a> {
+    state: &'a McpState,
+    profile_id: &'a str,
+    profile: &'a crate::store::Profile,
+    limits: crate::transport_limits::EffectiveTransportLimits,
+}
+
+async fn enforce_post_body_bytes_limit(
+    ctx: &PostBodyLimitsCtx<'_>,
+    body: &Bytes,
+) -> Result<(), Response> {
+    let observed_bytes = body.len() as u64;
+    if observed_bytes <= ctx.limits.max_post_body_bytes {
+        return Ok(());
+    }
+
+    record_payload_limit_exceeded(
+        ctx.state.audit.as_ref(),
+        PayloadLimitExceededAudit {
+            tenant_id: &ctx.profile.tenant_id,
+            profile_id: ctx.profile_id,
+            http_method: "POST",
+            http_route: "/{profile_id}/mcp",
+            status_code: Some(i32::from(StatusCode::PAYLOAD_TOO_LARGE.as_u16())),
+            direction: "downstream_request",
+            action_taken: "rejected",
+            reason: "maxPostBodyBytes",
+            metric: "bytes",
+            observed: observed_bytes,
+            limit: ctx.limits.max_post_body_bytes,
+            upstream_id: None,
+            sample: Some(truncate_bytes_lossy(body.as_ref(), 4096)),
+        },
+    )
+    .await;
+
+    Err((
+        StatusCode::PAYLOAD_TOO_LARGE,
+        format!(
+            "payload too large (bytes={}, limit={})",
+            observed_bytes, ctx.limits.max_post_body_bytes
+        ),
+    )
+        .into_response())
+}
+
+async fn enforce_post_json_complexity_limit(
+    ctx: &PostBodyLimitsCtx<'_>,
+    value: &serde_json::Value,
+    body: &Bytes,
+) -> Result<(), Response> {
+    let Some(vio) = crate::transport_limits::check_json_complexity(value, ctx.limits) else {
+        return Ok(());
+    };
+
+    record_payload_limit_exceeded(
+        ctx.state.audit.as_ref(),
+        PayloadLimitExceededAudit {
+            tenant_id: &ctx.profile.tenant_id,
+            profile_id: ctx.profile_id,
+            http_method: "POST",
+            http_route: "/{profile_id}/mcp",
+            status_code: Some(i32::from(StatusCode::BAD_REQUEST.as_u16())),
+            direction: "downstream_request",
+            action_taken: "rejected",
+            reason: vio.kind,
+            metric: "complexity",
+            observed: vio.observed,
+            limit: vio.limit,
+            upstream_id: None,
+            sample: Some(truncate_bytes_lossy(body.as_ref(), 4096)),
+        },
+    )
+    .await;
+
+    // Best-effort: if the message has a JSON-RPC `id`, return a JSON-RPC error.
+    let req_id = value
+        .get("id")
+        .cloned()
+        .and_then(|v| serde_json::from_value::<RequestId>(v).ok());
+    Err(match req_id {
+        Some(id) => jsonrpc_error_response_with_data(
+            id,
+            ErrorCode::INVALID_REQUEST,
+            "payload too complex".to_string(),
+            Some(serde_json::json!({
+                "type": "payload-too-complex",
+                "metric": vio.kind,
+                "observed": vio.observed,
+                "limit": vio.limit,
+            })),
+        ),
+        None => (
+            StatusCode::BAD_REQUEST,
+            format!(
+                "payload too complex ({metric}: observed={observed}, limit={limit})",
+                metric = vio.kind,
+                observed = vio.observed,
+                limit = vio.limit
+            ),
+        )
+            .into_response(),
+    })
+}
+
+#[allow(clippy::result_large_err)] // Response is intentionally the shared error type for handlers.
+fn parse_client_jsonrpc_message(
+    value: serde_json::Value,
+) -> Result<ClientJsonRpcMessage, Response> {
+    // Best-effort: if the message has a JSON-RPC `id`, return a JSON-RPC error instead of an
+    // HTTP 415 "invalid json" (the JSON *is* valid; the shape is not).
+    let req_id = value
+        .get("id")
+        .cloned()
+        .and_then(|v| serde_json::from_value::<RequestId>(v).ok());
+    serde_json::from_value(value).map_err(|e| match req_id {
+        Some(id) => jsonrpc_error_response_with_data(
+            id,
+            ErrorCode::INVALID_REQUEST,
+            "Invalid request".to_string(),
+            Some(serde_json::json!({
+                "type": "invalid-mcp-shape",
+                "details": e.to_string(),
+            })),
+        ),
+        None => (
+            StatusCode::BAD_REQUEST,
+            format!("invalid MCP JSON-RPC message shape: {e}"),
+        )
+            .into_response(),
+    })
 }
 
 async fn get_mcp(
@@ -1130,6 +1405,23 @@ async fn handle_get_stream(
     )
     .await?;
 
+    let tenant_limits = match state
+        .store
+        .get_tenant_transport_limits(&profile.tenant_id)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, tenant_id = %profile.tenant_id, "load tenant transport limits failed; using defaults");
+            None
+        }
+    };
+    let limits = crate::transport_limits::EffectiveTransportLimits::from_profile_and_tenant(
+        &profile.mcp.security.transport_limits,
+        tenant_limits.as_ref(),
+    );
+    let limits_shutdown = CancellationToken::new();
+
     // Parse Last-Event-ID:
     // - If it looks like an upstream-prefixed id (`<upstream>/<id...>`), resume only that upstream.
     // - If it is numeric, treat it as the durable contract event cursor and do not forward to upstreams.
@@ -1161,15 +1453,17 @@ async fn handle_get_stream(
 
     let proxy_key = decode_proxy_key(&payload).map(|v| Arc::from(v.into_boxed_slice()));
     streams.extend(
-        open_upstream_streams(
+        open_upstream_streams(OpenUpstreamStreamsInputs {
             state,
-            &profile,
-            &payload.bindings,
-            &last,
-            collision_counts,
+            profile: &profile,
+            bindings: &payload.bindings,
+            last: &last,
+            resource_collision_counts: collision_counts,
             proxy_key,
-            parse_hop(headers),
-        )
+            hop: parse_hop(headers),
+            limits,
+            limits_shutdown: limits_shutdown.clone(),
+        })
         .await?,
     );
 
@@ -1185,9 +1479,15 @@ async fn handle_get_stream(
     ));
 
     let merged = futures::stream::select_all(streams);
-    // Ensure long-lived streams don't prevent shutdown (e.g. docker stop / SIGTERM).
+    // Ensure long-lived streams don't prevent shutdown (e.g. docker stop / SIGTERM),
+    // and close the SSE stream on transport limit violations.
     let shutdown = state.shutdown.clone();
-    let merged = merged.take_until(async move { shutdown.cancelled().await });
+    let merged = merged.take_until(async move {
+        tokio::select! {
+            () = shutdown.cancelled() => {},
+            () = limits_shutdown.cancelled() => {},
+        }
+    });
     let mut resp = Sse::new(merged).into_response();
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -1325,6 +1625,8 @@ fn rewrite_upstream_sse_data(
 }
 
 struct UpstreamSseMapCtx {
+    tenant_id: Arc<str>,
+    profile_id: Arc<str>,
     upstream_id: Arc<str>,
     upstream_session_id: Arc<str>,
     endpoint_url: Arc<str>,
@@ -1337,6 +1639,9 @@ struct UpstreamSseMapCtx {
     counts: Arc<parking_lot::RwLock<HashMap<String, usize>>>,
     proxy_key: Option<Arc<[u8]>>,
     http: reqwest::Client,
+    limits: crate::transport_limits::EffectiveTransportLimits,
+    limits_shutdown: CancellationToken,
+    audit: Arc<dyn AuditSink>,
 }
 
 async fn maybe_block_upstream_server_request(ctx: &UpstreamSseMapCtx, data: &str) -> bool {
@@ -1383,6 +1688,68 @@ async fn maybe_block_upstream_server_request(ctx: &UpstreamSseMapCtx, data: &str
     true
 }
 
+async fn enforce_sse_data_limits_or_close(
+    ctx: &UpstreamSseMapCtx,
+    direction: &'static str,
+    data: &str,
+    check_complexity: bool,
+) -> bool {
+    let observed = data.len() as u64;
+    if observed > ctx.limits.max_sse_event_bytes {
+        record_payload_limit_exceeded(
+            ctx.audit.as_ref(),
+            PayloadLimitExceededAudit {
+                tenant_id: ctx.tenant_id.as_ref(),
+                profile_id: ctx.profile_id.as_ref(),
+                http_method: "GET",
+                http_route: "/{profile_id}/mcp",
+                status_code: None,
+                direction,
+                action_taken: "closed_stream",
+                reason: "maxSseEventBytes",
+                metric: "bytes",
+                observed,
+                limit: ctx.limits.max_sse_event_bytes,
+                upstream_id: Some(ctx.upstream_id.as_ref()),
+                sample: Some(truncate_string_to_bytes(data.to_string(), 4096)),
+            },
+        )
+        .await;
+        ctx.limits_shutdown.cancel();
+        return false;
+    }
+
+    if check_complexity
+        && ctx.limits.has_json_complexity_limits()
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(data)
+        && let Some(vio) = crate::transport_limits::check_json_complexity(&v, ctx.limits)
+    {
+        record_payload_limit_exceeded(
+            ctx.audit.as_ref(),
+            PayloadLimitExceededAudit {
+                tenant_id: ctx.tenant_id.as_ref(),
+                profile_id: ctx.profile_id.as_ref(),
+                http_method: "GET",
+                http_route: "/{profile_id}/mcp",
+                status_code: None,
+                direction,
+                action_taken: "closed_stream",
+                reason: vio.kind,
+                metric: "complexity",
+                observed: vio.observed,
+                limit: vio.limit,
+                upstream_id: Some(ctx.upstream_id.as_ref()),
+                sample: Some(truncate_string_to_bytes(data.to_string(), 4096)),
+            },
+        )
+        .await;
+        ctx.limits_shutdown.cancel();
+        return false;
+    }
+
+    true
+}
+
 async fn map_upstream_sse_event(
     ctx: &UpstreamSseMapCtx,
     evt: Result<sse_stream::Sse, sse_stream::Error>,
@@ -1396,6 +1763,10 @@ async fn map_upstream_sse_event(
             if let Some(data) = sse.data.clone()
                 && !data.trim().is_empty()
             {
+                if !enforce_sse_data_limits_or_close(ctx, "upstream_sse", &data, true).await {
+                    return None;
+                }
+
                 if maybe_block_upstream_server_request(ctx, &data).await {
                     return None;
                 }
@@ -1412,6 +1783,16 @@ async fn map_upstream_sse_event(
                     RewriteOutcome::Drop => return None,
                     RewriteOutcome::Unchanged => {}
                     RewriteOutcome::Changed(new_data) => {
+                        if !enforce_sse_data_limits_or_close(
+                            ctx,
+                            "downstream_sse",
+                            &new_data,
+                            false,
+                        )
+                        .await
+                        {
+                            return None;
+                        }
                         sse.data = Some(new_data);
                     }
                 }
@@ -1435,18 +1816,35 @@ async fn map_upstream_sse_event(
     }
 }
 
-async fn open_upstream_streams(
-    state: &McpState,
-    profile: &crate::store::Profile,
-    bindings: &[UpstreamSessionBinding],
-    last: &ParsedLastEventId,
+struct OpenUpstreamStreamsInputs<'a> {
+    state: &'a McpState,
+    profile: &'a crate::store::Profile,
+    bindings: &'a [UpstreamSessionBinding],
+    last: &'a ParsedLastEventId,
     resource_collision_counts: Arc<parking_lot::RwLock<HashMap<String, usize>>>,
     proxy_key: Option<Arc<[u8]>>,
     hop: u32,
+    limits: crate::transport_limits::EffectiveTransportLimits,
+    limits_shutdown: CancellationToken,
+}
+
+async fn open_upstream_streams(
+    inputs: OpenUpstreamStreamsInputs<'_>,
 ) -> Result<
     Vec<futures::stream::BoxStream<'static, Result<axum::response::sse::Event, Infallible>>>,
     Response,
 > {
+    let OpenUpstreamStreamsInputs {
+        state,
+        profile,
+        bindings,
+        last,
+        resource_collision_counts,
+        proxy_key,
+        hop,
+        limits,
+        limits_shutdown,
+    } = inputs;
     let mut streams: Vec<
         futures::stream::BoxStream<'static, Result<axum::response::sse::Event, Infallible>>,
     > = Vec::new();
@@ -1495,6 +1893,8 @@ async fn open_upstream_streams(
         })?;
 
         let ctx = Arc::new(UpstreamSseMapCtx {
+            tenant_id: Arc::<str>::from(profile.tenant_id.clone()),
+            profile_id: Arc::<str>::from(profile.id.clone()),
             upstream_id: Arc::<str>::from(binding.upstream.clone()),
             upstream_session_id: Arc::<str>::from(binding.session.clone()),
             endpoint_url: endpoint_url.clone(),
@@ -1507,6 +1907,9 @@ async fn open_upstream_streams(
             counts: resource_collision_counts.clone(),
             proxy_key: proxy_key.clone(),
             http: state.http.clone(),
+            limits,
+            limits_shutdown: limits_shutdown.clone(),
+            audit: state.audit.clone(),
         });
 
         let mapped = upstream.filter_map(move |evt| {
@@ -2310,6 +2713,7 @@ mod tests {
 
     #[derive(Clone)]
     struct TestStore {
+        profiles: HashMap<String, crate::store::Profile>,
         upstreams: HashMap<String, crate::store::Upstream>,
     }
 
@@ -2317,9 +2721,9 @@ mod tests {
     impl crate::store::Store for TestStore {
         async fn get_profile(
             &self,
-            _profile_id: &str,
+            profile_id: &str,
         ) -> anyhow::Result<Option<crate::store::Profile>> {
-            Ok(None)
+            Ok(self.profiles.get(profile_id).cloned())
         }
         async fn get_upstream(
             &self,
@@ -2339,6 +2743,12 @@ mod tests {
             _tenant_id: &str,
             _name: &str,
         ) -> anyhow::Result<Option<String>> {
+            Ok(None)
+        }
+        async fn get_tenant_transport_limits(
+            &self,
+            _tenant_id: &str,
+        ) -> anyhow::Result<Option<crate::store::TransportLimitsSettings>> {
             Ok(None)
         }
         async fn authenticate_api_key(
@@ -2550,7 +2960,27 @@ mod tests {
 
     #[tokio::test]
     async fn post_returns_jsonrpc_invalid_request_for_valid_json_invalid_shape_when_id_present() {
+        let profile_id = uuid::Uuid::new_v4().to_string();
+        let profile = crate::store::Profile {
+            id: profile_id.clone(),
+            tenant_id: "t".to_string(),
+            allow_partial_upstreams: true,
+            source_ids: vec![],
+            transforms: unrelated_tool_transforms::TransformPipeline::default(),
+            enabled_tools: Vec::new(),
+            data_plane_auth_mode: DataPlaneAuthMode::Disabled,
+            accept_x_api_key: false,
+            rate_limit_enabled: false,
+            rate_limit_tool_calls_per_minute: None,
+            quota_enabled: false,
+            quota_tool_calls: None,
+            tool_call_timeout_secs: None,
+            tool_policies: vec![],
+            mcp: crate::store::McpProfileSettings::default(),
+        };
+
         let store = Arc::new(TestStore {
+            profiles: HashMap::from([(profile_id.clone(), profile)]),
             upstreams: HashMap::new(),
         });
         let state = Arc::new(McpState {
@@ -2575,7 +3005,6 @@ mod tests {
 
         let app = super::router(state);
         let (base, handle) = start_server(app).await;
-        let profile_id = uuid::Uuid::new_v4().to_string();
 
         // Valid JSON, but invalid JSON-RPC/MCP shape (`method` must be a string).
         let body = serde_json::json!({
@@ -2613,6 +3042,169 @@ mod tests {
             "body: {text}"
         );
         assert!(text.contains("invalid-mcp-shape"), "body: {text}");
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn post_rejects_when_post_body_limit_exceeded() {
+        let profile_id = uuid::Uuid::new_v4().to_string();
+        let mut mcp = crate::store::McpProfileSettings::default();
+        mcp.security.transport_limits.max_post_body_bytes = Some(128);
+        let profile = crate::store::Profile {
+            id: profile_id.clone(),
+            tenant_id: "t".to_string(),
+            allow_partial_upstreams: true,
+            source_ids: vec![],
+            transforms: unrelated_tool_transforms::TransformPipeline::default(),
+            enabled_tools: Vec::new(),
+            data_plane_auth_mode: DataPlaneAuthMode::Disabled,
+            accept_x_api_key: false,
+            rate_limit_enabled: false,
+            rate_limit_tool_calls_per_minute: None,
+            quota_enabled: false,
+            quota_tool_calls: None,
+            tool_call_timeout_secs: None,
+            tool_policies: vec![],
+            mcp,
+        };
+
+        let store = Arc::new(TestStore {
+            profiles: HashMap::from([(profile_id.clone(), profile)]),
+            upstreams: HashMap::new(),
+        });
+        let state = Arc::new(McpState {
+            store,
+            signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
+                .expect("signer"),
+            http: reqwest::Client::default(),
+            oidc: None,
+            shutdown: CancellationToken::new(),
+            audit: Arc::new(crate::audit::NoopAuditSink),
+            catalog: Arc::new(SharedCatalog::default()),
+            tenant_catalog: Arc::new(TenantCatalog::new()),
+            contracts: Arc::new(ContractTracker::new()),
+            contract_fanout: None,
+            tools_cache: Arc::new(crate::tools_cache::ToolSurfaceCache::new(
+                Duration::from_secs(60),
+            )),
+            endpoint_cache: Arc::new(crate::endpoint_cache::UpstreamEndpointCache::new(
+                Duration::from_secs(60),
+            )),
+        });
+
+        let app = super::router(state);
+        let (base, handle) = start_server(app).await;
+
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": { "pad": "x".repeat(2_048) }
+        });
+
+        let resp = reqwest::Client::new()
+            .post(format!("{base}/{profile_id}/mcp"))
+            .header(
+                reqwest::header::ACCEPT,
+                format!("{JSON_MIME_TYPE}, {EVENT_STREAM_MIME_TYPE}"),
+            )
+            .header(reqwest::header::CONTENT_TYPE, JSON_MIME_TYPE)
+            .body(body.to_string())
+            .send()
+            .await
+            .expect("post");
+
+        assert_eq!(resp.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
+        let text = resp.text().await.expect("body text");
+        assert!(text.contains("payload too large"), "body: {text}");
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn post_returns_jsonrpc_error_when_json_complexity_limit_exceeded() {
+        let profile_id = uuid::Uuid::new_v4().to_string();
+        let mut mcp = crate::store::McpProfileSettings::default();
+        mcp.security.transport_limits.max_json_depth = Some(2);
+        let profile = crate::store::Profile {
+            id: profile_id.clone(),
+            tenant_id: "t".to_string(),
+            allow_partial_upstreams: true,
+            source_ids: vec![],
+            transforms: unrelated_tool_transforms::TransformPipeline::default(),
+            enabled_tools: Vec::new(),
+            data_plane_auth_mode: DataPlaneAuthMode::Disabled,
+            accept_x_api_key: false,
+            rate_limit_enabled: false,
+            rate_limit_tool_calls_per_minute: None,
+            quota_enabled: false,
+            quota_tool_calls: None,
+            tool_call_timeout_secs: None,
+            tool_policies: vec![],
+            mcp,
+        };
+
+        let store = Arc::new(TestStore {
+            profiles: HashMap::from([(profile_id.clone(), profile)]),
+            upstreams: HashMap::new(),
+        });
+        let state = Arc::new(McpState {
+            store,
+            signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
+                .expect("signer"),
+            http: reqwest::Client::default(),
+            oidc: None,
+            shutdown: CancellationToken::new(),
+            audit: Arc::new(crate::audit::NoopAuditSink),
+            catalog: Arc::new(SharedCatalog::default()),
+            tenant_catalog: Arc::new(TenantCatalog::new()),
+            contracts: Arc::new(ContractTracker::new()),
+            contract_fanout: None,
+            tools_cache: Arc::new(crate::tools_cache::ToolSurfaceCache::new(
+                Duration::from_secs(60),
+            )),
+            endpoint_cache: Arc::new(crate::endpoint_cache::UpstreamEndpointCache::new(
+                Duration::from_secs(60),
+            )),
+        });
+
+        let app = super::router(state);
+        let (base, handle) = start_server(app).await;
+
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/list",
+            "params": {
+                "nested": {
+                    "v": {
+                        "x": 1
+                    }
+                }
+            }
+        });
+
+        let resp = reqwest::Client::new()
+            .post(format!("{base}/{profile_id}/mcp"))
+            .header(
+                reqwest::header::ACCEPT,
+                format!("{JSON_MIME_TYPE}, {EVENT_STREAM_MIME_TYPE}"),
+            )
+            .header(reqwest::header::CONTENT_TYPE, JSON_MIME_TYPE)
+            .body(body.to_string())
+            .send()
+            .await
+            .expect("post");
+
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+        let text = resp.text().await.expect("body text");
+        assert!(
+            text.contains(&format!("\"code\":{}", ErrorCode::INVALID_REQUEST.0)),
+            "body: {text}"
+        );
+        assert!(text.contains("payload-too-complex"), "body: {text}");
+        assert!(text.contains("maxJsonDepth"), "body: {text}");
 
         handle.abort();
     }
@@ -2656,6 +3248,7 @@ mod tests {
         let good_url = format!("{good_base}/mcp");
 
         let store = Arc::new(TestStore {
+            profiles: HashMap::new(),
             upstreams: HashMap::from([(
                 "u1".to_string(),
                 crate::store::Upstream {
@@ -2773,6 +3366,7 @@ mod tests {
         let up_url = format!("{up_base}/mcp");
 
         let store = Arc::new(TestStore {
+            profiles: HashMap::new(),
             upstreams: HashMap::from([(
                 "u1".to_string(),
                 crate::store::Upstream {
@@ -2842,15 +3436,22 @@ mod tests {
         }];
 
         let collision_counts = Arc::new(parking_lot::RwLock::new(HashMap::new()));
-        let streams = open_upstream_streams(
-            &state,
-            &profile,
-            &bindings,
-            &ParsedLastEventId::default(),
-            collision_counts,
+        let limits = crate::transport_limits::EffectiveTransportLimits::from_profile_and_tenant(
+            &profile.mcp.security.transport_limits,
             None,
-            0,
-        )
+        );
+        let last = ParsedLastEventId::default();
+        let streams = open_upstream_streams(OpenUpstreamStreamsInputs {
+            state: &state,
+            profile: &profile,
+            bindings: &bindings,
+            last: &last,
+            resource_collision_counts: collision_counts,
+            proxy_key: None,
+            hop: 0,
+            limits,
+            limits_shutdown: CancellationToken::new(),
+        })
         .await
         .expect("open streams");
         assert_eq!(streams.len(), 1);
@@ -2934,6 +3535,13 @@ mod tests {
             _tenant_id: &str,
             _name: &str,
         ) -> anyhow::Result<Option<String>> {
+            Ok(None)
+        }
+
+        async fn get_tenant_transport_limits(
+            &self,
+            _tenant_id: &str,
+        ) -> anyhow::Result<Option<crate::store::TransportLimitsSettings>> {
             Ok(None)
         }
 
@@ -3123,6 +3731,7 @@ sharedSources:
         let shared = SharedCatalog::from_config(&cfg).await?;
 
         let store = Arc::new(TestStore {
+            profiles: HashMap::new(),
             upstreams: HashMap::new(),
         });
         let state = McpState {
@@ -3212,6 +3821,7 @@ sharedSources:
         let shared = SharedCatalog::from_config(&cfg).await?;
 
         let store = Arc::new(TestStore {
+            profiles: HashMap::new(),
             upstreams: HashMap::new(),
         });
         let state = McpState {
@@ -3322,6 +3932,7 @@ sharedSources:
         let url = format!("{base}/mcp");
 
         let store = Arc::new(TestStore {
+            profiles: HashMap::new(),
             upstreams: HashMap::from([(
                 "u1".to_string(),
                 crate::store::Upstream {

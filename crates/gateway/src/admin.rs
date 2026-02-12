@@ -769,6 +769,17 @@ async fn put_upstream(
     // Outbound safety (SSRF hardening): validate upstream endpoints before storing them.
     let safety = crate::outbound_safety::gateway_outbound_http_safety();
     for ep in &endpoints {
+        // Upstream endpoint scheme policy: prefer HTTPS by default (dev override supported).
+        if let Err(e) = crate::outbound_safety::check_upstream_https_policy(&ep.url) {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "upstream endpoint '{}' rejected by HTTPS policy: {e}",
+                    ep.id
+                ),
+            )
+                .into_response();
+        }
         if let Err(e) = crate::outbound_safety::check_url_allowed(&safety, &ep.url).await {
             return (
                 StatusCode::BAD_REQUEST,

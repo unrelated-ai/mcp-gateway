@@ -32,6 +32,7 @@ mod tenant_token;
 mod timeouts;
 mod tool_policy;
 mod tools_cache;
+mod transport_limits;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const LICENSE: &str = env!("CARGO_PKG_LICENSE");

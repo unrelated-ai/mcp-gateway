@@ -3681,6 +3681,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "unrelated-env"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "unrelated-gateway-admin"
 version = "0.9.0"
 dependencies = [
@@ -3712,6 +3720,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "unrelated-env",
  "url",
 ]
 
@@ -3742,6 +3751,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "unrelated-env",
  "unrelated-http-tools",
  "unrelated-openapi-tools",
  "unrelated-test-support",
@@ -3784,6 +3794,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "unrelated-env",
  "unrelated-http-tools",
  "unrelated-openapi-tools",
  "unrelated-test-support",

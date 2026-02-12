@@ -35,6 +35,7 @@ parking_lot = "0.12"
 unrelated-http-tools = { path = "../http-tools" }
 unrelated-openapi-tools = { path = "../openapi-tools" }
 unrelated-tool-transforms = { path = "../tool-transforms" }
+unrelated-env = { path = "../env" }
 rusty_paseto = "0.9.0"
 time = { version = "0.3", features = ["formatting"] }
 jsonschema = "0.38.1"
