@@ -114,6 +114,7 @@ impl MockUpstream {
                 name: format!("mock-upstream-{}", self.upstream_id),
                 title: None,
                 version: "0".to_string(),
+                description: None,
                 icons: None,
                 website_url: None,
             },

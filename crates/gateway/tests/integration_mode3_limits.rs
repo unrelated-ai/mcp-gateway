@@ -465,6 +465,10 @@ fn spawn_gateway_with_oidc(
         .arg("info")
         .env("UNRELATED_GATEWAY_ADMIN_TOKEN", ADMIN_TOKEN)
         .env("UNRELATED_GATEWAY_SESSION_SECRET", SESSION_SECRET)
+        // Integration tests run mock upstreams on loopback.
+        .env("UNRELATED_GATEWAY_OUTBOUND_ALLOW_PRIVATE_NETWORKS", "1")
+        // Integration tests run mock upstreams over plain HTTP on loopback.
+        .env("UNRELATED_GATEWAY_UPSTREAM_ALLOW_HTTP", "1")
         // Mode 3 requires tenant secret encryption keys.
         .env(
             "UNRELATED_GATEWAY_SECRET_KEYS",
@@ -559,6 +563,7 @@ impl MockUpstream {
                 name: "mock-upstream".to_string(),
                 title: None,
                 version: "0".to_string(),
+                description: None,
                 icons: None,
                 website_url: None,
             },
