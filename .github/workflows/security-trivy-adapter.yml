@@ -1,0 +1,18 @@
+name: security-trivy-adapter
+
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "10 6 * * 1" # Mondays 06:10 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  trivy_adapter:
+    uses: ./.github/workflows/reusable-security-trivy-image.yml
+    with:
+      image_ref: local/unrelated-mcp-adapter:pr
+      dockerfile: Dockerfile
+      context: .

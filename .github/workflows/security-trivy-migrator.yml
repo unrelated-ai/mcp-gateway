@@ -1,0 +1,19 @@
+name: security-trivy-migrator
+
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 6 * * 1" # Mondays 06:30 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  trivy_migrator:
+    uses: ./.github/workflows/reusable-security-trivy-image.yml
+    with:
+      image_ref: local/unrelated-mcp-gateway-migrator:pr
+      dockerfile: Dockerfile
+      context: .
+      docker_target: gateway-migrator

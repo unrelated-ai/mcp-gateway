@@ -141,7 +141,7 @@ lint: fmt-check clippy
 # Security
 # =============================================================================
 
-## Run security checks (mirrors .github/workflows/security.yml)
+## Run security checks (mirrors split security workflows in .github/workflows/security-*.yml)
 security: security-audit security-trivy
 
 ## Rust dependency audit (RustSec)
