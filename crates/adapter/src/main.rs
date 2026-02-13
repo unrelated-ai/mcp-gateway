@@ -200,6 +200,8 @@ fn build_streamable_http_service(
         StreamableHttpServerConfig {
             stateful_mode: true,
             sse_keep_alive: Some(Duration::from_secs(15)),
+            // Keep retry unset to preserve existing client/test behavior expectations
+            // (first stream event is JSON data, not an SSE retry hint frame).
             sse_retry: None,
             cancellation_token: ct.child_token(),
         },

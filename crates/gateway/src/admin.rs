@@ -44,6 +44,7 @@ pub struct AdminState {
     pub shared_source_ids: Arc<std::collections::HashSet<String>>,
     pub oidc_issuer: Option<String>,
     pub audit: Arc<dyn crate::audit::AuditSink>,
+    pub invalidation: Arc<crate::pg_invalidation::InvalidationDispatcher>,
 }
 
 pub fn router() -> Router {
@@ -2448,7 +2449,11 @@ async fn put_tenant_audit_settings(
     let (status, ok, error, resp) =
         match store.put_tenant_audit_settings(&tenant_id, &settings).await {
             Ok(()) => {
-                state.audit.invalidate_tenant_settings_cache(&tenant_id);
+                state.invalidation.apply_local(
+                    &crate::pg_invalidation::InvalidationEvent::TenantAuditSettings {
+                        tenant_id: tenant_id.clone(),
+                    },
+                );
                 (
                     StatusCode::OK,
                     true,

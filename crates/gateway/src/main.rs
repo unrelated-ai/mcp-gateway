@@ -159,7 +159,15 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
         )),
     });
 
-    start_mode3_ha_tasks(pg_pool.clone(), mcp_state.clone(), ct.clone()).await?;
+    let invalidation = Arc::new(pg_invalidation::InvalidationDispatcher::new(
+        pg_pool.clone(),
+        mcp_state.tenant_catalog.clone(),
+        mcp_state.tools_cache.clone(),
+        mcp_state.endpoint_cache.clone(),
+        mcp_state.audit.clone(),
+    ));
+
+    start_mode3_ha_tasks(invalidation.clone(), ct.clone()).await?;
     start_tool_contract_invalidator(&mcp_state, ct.clone());
 
     let admin_state = Arc::new(admin::AdminState {
@@ -170,6 +178,7 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
         shared_source_ids: shared_source_ids.clone(),
         oidc_issuer: oidc_issuer.clone(),
         audit: audit.clone(),
+        invalidation: invalidation.clone(),
     });
 
     let tenant_state = Arc::new(tenant::TenantState {
@@ -178,6 +187,7 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
         shared_source_ids,
         mcp_state: mcp_state.clone(),
         audit,
+        invalidation,
     });
 
     let data_bind = parse_socket_addr(&args.bind, "bind")?;
@@ -259,40 +269,16 @@ fn build_audit_sink(
 }
 
 async fn start_mode3_ha_tasks(
-    pg_pool: Option<sqlx::PgPool>,
-    mcp_state: Arc<mcp::McpState>,
+    invalidation: Arc<pg_invalidation::InvalidationDispatcher>,
     ct: CancellationToken,
 ) -> anyhow::Result<()> {
     // Mode 3 HA: best-effort cross-node cache invalidation signals.
-    let Some(pool) = pg_pool else {
+    let Some(pool) = invalidation.pool() else {
         return Ok(());
     };
 
-    let tools_cache = mcp_state.tools_cache.clone();
-    let endpoint_cache = mcp_state.endpoint_cache.clone();
-    let tenant_catalog = mcp_state.tenant_catalog.clone();
-    let audit = mcp_state.audit.clone();
     let on_event: std::sync::Arc<dyn Fn(pg_invalidation::InvalidationEvent) + Send + Sync> =
-        std::sync::Arc::new(move |evt| match evt {
-            pg_invalidation::InvalidationEvent::TenantSecret { tenant_id, .. } => {
-                tenant_catalog.invalidate_tenant(&tenant_id);
-            }
-            pg_invalidation::InvalidationEvent::TenantAuditSettings { tenant_id } => {
-                audit.invalidate_tenant_settings_cache(&tenant_id);
-            }
-            pg_invalidation::InvalidationEvent::TenantToolSource {
-                tenant_id,
-                source_id,
-            } => {
-                tenant_catalog.invalidate_source(&tenant_id, &source_id);
-            }
-            pg_invalidation::InvalidationEvent::Profile { profile_id } => {
-                tools_cache.invalidate_profile(&profile_id);
-            }
-            pg_invalidation::InvalidationEvent::Upstream { upstream_id } => {
-                endpoint_cache.invalidate_upstream(&upstream_id);
-            }
-        });
+        std::sync::Arc::new(move |evt| invalidation.apply_local(&evt));
 
     pg_invalidation::start_listener(pool, ct, on_event)
         .await

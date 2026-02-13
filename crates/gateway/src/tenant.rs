@@ -43,6 +43,7 @@ pub struct TenantState {
     /// Shared MCP data-plane state (used for profile surface probing).
     pub mcp_state: Arc<crate::mcp::McpState>,
     pub audit: Arc<dyn crate::audit::AuditSink>,
+    pub invalidation: Arc<crate::pg_invalidation::InvalidationDispatcher>,
 }
 
 pub fn router(state: Arc<TenantState>) -> Router {
@@ -3042,7 +3043,11 @@ async fn put_audit_settings(
     match store.put_tenant_audit_settings(&tenant_id, &settings).await {
         Ok(()) => {
             // Keep per-tenant audit level cache coherent on this node.
-            state.audit.invalidate_tenant_settings_cache(&tenant_id);
+            state.invalidation.apply_local(
+                &crate::pg_invalidation::InvalidationEvent::TenantAuditSettings {
+                    tenant_id: tenant_id.clone(),
+                },
+            );
             Json(OkResponse { ok: true }).into_response()
         }
         Err(e) => {

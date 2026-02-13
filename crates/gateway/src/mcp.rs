@@ -1534,34 +1534,72 @@ fn namespace_sse_event_id(ns: SseEventIdNamespacing, upstream_id: &str, id: Stri
     }
 }
 
-fn server_notification_method(notification: &ServerNotification) -> &str {
-    match notification {
-        ServerNotification::CancelledNotification(_) => "notifications/cancelled",
-        ServerNotification::ProgressNotification(_) => "notifications/progress",
-        ServerNotification::LoggingMessageNotification(_) => "notifications/message",
-        ServerNotification::ResourceUpdatedNotification(_) => "notifications/resources/updated",
-        ServerNotification::ResourceListChangedNotification(_) => {
-            "notifications/resources/list_changed"
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NotificationKind {
+    Cancelled,
+    Progress,
+    LoggingMessage,
+    ResourceUpdated,
+    ResourceListChanged,
+    ToolListChanged,
+    PromptListChanged,
+    ElicitationCompletion,
+    Custom(String),
+}
+
+impl NotificationKind {
+    fn method(&self) -> &str {
+        match self {
+            NotificationKind::Cancelled => "notifications/cancelled",
+            NotificationKind::Progress => "notifications/progress",
+            NotificationKind::LoggingMessage => "notifications/message",
+            NotificationKind::ResourceUpdated => "notifications/resources/updated",
+            NotificationKind::ResourceListChanged => "notifications/resources/list_changed",
+            NotificationKind::ToolListChanged => "notifications/tools/list_changed",
+            NotificationKind::PromptListChanged => "notifications/prompts/list_changed",
+            NotificationKind::ElicitationCompletion => "notifications/elicitation/complete",
+            NotificationKind::Custom(method) => method,
         }
-        ServerNotification::ToolListChangedNotification(_) => "notifications/tools/list_changed",
-        ServerNotification::PromptListChangedNotification(_) => {
-            "notifications/prompts/list_changed"
-        }
-        ServerNotification::ElicitationCompletionNotification(_) => {
-            "notifications/elicitation/complete"
-        }
-        ServerNotification::CustomNotification(n) => n.method.as_str(),
     }
 }
 
-fn allowed_by_caps_for_notification(caps: EffectiveMcpCapabilities, method: &str) -> bool {
-    match method {
-        "notifications/message" => caps.logging(),
-        "notifications/tools/list_changed" => caps.tools_list_changed(),
-        "notifications/resources/list_changed" => caps.resources_list_changed(),
-        "notifications/prompts/list_changed" => caps.prompts_list_changed(),
+fn classify_server_notification(notification: &ServerNotification) -> NotificationKind {
+    match notification {
+        ServerNotification::CancelledNotification(_) => NotificationKind::Cancelled,
+        ServerNotification::ProgressNotification(_) => NotificationKind::Progress,
+        ServerNotification::LoggingMessageNotification(_) => NotificationKind::LoggingMessage,
+        ServerNotification::ResourceUpdatedNotification(_) => NotificationKind::ResourceUpdated,
+        ServerNotification::ResourceListChangedNotification(_) => {
+            NotificationKind::ResourceListChanged
+        }
+        ServerNotification::ToolListChangedNotification(_) => NotificationKind::ToolListChanged,
+        ServerNotification::PromptListChangedNotification(_) => NotificationKind::PromptListChanged,
+        ServerNotification::ElicitationCompletionNotification(_) => {
+            NotificationKind::ElicitationCompletion
+        }
+        ServerNotification::CustomNotification(n) => NotificationKind::Custom(n.method.clone()),
+    }
+}
+
+fn allowed_by_caps_for_notification_kind(
+    caps: EffectiveMcpCapabilities,
+    kind: &NotificationKind,
+) -> bool {
+    match kind {
+        NotificationKind::LoggingMessage => caps.logging(),
+        NotificationKind::ToolListChanged => caps.tools_list_changed(),
+        NotificationKind::ResourceListChanged => caps.resources_list_changed(),
+        NotificationKind::PromptListChanged => caps.prompts_list_changed(),
         _ => true,
     }
+}
+
+fn notification_allowed(
+    caps: EffectiveMcpCapabilities,
+    notification_filter: &crate::store::McpNotificationFilter,
+    kind: &NotificationKind,
+) -> bool {
+    allowed_by_caps_for_notification_kind(caps, kind) && notification_filter.allows(kind.method())
 }
 
 enum RewriteOutcome {
@@ -1584,8 +1622,8 @@ fn rewrite_upstream_sse_data(
     };
 
     if let ServerJsonRpcMessage::Notification(JsonRpcNotification { notification, .. }) = &msg {
-        let method = server_notification_method(notification);
-        if !allowed_by_caps_for_notification(caps, method) || !notification_filter.allows(method) {
+        let kind = classify_server_notification(notification);
+        if !notification_allowed(caps, notification_filter, &kind) {
             return RewriteOutcome::Drop;
         }
     }
@@ -2680,6 +2718,224 @@ mod tests {
             other => panic!("expected initialize request, got {other:?}"),
         };
         assert_eq!(client_info.name, "unrelated-mcp-gateway");
+    }
+
+    fn parse_server_notification(
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> ServerNotification {
+        let mut payload = serde_json::Map::new();
+        payload.insert("jsonrpc".to_string(), serde_json::json!("2.0"));
+        payload.insert("method".to_string(), serde_json::json!(method));
+        if let Some(params) = params {
+            payload.insert("params".to_string(), params);
+        }
+        let msg: ServerJsonRpcMessage = serde_json::from_value(serde_json::Value::Object(payload))
+            .expect("valid server notification json");
+        match msg {
+            ServerJsonRpcMessage::Notification(JsonRpcNotification { notification, .. }) => {
+                notification
+            }
+            other => panic!("expected notification, got {other:?}"),
+        }
+    }
+
+    fn default_effective_caps() -> EffectiveMcpCapabilities {
+        crate::store::McpCapabilitiesPolicy::default().effective()
+    }
+
+    fn effective_caps_with_deny(
+        deny: Vec<crate::store::McpCapability>,
+    ) -> EffectiveMcpCapabilities {
+        crate::store::McpCapabilitiesPolicy {
+            allow: vec![],
+            deny,
+        }
+        .effective()
+    }
+
+    #[test]
+    fn classify_server_notification_maps_all_known_and_custom_methods() {
+        let cases: Vec<(&str, Option<serde_json::Value>)> = vec![
+            (
+                "notifications/cancelled",
+                Some(serde_json::json!({"requestId": 1})),
+            ),
+            (
+                "notifications/progress",
+                Some(serde_json::json!({"progressToken": "p1", "progress": 1.0})),
+            ),
+            (
+                "notifications/message",
+                Some(serde_json::json!({"level": "info", "data": "hello"})),
+            ),
+            (
+                "notifications/resources/updated",
+                Some(serde_json::json!({"uri": "file:///r1"})),
+            ),
+            ("notifications/resources/list_changed", None),
+            ("notifications/tools/list_changed", None),
+            ("notifications/prompts/list_changed", None),
+            (
+                "notifications/elicitation/complete",
+                Some(serde_json::json!({"elicitationId": "e1"})),
+            ),
+            (
+                "notifications/custom/example",
+                Some(serde_json::json!({"value": 1})),
+            ),
+        ];
+
+        for (method, params) in cases {
+            let notification = parse_server_notification(method, params);
+            let kind = classify_server_notification(&notification);
+            assert_eq!(
+                kind.method(),
+                method,
+                "notification method mismatch for {method}"
+            );
+        }
+    }
+
+    #[test]
+    fn notification_policy_respects_capability_gates() {
+        let filter = crate::store::McpNotificationFilter::default();
+
+        let logging = classify_server_notification(&parse_server_notification(
+            "notifications/message",
+            Some(serde_json::json!({"level": "info", "data": "hello"})),
+        ));
+        assert!(notification_allowed(
+            default_effective_caps(),
+            &filter,
+            &logging
+        ));
+        assert!(!notification_allowed(
+            effective_caps_with_deny(vec![crate::store::McpCapability::Logging]),
+            &filter,
+            &logging
+        ));
+
+        let tools_list = classify_server_notification(&parse_server_notification(
+            "notifications/tools/list_changed",
+            None,
+        ));
+        assert!(notification_allowed(
+            default_effective_caps(),
+            &filter,
+            &tools_list
+        ));
+        assert!(!notification_allowed(
+            effective_caps_with_deny(vec![crate::store::McpCapability::ToolsListChanged]),
+            &filter,
+            &tools_list
+        ));
+
+        let resources_list = classify_server_notification(&parse_server_notification(
+            "notifications/resources/list_changed",
+            None,
+        ));
+        assert!(notification_allowed(
+            default_effective_caps(),
+            &filter,
+            &resources_list
+        ));
+        assert!(!notification_allowed(
+            effective_caps_with_deny(vec![crate::store::McpCapability::ResourcesListChanged]),
+            &filter,
+            &resources_list
+        ));
+
+        let prompts_list = classify_server_notification(&parse_server_notification(
+            "notifications/prompts/list_changed",
+            None,
+        ));
+        assert!(notification_allowed(
+            default_effective_caps(),
+            &filter,
+            &prompts_list
+        ));
+        assert!(!notification_allowed(
+            effective_caps_with_deny(vec![crate::store::McpCapability::PromptsListChanged]),
+            &filter,
+            &prompts_list
+        ));
+    }
+
+    #[test]
+    fn notification_policy_respects_allow_and_deny_filters_for_all_variants() {
+        let caps = default_effective_caps();
+        let cases: Vec<(&str, Option<serde_json::Value>)> = vec![
+            (
+                "notifications/cancelled",
+                Some(serde_json::json!({"requestId": 1})),
+            ),
+            (
+                "notifications/progress",
+                Some(serde_json::json!({"progressToken": "p1", "progress": 1.0})),
+            ),
+            (
+                "notifications/message",
+                Some(serde_json::json!({"level": "info", "data": "hello"})),
+            ),
+            (
+                "notifications/resources/updated",
+                Some(serde_json::json!({"uri": "file:///r1"})),
+            ),
+            ("notifications/resources/list_changed", None),
+            ("notifications/tools/list_changed", None),
+            ("notifications/prompts/list_changed", None),
+            (
+                "notifications/elicitation/complete",
+                Some(serde_json::json!({"elicitationId": "e1"})),
+            ),
+            (
+                "notifications/custom/example",
+                Some(serde_json::json!({"value": 1})),
+            ),
+        ];
+
+        for (method, params) in cases {
+            let kind = classify_server_notification(&parse_server_notification(method, params));
+            let allow_only = crate::store::McpNotificationFilter {
+                allow: vec![method.to_string()],
+                deny: vec![],
+            };
+            assert!(
+                notification_allowed(caps, &allow_only, &kind),
+                "allow filter should permit {method}"
+            );
+
+            let deny_only = crate::store::McpNotificationFilter {
+                allow: vec![],
+                deny: vec![method.to_string()],
+            };
+            assert!(
+                !notification_allowed(caps, &deny_only, &kind),
+                "deny filter should block {method}"
+            );
+        }
+    }
+
+    #[test]
+    fn elicitation_completion_notification_is_explicitly_covered() {
+        let kind = classify_server_notification(&parse_server_notification(
+            "notifications/elicitation/complete",
+            Some(serde_json::json!({"elicitationId": "e1"})),
+        ));
+        assert_eq!(kind, NotificationKind::ElicitationCompletion);
+        assert_eq!(kind.method(), "notifications/elicitation/complete");
+
+        let caps = effective_caps_with_deny(vec![
+            crate::store::McpCapability::Logging,
+            crate::store::McpCapability::ToolsListChanged,
+            crate::store::McpCapability::ResourcesListChanged,
+            crate::store::McpCapability::PromptsListChanged,
+        ]);
+        assert!(
+            allowed_by_caps_for_notification_kind(caps, &kind),
+            "elicitation completion should not be capability-gated"
+        );
     }
 
     #[derive(Clone)]

@@ -393,6 +393,24 @@ async fn admin_post(
     resp.json().await.context("admin POST json")
 }
 
+async fn admin_put(
+    client: &reqwest::Client,
+    base: &str,
+    path: &str,
+    body: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    let resp = client
+        .put(format!("{base}{path}"))
+        .header("Authorization", format!("Bearer {ADMIN_TOKEN}"))
+        .json(&body)
+        .send()
+        .await
+        .context("admin PUT")?
+        .error_for_status()
+        .context("admin PUT status")?;
+    resp.json().await.context("admin PUT json")
+}
+
 async fn admin_issue_tenant_token(
     client: &reqwest::Client,
     admin_base: &str,
@@ -431,6 +449,82 @@ async fn tenant_create_api_key(
         .and_then(serde_json::Value::as_str)
         .map(str::to_string)
         .context("create api key response missing secret")
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers)"]
+async fn put_tenant_audit_settings_emits_tenant_audit_settings_event() -> anyhow::Result<()> {
+    // Postgres
+    let pg = GenericImage::new("postgres", "16-alpine")
+        .with_exposed_port(5432.tcp())
+        .with_env_var("POSTGRES_PASSWORD", "postgres")
+        .with_env_var("POSTGRES_USER", "postgres")
+        .with_env_var("POSTGRES_DB", "gateway")
+        .start()
+        .await
+        .context("start postgres container")?;
+    let host = pg.get_host().await?.to_string();
+    let port = pg.get_host_port_ipv4(5432).await?;
+    let database_url =
+        format!("postgres://postgres:postgres@{host}:{port}/gateway?sslmode=disable");
+    wait_pg_ready(&database_url, Duration::from_secs(30)).await?;
+    apply_dbmate_migrations(&database_url).await?;
+
+    // Gateway (Mode 3).
+    let gw = spawn_gateway(&database_url, Some(ADMIN_TOKEN), SESSION_SECRET)?;
+    let admin_base = gw.admin_base.clone();
+    let _gw = KillOnDrop(gw.child);
+    wait_http_ok(&format!("{admin_base}/health"), Duration::from_secs(20)).await?;
+
+    let client = reqwest::Client::new();
+    let _ = admin_post(
+        &client,
+        &admin_base,
+        "/admin/v1/tenants",
+        json!({ "id": "t1", "enabled": true }),
+    )
+    .await?;
+
+    // Listen for pg invalidation events and assert that audit settings mutation emits the expected
+    // tenant-scoped invalidation event.
+    let mut listener = sqlx::postgres::PgListener::connect(&database_url)
+        .await
+        .context("connect pg listener")?;
+    listener
+        .listen("unrelated_gateway_invalidation_v1")
+        .await
+        .context("listen invalidation channel")?;
+
+    let _ = admin_put(
+        &client,
+        &admin_base,
+        "/admin/v1/tenants/t1/audit/settings",
+        json!({
+            "enabled": true,
+            "retentionDays": 30,
+            "defaultLevel": "metadata"
+        }),
+    )
+    .await?;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut saw_expected = false;
+    while !saw_expected {
+        let notification = tokio::time::timeout_at(deadline, listener.recv())
+            .await
+            .context("timeout waiting for invalidation event")?
+            .context("receive invalidation event")?;
+        let payload = notification.payload();
+        let parsed: serde_json::Value =
+            serde_json::from_str(payload).context("parse invalidation payload")?;
+        if parsed.get("type") == Some(&json!("tenant_audit_settings"))
+            && parsed.get("tenant_id") == Some(&json!("t1"))
+        {
+            saw_expected = true;
+        }
+    }
+    anyhow::ensure!(saw_expected, "expected tenant_audit_settings event");
+    Ok(())
 }
 
 #[tokio::test]
