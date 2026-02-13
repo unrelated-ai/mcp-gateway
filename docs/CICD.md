@@ -132,7 +132,13 @@ UI releases are tag-driven (similar to the Rust components):
 - Stable: `ui-vX.Y.Z`
 - Pre-release: `ui-vX.Y.Z-rc.N`
 
-Tag and push:
+1) Bump versions / notes:
+
+- Update `ui/package.json` to `"version": "X.Y.Z"`
+- Update `ui/package-lock.json` to the same version
+- Update `CHANGELOG.md`
+
+2) Tag and push:
 
 ```bash
 git tag ui-vX.Y.Z
@@ -142,4 +148,5 @@ git push origin ui-vX.Y.Z
 ### Notes
 
 - Release workflows are tag-driven; see `.github/workflows/release.yml`.
-- The release guard verifies the tag matches the package version (via `cargo metadata`).
+- Rust release guards verify tag/version alignment via `cargo metadata`.
+- UI release guard verifies the tag matches `ui/package.json` version.

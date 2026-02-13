@@ -247,6 +247,12 @@ For `tools/call` only, the Gateway enforces a **timeout budget** (and optional r
 - **Mode 1 (minimal)**: static config file only (no runtime writes).
 - **Mode 3 (HA)**: Postgres.
 
+### Mode 3 cache invalidation (best-effort)
+
+- Contract-change notifications propagate across nodes via Postgres `LISTEN/NOTIFY` (with resume support via SSE `Last-Event-ID`).
+- A separate lightweight invalidation channel clears per-node caches after writes (profiles, upstreams, tool sources, secrets, audit settings, transport limits).
+- Tool-routing caches are also invalidated locally through an in-process dispatcher when `tools` contract changes are observed (including remote fanout events).
+
 ## Observability
 
 The Gateway emits structured logs and is intended to be deployed behind your normal observability stack.

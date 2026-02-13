@@ -18,7 +18,7 @@ services:
       - gateway_db_data_bootstrap_v1:/var/lib/postgresql/data
 
   gateway_db_migrate:
-    image: ghcr.io/unrelated-ai/mcp-gateway-migrator:${GATEWAY_VERSION:-0.8.1}
+    image: ghcr.io/unrelated-ai/mcp-gateway-migrator:${GATEWAY_VERSION:-0.10.0}
     depends_on:
       gateway_db:
         condition: service_healthy
@@ -29,7 +29,7 @@ services:
       - up
 
   gateway:
-    image: ghcr.io/unrelated-ai/mcp-gateway:${GATEWAY_VERSION:-0.8.1}
+    image: ghcr.io/unrelated-ai/mcp-gateway:${GATEWAY_VERSION:-0.10.0}
     depends_on:
       gateway_db:
         condition: service_healthy
@@ -60,7 +60,7 @@ services:
       start_period: 5s
 
   gateway_ui:
-    image: ghcr.io/unrelated-ai/mcp-gateway-ui:${UI_VERSION:-0.4.2}
+    image: ghcr.io/unrelated-ai/mcp-gateway-ui:${UI_VERSION:-0.6.0}
     depends_on:
       gateway:
         condition: service_healthy

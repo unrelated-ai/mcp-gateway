@@ -1,6 +1,6 @@
 [package]
 name = "unrelated-mcp-adapter"
-version = "0.9.0"
+version = "0.10.0"
 edition.workspace = true
 rust-version.workspace = true
 description = "Expose stdio-based MCP servers over streamable HTTP"

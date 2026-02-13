@@ -39,7 +39,7 @@ The Adapter stays “dumb plumbing” on purpose: it turns systems into MCP and 
 - Architecture (incl. HA session routing “Model B”): [`docs/gateway/ARCHITECTURE.md`](ARCHITECTURE.md)
 - Data-plane auth (Mode 1 API keys + Mode 3 API keys + OIDC/JWT, per-profile policy): [`docs/gateway/DATA_PLANE_AUTH.md`](DATA_PLANE_AUTH.md)
 - MCP proxying & aggregation behavior: [`docs/gateway/MCP_PROXYING.md`](MCP_PROXYING.md)
-- Profile MCP settings (capabilities allow/deny, notifications, namespacing): [`docs/gateway/MCP_SETTINGS.md`](MCP_SETTINGS.md)
+- Profile MCP settings (capabilities, notifications, namespacing, upstream trust controls, transport limits): [`docs/gateway/MCP_SETTINGS.md`](MCP_SETTINGS.md)
 - Outbound HTTP safety (SSRF hardening for tool sources + upstream MCP endpoints): [`docs/gateway/OUTBOUND_HTTP_SAFETY.md`](OUTBOUND_HTTP_SAFETY.md)
 - Audit logging (Mode 3 / Postgres): [`docs/gateway/AUDIT.md`](AUDIT.md)
 - CLI: [`docs/gateway-cli/INDEX.md`](../gateway-cli/INDEX.md)

@@ -8,6 +8,8 @@ The **Web UI** is a Next.js application used to manage Gateway tenants:
 - secrets
 - API keys
 - audit (events + tool-call analytics)
+- profile MCP security controls
+- tenant/profile transport limits
 
 ## Scope
 
@@ -23,6 +25,17 @@ The **Web UI** is a Next.js application used to manage Gateway tenants:
 See also:
 
 - Gateway audit logging: [`docs/gateway/AUDIT.md`](../gateway/AUDIT.md)
+
+## Security and transport controls
+
+- **Profile -> Security** includes MCP trust-policy controls (client capability shaping, proxied-request ID signing, and upstream server->client request filtering).
+- **Settings -> Transport limits** configures tenant defaults for MCP payload/transport safety.
+- Per-profile transport limits can override tenant defaults in profile MCP settings.
+
+See also:
+
+- Gateway MCP settings: [`docs/gateway/MCP_SETTINGS.md`](../gateway/MCP_SETTINGS.md)
+- Gateway proxying/security behavior: [`docs/gateway/MCP_PROXYING.md`](../gateway/MCP_PROXYING.md)
 
 ## Docs
 
