@@ -90,10 +90,20 @@ export type UpstreamSecurityPolicy = {
   rewriteClientInfo: boolean;
 };
 
+export type TransportLimitsSettings = {
+  maxPostBodyBytes?: number | null;
+  maxSseEventBytes?: number | null;
+  maxJsonDepth?: number | null;
+  maxJsonArrayLen?: number | null;
+  maxJsonObjectKeys?: number | null;
+  maxJsonStringBytes?: number | null;
+};
+
 export type McpSecuritySettings = {
   signedProxiedRequestIds: boolean;
   upstreamDefault: UpstreamSecurityPolicy;
   upstreamOverrides: Record<string, UpstreamSecurityPolicy>;
+  transportLimits: TransportLimitsSettings;
 };
 
 export type McpProfileSettings = {
@@ -163,6 +173,8 @@ export type TenantAuditSettings = {
   retentionDays: number;
   defaultLevel: "off" | "summary" | "metadata" | "payload" | string;
 };
+
+export type TenantTransportLimitsSettings = TransportLimitsSettings;
 
 export type AuditEventRow = {
   id: number;

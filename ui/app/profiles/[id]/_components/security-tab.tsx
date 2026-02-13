@@ -1,11 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SectionCard, Toggle } from "@/components/ui";
 import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
-import type { McpProfileSettings, Profile, UpstreamSecurityPolicy } from "@/src/lib/types";
+import type {
+  McpProfileSettings,
+  Profile,
+  TransportLimitsSettings,
+  UpstreamSecurityPolicy,
+} from "@/src/lib/types";
 import { buildPutProfileBody } from "@/src/lib/profilePut";
 import { useQueuedAutosave } from "@/src/lib/useQueuedAutosave";
 import {
@@ -20,6 +25,15 @@ import {
 
 type Preset = "trusted" | "untrusted" | "custom";
 type UpstreamPreset = "default" | Preset;
+
+function parsePositiveIntegerInput(raw: string): number | null {
+  if (raw.trim() === "") return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  const normalized = Math.floor(n);
+  if (normalized <= 0) return null;
+  return normalized;
+}
 
 function isTrustedPolicy(p: UpstreamSecurityPolicy): boolean {
   return (
@@ -89,6 +103,7 @@ function normalizePolicy(p: UpstreamSecurityPolicy): UpstreamSecurityPolicy {
       signedProxiedRequestIds: true,
       upstreamDefault: p,
       upstreamOverrides: {},
+      transportLimits: {},
     },
   }).security.upstreamDefault;
 }
@@ -106,6 +121,13 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
     return presetForPolicy(normalizePolicy(initialMcp.security.upstreamDefault)) === "custom";
   });
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  const tenantTransportLimitsQuery = useQuery({
+    queryKey: qk.tenantTransportLimits(),
+    queryFn: async () => {
+      return await tenantApi.getTenantTransportLimits();
+    },
+  });
 
   const saveMutation = useMutation({
     mutationFn: async (nextMcp: McpProfileSettings) => {
@@ -158,6 +180,21 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
   const upstreams = profile?.upstreams ?? [];
   const defaultPreset = presetForPolicy(normalizePolicy(security.upstreamDefault));
   const defaultSelectValue: Preset = showDefaultAdvanced ? "custom" : defaultPreset;
+
+  const DEFAULT_MAX_POST_BODY_BYTES = 4 * 1024 * 1024;
+  const DEFAULT_MAX_SSE_EVENT_BYTES = 8 * 1024 * 1024;
+  const tenantTransportLimits = tenantTransportLimitsQuery.data ?? null;
+
+  const profileTransportLimits: TransportLimitsSettings = security.transportLimits ?? {};
+  const usesTenantDefaults = Object.values(profileTransportLimits).every((v) => v == null);
+  const effectiveMaxPostBodyBytes =
+    profileTransportLimits.maxPostBodyBytes ??
+    tenantTransportLimits?.maxPostBodyBytes ??
+    DEFAULT_MAX_POST_BODY_BYTES;
+  const effectiveMaxSseEventBytes =
+    profileTransportLimits.maxSseEventBytes ??
+    tenantTransportLimits?.maxSseEventBytes ??
+    DEFAULT_MAX_SSE_EVENT_BYTES;
 
   const setDefaultPreset = (preset: Preset) => {
     if (preset === "custom") {
@@ -256,6 +293,221 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
               onChange={updateDefaultPolicy}
               disabled={!profile || saveMutation.isPending}
             />
+          ) : null}
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="Transport limits"
+        subtitle="Per-profile transport limits. When disabled, the profile uses tenant defaults from /settings."
+        bodyClassName="space-y-4"
+      >
+        <div className="flex items-start justify-between gap-6">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-zinc-100">Use tenant defaults</div>
+            <div className="mt-1 text-xs text-zinc-500">
+              If enabled, this profile inherits tenant-level transport limits.
+            </div>
+          </div>
+          <Toggle
+            checked={usesTenantDefaults}
+            disabled={!profile || saveMutation.isPending}
+            onChange={(checked) => {
+              if (checked) {
+                commit({ ...security, transportLimits: {} });
+                return;
+              }
+              commit({
+                ...security,
+                transportLimits: {
+                  ...profileTransportLimits,
+                  maxPostBodyBytes: effectiveMaxPostBodyBytes,
+                  maxSseEventBytes: effectiveMaxSseEventBytes,
+                },
+              });
+            }}
+          />
+        </div>
+
+        <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4 space-y-3">
+          <div className="text-sm font-semibold text-zinc-100">Max POST body bytes</div>
+          <div className="text-xs text-zinc-500">
+            Effective: <code>{effectiveMaxPostBodyBytes}</code> (~
+            {Math.round((effectiveMaxPostBodyBytes / 1024 / 1024) * 10) / 10} MiB)
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {[1, 4, 8, 16, 32].map((mib) => {
+              const bytes = mib * 1024 * 1024;
+              return (
+                <button
+                  key={mib}
+                  type="button"
+                  disabled={usesTenantDefaults || !profile || saveMutation.isPending}
+                  onClick={() =>
+                    commit({
+                      ...security,
+                      transportLimits: { ...profileTransportLimits, maxPostBodyBytes: bytes },
+                    })
+                  }
+                  className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                    effectiveMaxPostBodyBytes === bytes
+                      ? "border-violet-500/50 bg-violet-500/15 text-violet-200"
+                      : "border-zinc-800/70 bg-zinc-950/40 text-zinc-300 hover:bg-zinc-800/40 hover:text-zinc-200"
+                  } ${usesTenantDefaults ? "opacity-50 cursor-not-allowed" : ""}`}
+                >
+                  {mib} MiB
+                </button>
+              );
+            })}
+            <input
+              type="number"
+              min={1}
+              step={1}
+              disabled={usesTenantDefaults || !profile || saveMutation.isPending}
+              value={
+                usesTenantDefaults
+                  ? effectiveMaxPostBodyBytes
+                  : (profileTransportLimits.maxPostBodyBytes ?? "")
+              }
+              onChange={(e) => {
+                const v = parsePositiveIntegerInput(e.target.value);
+                commit({
+                  ...security,
+                  transportLimits: { ...profileTransportLimits, maxPostBodyBytes: v },
+                });
+              }}
+              className="w-[220px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
+            />
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4 space-y-3">
+          <div className="text-sm font-semibold text-zinc-100">Max SSE event bytes</div>
+          <div className="text-xs text-zinc-500">
+            Effective: <code>{effectiveMaxSseEventBytes}</code> (~
+            {Math.round((effectiveMaxSseEventBytes / 1024 / 1024) * 10) / 10} MiB)
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {[1, 4, 8, 16, 32].map((mib) => {
+              const bytes = mib * 1024 * 1024;
+              return (
+                <button
+                  key={mib}
+                  type="button"
+                  disabled={usesTenantDefaults || !profile || saveMutation.isPending}
+                  onClick={() =>
+                    commit({
+                      ...security,
+                      transportLimits: { ...profileTransportLimits, maxSseEventBytes: bytes },
+                    })
+                  }
+                  className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                    effectiveMaxSseEventBytes === bytes
+                      ? "border-violet-500/50 bg-violet-500/15 text-violet-200"
+                      : "border-zinc-800/70 bg-zinc-950/40 text-zinc-300 hover:bg-zinc-800/40 hover:text-zinc-200"
+                  } ${usesTenantDefaults ? "opacity-50 cursor-not-allowed" : ""}`}
+                >
+                  {mib} MiB
+                </button>
+              );
+            })}
+            <input
+              type="number"
+              min={1}
+              step={1}
+              disabled={usesTenantDefaults || !profile || saveMutation.isPending}
+              value={
+                usesTenantDefaults
+                  ? effectiveMaxSseEventBytes
+                  : (profileTransportLimits.maxSseEventBytes ?? "")
+              }
+              onChange={(e) => {
+                const v = parsePositiveIntegerInput(e.target.value);
+                commit({
+                  ...security,
+                  transportLimits: { ...profileTransportLimits, maxSseEventBytes: v },
+                });
+              }}
+              className="w-[220px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
+            />
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4 space-y-3">
+          <div className="text-sm font-semibold text-zinc-100">JSON complexity caps (optional)</div>
+          <div className="text-xs text-zinc-500">
+            These apply after parsing JSON. Leave blank to inherit tenant defaults / process
+            defaults.
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="number"
+              min={1}
+              step={1}
+              placeholder="max depth"
+              disabled={usesTenantDefaults || !profile || saveMutation.isPending}
+              value={profileTransportLimits.maxJsonDepth ?? ""}
+              onChange={(e) => {
+                const v = parsePositiveIntegerInput(e.target.value);
+                commit({
+                  ...security,
+                  transportLimits: { ...profileTransportLimits, maxJsonDepth: v },
+                });
+              }}
+              className="w-[160px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
+            />
+            <input
+              type="number"
+              min={1}
+              step={1}
+              placeholder="max array"
+              disabled={usesTenantDefaults || !profile || saveMutation.isPending}
+              value={profileTransportLimits.maxJsonArrayLen ?? ""}
+              onChange={(e) => {
+                const v = parsePositiveIntegerInput(e.target.value);
+                commit({
+                  ...security,
+                  transportLimits: { ...profileTransportLimits, maxJsonArrayLen: v },
+                });
+              }}
+              className="w-[160px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
+            />
+            <input
+              type="number"
+              min={1}
+              step={1}
+              placeholder="max keys"
+              disabled={usesTenantDefaults || !profile || saveMutation.isPending}
+              value={profileTransportLimits.maxJsonObjectKeys ?? ""}
+              onChange={(e) => {
+                const v = parsePositiveIntegerInput(e.target.value);
+                commit({
+                  ...security,
+                  transportLimits: { ...profileTransportLimits, maxJsonObjectKeys: v },
+                });
+              }}
+              className="w-[160px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
+            />
+            <input
+              type="number"
+              min={1}
+              step={1}
+              placeholder="max str bytes"
+              disabled={usesTenantDefaults || !profile || saveMutation.isPending}
+              value={profileTransportLimits.maxJsonStringBytes ?? ""}
+              onChange={(e) => {
+                const v = parsePositiveIntegerInput(e.target.value);
+                commit({
+                  ...security,
+                  transportLimits: { ...profileTransportLimits, maxJsonStringBytes: v },
+                });
+              }}
+              className="w-[180px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
+            />
+          </div>
+
+          {tenantTransportLimitsQuery.isError ? (
+            <div className="text-xs text-red-300 mt-2">Failed to load tenant defaults.</div>
           ) : null}
         </div>
       </SectionCard>

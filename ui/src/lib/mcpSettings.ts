@@ -6,6 +6,7 @@ import type {
   McpSecuritySettings,
   McpServerRequestFilter,
   McpNamespacing,
+  TransportLimitsSettings,
   UpstreamClientCapabilitiesMode,
   UpstreamSecurityPolicy,
 } from "@/src/lib/types";
@@ -72,6 +73,7 @@ export function defaultSecuritySettings(): McpSecuritySettings {
     signedProxiedRequestIds: true,
     upstreamDefault: trustedUpstreamPolicy(),
     upstreamOverrides: {},
+    transportLimits: {},
   };
 }
 
@@ -139,6 +141,26 @@ function normalizeNamespacing(n: McpNamespacing): McpNamespacing {
   };
 }
 
+function asTransportLimits(input: unknown): TransportLimitsSettings {
+  const obj = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
+  const pickU32 = (v: unknown): number | null | undefined => {
+    if (v === null) return null;
+    if (typeof v !== "number" || !Number.isFinite(v)) return undefined;
+    const n = Math.floor(v);
+    if (n <= 0) return undefined;
+    return n;
+  };
+  const pickU64 = pickU32;
+  return {
+    maxPostBodyBytes: pickU64(obj.maxPostBodyBytes),
+    maxSseEventBytes: pickU64(obj.maxSseEventBytes),
+    maxJsonDepth: pickU32(obj.maxJsonDepth),
+    maxJsonArrayLen: pickU32(obj.maxJsonArrayLen),
+    maxJsonObjectKeys: pickU32(obj.maxJsonObjectKeys),
+    maxJsonStringBytes: pickU64(obj.maxJsonStringBytes),
+  };
+}
+
 export function normalizeMcpSettings(s: McpProfileSettings): McpProfileSettings {
   const order = new Map<McpCapability, number>(ALL_MCP_CAPABILITIES.map((c, i) => [c, i]));
   const uniqSortedCaps = (xs: McpCapability[]): McpCapability[] =>
@@ -160,6 +182,7 @@ export function normalizeMcpSettings(s: McpProfileSettings): McpProfileSettings 
       signedProxiedRequestIds: !!s.security.signedProxiedRequestIds,
       upstreamDefault: asUpstreamSecurityPolicy(s.security.upstreamDefault),
       upstreamOverrides,
+      transportLimits: asTransportLimits(s.security.transportLimits),
     },
   };
 }
@@ -233,6 +256,7 @@ export function asMcpSettings(input: unknown): McpProfileSettings {
           : d.security.signedProxiedRequestIds,
       upstreamDefault: asUpstreamSecurityPolicy(secObj.upstreamDefault),
       upstreamOverrides,
+      transportLimits: asTransportLimits(secObj.transportLimits),
     },
   });
 }

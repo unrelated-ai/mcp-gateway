@@ -11,8 +11,13 @@ import { LockIcon, ServerIconDevice, UserIcon } from "@/components/icons";
 import { GATEWAY_DATA_BASE, UI_VERSION } from "@/src/lib/env";
 import { useToastStore } from "@/src/lib/toast-store";
 import { useMutation } from "@tanstack/react-query";
-import { getTenantAuditSettings, putTenantAuditSettings } from "@/src/lib/tenantApi";
-import type { TenantAuditSettings } from "@/src/lib/types";
+import {
+  getTenantAuditSettings,
+  getTenantTransportLimits,
+  putTenantAuditSettings,
+  putTenantTransportLimits,
+} from "@/src/lib/tenantApi";
+import type { TenantAuditSettings, TenantTransportLimitsSettings } from "@/src/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +35,15 @@ type GatewayStatusResponse =
       };
     }
   | { ok: false; error?: string; status?: number };
+
+function parsePositiveIntegerInput(raw: string): number | null {
+  if (raw.trim() === "") return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  const normalized = Math.floor(n);
+  if (normalized <= 0) return null;
+  return normalized;
+}
 
 export default function SettingsPage() {
   const [showConfirmLock, setShowConfirmLock] = useState(false);
@@ -66,15 +80,50 @@ export default function SettingsPage() {
     },
   });
 
+  const transportLimitsQuery = useQuery({
+    queryKey: qk.tenantTransportLimits(),
+    queryFn: async () => {
+      return await getTenantTransportLimits();
+    },
+  });
+
   const [auditEnabledDraft, setAuditEnabledDraft] = useState<boolean | null>(null);
   const [auditRetentionDaysDraft, setAuditRetentionDaysDraft] = useState<number | null>(null);
   const [auditDefaultLevelDraft, setAuditDefaultLevelDraft] = useState<string | null>(null);
+
+  const DEFAULT_MAX_POST_BODY_BYTES = 4 * 1024 * 1024;
+  const DEFAULT_MAX_SSE_EVENT_BYTES = 8 * 1024 * 1024;
+
+  const [maxPostBodyBytesDraft, setMaxPostBodyBytesDraft] = useState<number | null>(null);
+  const [maxSseEventBytesDraft, setMaxSseEventBytesDraft] = useState<number | null>(null);
+  const [maxJsonDepthDraft, setMaxJsonDepthDraft] = useState<number | null>(null);
+  const [maxJsonArrayLenDraft, setMaxJsonArrayLenDraft] = useState<number | null>(null);
+  const [maxJsonObjectKeysDraft, setMaxJsonObjectKeysDraft] = useState<number | null>(null);
+  const [maxJsonStringBytesDraft, setMaxJsonStringBytesDraft] = useState<number | null>(null);
 
   const effectiveAuditSettings: TenantAuditSettings | null = auditSettingsQuery.data ?? null;
   const draftEnabled = auditEnabledDraft ?? effectiveAuditSettings?.enabled ?? false;
   const draftRetentionDays = auditRetentionDaysDraft ?? effectiveAuditSettings?.retentionDays ?? 30;
   const draftDefaultLevel =
     auditDefaultLevelDraft ?? effectiveAuditSettings?.defaultLevel ?? "metadata";
+
+  const effectiveTransportLimits: TenantTransportLimitsSettings | null =
+    transportLimitsQuery.data ?? null;
+  const draftMaxPostBodyBytes =
+    maxPostBodyBytesDraft ??
+    effectiveTransportLimits?.maxPostBodyBytes ??
+    DEFAULT_MAX_POST_BODY_BYTES;
+  const draftMaxSseEventBytes =
+    maxSseEventBytesDraft ??
+    effectiveTransportLimits?.maxSseEventBytes ??
+    DEFAULT_MAX_SSE_EVENT_BYTES;
+  const draftMaxJsonDepth = maxJsonDepthDraft ?? effectiveTransportLimits?.maxJsonDepth ?? null;
+  const draftMaxJsonArrayLen =
+    maxJsonArrayLenDraft ?? effectiveTransportLimits?.maxJsonArrayLen ?? null;
+  const draftMaxJsonObjectKeys =
+    maxJsonObjectKeysDraft ?? effectiveTransportLimits?.maxJsonObjectKeys ?? null;
+  const draftMaxJsonStringBytes =
+    maxJsonStringBytesDraft ?? effectiveTransportLimits?.maxJsonStringBytes ?? null;
 
   const saveAuditSettingsMutation = useMutation({
     mutationFn: async (settings: TenantAuditSettings) => {
@@ -92,6 +141,25 @@ export default function SettingsPage() {
     },
   });
 
+  const saveTransportLimitsMutation = useMutation({
+    mutationFn: async (settings: TenantTransportLimitsSettings) => {
+      return await putTenantTransportLimits(settings);
+    },
+    onSuccess: async () => {
+      await transportLimitsQuery.refetch();
+    },
+    onError: (e) => {
+      toast({
+        title: "Failed to save transport limits",
+        message: e instanceof Error ? e.message : "Request failed",
+        variant: "error",
+      });
+    },
+  });
+
+  const transportLimitsDebounceRef = useRef<number | null>(null);
+  const transportLimitsLastSavedKeyRef = useRef<string | null>(null);
+
   // Initialize drafts from server once (avoid overwriting user edits).
   useEffect(() => {
     if (!effectiveAuditSettings) return;
@@ -103,6 +171,42 @@ export default function SettingsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveAuditSettings]);
 
+  // Initialize transport limit drafts from server once (avoid overwriting user edits).
+  useEffect(() => {
+    if (!effectiveTransportLimits) return;
+
+    const initMaxPost = effectiveTransportLimits.maxPostBodyBytes ?? DEFAULT_MAX_POST_BODY_BYTES;
+    const initMaxSse = effectiveTransportLimits.maxSseEventBytes ?? DEFAULT_MAX_SSE_EVENT_BYTES;
+
+    if (maxPostBodyBytesDraft === null) setMaxPostBodyBytesDraft(initMaxPost);
+    if (maxSseEventBytesDraft === null) setMaxSseEventBytesDraft(initMaxSse);
+
+    if (maxJsonDepthDraft === null && effectiveTransportLimits.maxJsonDepth != null) {
+      setMaxJsonDepthDraft(effectiveTransportLimits.maxJsonDepth);
+    }
+    if (maxJsonArrayLenDraft === null && effectiveTransportLimits.maxJsonArrayLen != null) {
+      setMaxJsonArrayLenDraft(effectiveTransportLimits.maxJsonArrayLen);
+    }
+    if (maxJsonObjectKeysDraft === null && effectiveTransportLimits.maxJsonObjectKeys != null) {
+      setMaxJsonObjectKeysDraft(effectiveTransportLimits.maxJsonObjectKeys);
+    }
+    if (maxJsonStringBytesDraft === null && effectiveTransportLimits.maxJsonStringBytes != null) {
+      setMaxJsonStringBytesDraft(effectiveTransportLimits.maxJsonStringBytes);
+    }
+
+    // Establish a baseline key so we don't immediately autosave defaults.
+    const baseline: TenantTransportLimitsSettings = {
+      maxPostBodyBytes: initMaxPost,
+      maxSseEventBytes: initMaxSse,
+      maxJsonDepth: effectiveTransportLimits.maxJsonDepth ?? null,
+      maxJsonArrayLen: effectiveTransportLimits.maxJsonArrayLen ?? null,
+      maxJsonObjectKeys: effectiveTransportLimits.maxJsonObjectKeys ?? null,
+      maxJsonStringBytes: effectiveTransportLimits.maxJsonStringBytes ?? null,
+    };
+    transportLimitsLastSavedKeyRef.current = JSON.stringify(baseline);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveTransportLimits]);
+
   const desiredSettings: TenantAuditSettings | null = useMemo(() => {
     if (!effectiveAuditSettings) return null;
     return {
@@ -111,6 +215,26 @@ export default function SettingsPage() {
       defaultLevel: draftDefaultLevel,
     };
   }, [effectiveAuditSettings, draftDefaultLevel, draftEnabled, draftRetentionDays]);
+
+  const desiredTransportLimits: TenantTransportLimitsSettings | null = useMemo(() => {
+    if (!effectiveTransportLimits) return null;
+    return {
+      maxPostBodyBytes: draftMaxPostBodyBytes,
+      maxSseEventBytes: draftMaxSseEventBytes,
+      maxJsonDepth: draftMaxJsonDepth,
+      maxJsonArrayLen: draftMaxJsonArrayLen,
+      maxJsonObjectKeys: draftMaxJsonObjectKeys,
+      maxJsonStringBytes: draftMaxJsonStringBytes,
+    };
+  }, [
+    draftMaxJsonArrayLen,
+    draftMaxJsonDepth,
+    draftMaxJsonObjectKeys,
+    draftMaxJsonStringBytes,
+    draftMaxPostBodyBytes,
+    draftMaxSseEventBytes,
+    effectiveTransportLimits,
+  ]);
 
   // Autosave: debounce changes and only send when settings differ from the last known server value.
   const debounceRef = useRef<number | null>(null);
@@ -142,6 +266,35 @@ export default function SettingsPage() {
     desiredSettings,
     effectiveAuditSettings,
     saveAuditSettingsMutation,
+  ]);
+
+  useEffect(() => {
+    if (!effectiveTransportLimits || !desiredTransportLimits) return;
+    if (transportLimitsQuery.isPending || transportLimitsQuery.isError) return;
+
+    const serverKey = JSON.stringify(effectiveTransportLimits);
+    const desiredKey = JSON.stringify(desiredTransportLimits);
+    if (desiredKey === serverKey) return;
+    if (desiredKey === transportLimitsLastSavedKeyRef.current) return;
+
+    if (transportLimitsDebounceRef.current != null) {
+      window.clearTimeout(transportLimitsDebounceRef.current);
+    }
+    transportLimitsDebounceRef.current = window.setTimeout(() => {
+      transportLimitsLastSavedKeyRef.current = desiredKey;
+      saveTransportLimitsMutation.mutate(desiredTransportLimits);
+    }, 350);
+
+    return () => {
+      if (transportLimitsDebounceRef.current != null)
+        window.clearTimeout(transportLimitsDebounceRef.current);
+    };
+  }, [
+    desiredTransportLimits,
+    effectiveTransportLimits,
+    saveTransportLimitsMutation,
+    transportLimitsQuery.isError,
+    transportLimitsQuery.isPending,
   ]);
 
   return (
@@ -227,6 +380,178 @@ export default function SettingsPage() {
                   <span className="text-sm text-zinc-500">Loading…</span>
                 ) : auditSettingsQuery.isError ? (
                   <span className="text-sm text-red-300">Failed to load audit settings</span>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </SectionCard>
+
+        <SectionCard
+          title="Transport limits"
+          subtitle="Tenant-wide defaults for request/SSE payload limits (DoS hardening). Profiles can override."
+        >
+          <div className="divide-y divide-zinc-800/40">
+            <div className="py-4 first:pt-0 last:pb-0">
+              <SettingRow
+                label="Max POST body bytes"
+                description={
+                  <>
+                    Limits downstream JSON-RPC request bodies on{" "}
+                    <code>POST /&#123;profile_id&#125;/mcp</code>. Default is{" "}
+                    <code>{DEFAULT_MAX_POST_BODY_BYTES}</code> (~
+                    {Math.round((DEFAULT_MAX_POST_BODY_BYTES / 1024 / 1024) * 10) / 10} MiB) unless
+                    overridden.
+                  </>
+                }
+                right={
+                  <div className="flex items-center gap-2">
+                    {[1, 4, 8, 16, 32].map((mib) => {
+                      const bytes = mib * 1024 * 1024;
+                      return (
+                        <button
+                          key={mib}
+                          type="button"
+                          onClick={() => setMaxPostBodyBytesDraft(bytes)}
+                          className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                            draftMaxPostBodyBytes === bytes
+                              ? "border-violet-500/50 bg-violet-500/15 text-violet-200"
+                              : "border-zinc-800/70 bg-zinc-950/40 text-zinc-300 hover:bg-zinc-800/40 hover:text-zinc-200"
+                          }`}
+                        >
+                          {mib} MiB
+                        </button>
+                      );
+                    })}
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={draftMaxPostBodyBytes}
+                      onChange={(e) => {
+                        const parsed = parsePositiveIntegerInput(e.target.value);
+                        if (parsed !== null) setMaxPostBodyBytesDraft(parsed);
+                      }}
+                      className="w-[180px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                  </div>
+                }
+              />
+            </div>
+
+            <div className="py-4 first:pt-0 last:pb-0">
+              <SettingRow
+                label="Max SSE event bytes"
+                description={
+                  <>
+                    Limits a single SSE <code>data:</code> payload from upstream servers. Default is{" "}
+                    <code>{DEFAULT_MAX_SSE_EVENT_BYTES}</code> (~
+                    {Math.round((DEFAULT_MAX_SSE_EVENT_BYTES / 1024 / 1024) * 10) / 10} MiB) unless
+                    overridden.
+                  </>
+                }
+                right={
+                  <div className="flex items-center gap-2">
+                    {[1, 4, 8, 16, 32].map((mib) => {
+                      const bytes = mib * 1024 * 1024;
+                      return (
+                        <button
+                          key={mib}
+                          type="button"
+                          onClick={() => setMaxSseEventBytesDraft(bytes)}
+                          className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                            draftMaxSseEventBytes === bytes
+                              ? "border-violet-500/50 bg-violet-500/15 text-violet-200"
+                              : "border-zinc-800/70 bg-zinc-950/40 text-zinc-300 hover:bg-zinc-800/40 hover:text-zinc-200"
+                          }`}
+                        >
+                          {mib} MiB
+                        </button>
+                      );
+                    })}
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={draftMaxSseEventBytes}
+                      onChange={(e) => {
+                        const parsed = parsePositiveIntegerInput(e.target.value);
+                        if (parsed !== null) setMaxSseEventBytesDraft(parsed);
+                      }}
+                      className="w-[180px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                  </div>
+                }
+              />
+            </div>
+
+            <div className="py-4 first:pt-0 last:pb-0">
+              <SettingRow
+                label="JSON complexity caps (optional)"
+                description={
+                  <>
+                    Extra guardrails applied after parsing JSON. Leave blank to disable individual
+                    caps.
+                  </>
+                }
+                right={
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      placeholder="max depth"
+                      value={draftMaxJsonDepth ?? ""}
+                      onChange={(e) =>
+                        setMaxJsonDepthDraft(parsePositiveIntegerInput(e.target.value))
+                      }
+                      className="w-[140px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      placeholder="max array"
+                      value={draftMaxJsonArrayLen ?? ""}
+                      onChange={(e) =>
+                        setMaxJsonArrayLenDraft(parsePositiveIntegerInput(e.target.value))
+                      }
+                      className="w-[140px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      placeholder="max keys"
+                      value={draftMaxJsonObjectKeys ?? ""}
+                      onChange={(e) =>
+                        setMaxJsonObjectKeysDraft(parsePositiveIntegerInput(e.target.value))
+                      }
+                      className="w-[140px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      placeholder="max str bytes"
+                      value={draftMaxJsonStringBytes ?? ""}
+                      onChange={(e) =>
+                        setMaxJsonStringBytesDraft(parsePositiveIntegerInput(e.target.value))
+                      }
+                      className="w-[160px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                  </div>
+                }
+              />
+            </div>
+
+            <div className="pt-4">
+              <div className="flex items-center gap-3">
+                {saveTransportLimitsMutation.isPending ? (
+                  <span className="text-sm text-zinc-500">Saving…</span>
+                ) : transportLimitsQuery.isPending ? (
+                  <span className="text-sm text-zinc-500">Loading…</span>
+                ) : transportLimitsQuery.isError ? (
+                  <span className="text-sm text-red-300">Failed to load transport limits</span>
                 ) : null}
               </div>
             </div>
