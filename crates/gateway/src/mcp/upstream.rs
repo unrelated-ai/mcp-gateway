@@ -1,6 +1,7 @@
 use super::McpState;
 use super::streamable_http;
 use crate::session_token::{TokenPayloadV1, UpstreamSessionBinding};
+use crate::store::{UpstreamClientCapabilitiesMode, UpstreamSecurityPolicy};
 use axum::{Json, http::StatusCode, response::IntoResponse as _, response::Response};
 use base64::Engine as _;
 use futures::StreamExt as _;
@@ -8,8 +9,9 @@ use rmcp::{
     model::{ClientJsonRpcMessage, ClientRequest, JsonRpcRequest, JsonRpcVersion2_0, ServerResult},
     transport::streamable_http_client::StreamableHttpPostResponse,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use unrelated_http_tools::config::AuthConfig;
+use uuid::Uuid;
 
 pub(super) const HOP_HEADER: &str = "x-unrelated-gateway-hop";
 pub(super) const MAX_HOPS: u32 = 8;
@@ -20,6 +22,17 @@ pub(super) async fn upstream_initialize(
     init_message: &ClientJsonRpcMessage,
     headers: &reqwest::header::HeaderMap,
 ) -> anyhow::Result<String> {
+    // Upstream endpoint scheme policy: prefer HTTPS by default (dev override supported).
+    if let Err(err) = crate::outbound_safety::check_upstream_https_policy(mcp_url) {
+        anyhow::bail!("upstream endpoint rejected by HTTPS policy: {err}");
+    }
+
+    // Outbound safety (SSRF hardening): validate the upstream endpoint before connecting.
+    let safety = crate::outbound_safety::gateway_outbound_http_safety();
+    if let Err(err) = crate::outbound_safety::check_url_allowed(&safety, mcp_url).await {
+        anyhow::bail!("upstream endpoint blocked by outbound safety policy: {err}");
+    }
+
     let resp = streamable_http::post_message(
         http,
         mcp_url.to_string().into(),
@@ -113,6 +126,71 @@ pub(super) fn apply_query_auth(url: &str, auth: Option<&AuthConfig>) -> String {
     u.to_string()
 }
 
+pub(super) fn random_start_index(len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let r = Uuid::new_v4().as_u128();
+    (r % (len as u128)) as usize
+}
+
+pub(super) fn rewrite_upstream_initialize_message(
+    init_message: &ClientJsonRpcMessage,
+    policy: &UpstreamSecurityPolicy,
+) -> ClientJsonRpcMessage {
+    let mut msg = init_message.clone();
+    let ClientJsonRpcMessage::Request(JsonRpcRequest { request, .. }) = &mut msg else {
+        return msg;
+    };
+    let ClientRequest::InitializeRequest(init) = request else {
+        return msg;
+    };
+
+    if policy.rewrite_client_info {
+        init.params.client_info = rmcp::model::Implementation {
+            name: "unrelated-mcp-gateway".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            ..Default::default()
+        };
+    }
+
+    match policy.client_capabilities_mode {
+        UpstreamClientCapabilitiesMode::Passthrough => {}
+        UpstreamClientCapabilitiesMode::Strip => {
+            init.params.capabilities = rmcp::model::ClientCapabilities::default();
+        }
+        UpstreamClientCapabilitiesMode::Allowlist => {
+            let allowed: HashSet<String> = policy
+                .client_capabilities_allow
+                .iter()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(std::string::ToString::to_string)
+                .collect();
+
+            if allowed.is_empty() {
+                init.params.capabilities = rmcp::model::ClientCapabilities::default();
+            } else {
+                let v = serde_json::to_value(&init.params.capabilities).unwrap_or_default();
+                let serde_json::Value::Object(obj) = v else {
+                    init.params.capabilities = rmcp::model::ClientCapabilities::default();
+                    return msg;
+                };
+                let mut out: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+                for (k, v) in obj {
+                    if allowed.contains(&k) {
+                        out.insert(k, v);
+                    }
+                }
+                init.params.capabilities =
+                    serde_json::from_value(serde_json::Value::Object(out)).unwrap_or_default();
+            }
+        }
+    }
+
+    msg
+}
+
 pub(super) async fn proxy_to_single_upstream(
     state: &McpState,
     profile_id: &str,
@@ -188,7 +266,28 @@ pub(super) async fn resolve_endpoint_url(
     };
 
     let mut endpoints: HashMap<String, crate::endpoint_cache::UpstreamEndpoint> = HashMap::new();
+    let safety = crate::outbound_safety::gateway_outbound_http_safety();
     for e in upstream.endpoints {
+        if let Err(err) = crate::outbound_safety::check_upstream_https_policy(&e.url) {
+            tracing::warn!(
+                upstream_id = %binding.upstream,
+                endpoint_id = %e.id,
+                error = %err,
+                "upstream endpoint rejected by HTTPS policy"
+            );
+            continue;
+        }
+        if let Err(err) = crate::outbound_safety::check_url_allowed(&safety, &e.url).await {
+            // Block unsafe endpoints (SSRF hardening). Avoid logging full URLs (may contain
+            // sensitive query auth in some deployments).
+            tracing::warn!(
+                upstream_id = %binding.upstream,
+                endpoint_id = %e.id,
+                error = %err,
+                "upstream endpoint blocked by outbound safety policy"
+            );
+            continue;
+        }
         endpoints.insert(
             e.id,
             crate::endpoint_cache::UpstreamEndpoint {
@@ -221,22 +320,26 @@ pub(super) async fn resolve_endpoint(
         .get(&binding.upstream, &binding.endpoint))
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn list_all_upstreams<T, FBuild, FExtract>(
-    state: &McpState,
-    profile_id: &str,
-    payload: &TokenPayloadV1,
-    build_request: FBuild,
-    extract: FExtract,
+#[derive(Clone, Copy)]
+struct ListAllUpstreamsCtx<'a> {
+    state: &'a McpState,
+    profile_id: &'a str,
+    payload: &'a TokenPayloadV1,
     request_failed_message: &'static str,
     transport_failed_message: &'static str,
     hop: u32,
+}
+
+async fn list_all_upstreams<T, FBuild, FExtract>(
+    ctx: ListAllUpstreamsCtx<'_>,
+    build_request: FBuild,
+    extract: FExtract,
 ) -> Result<Vec<(String, T)>, Response>
 where
     FBuild: Fn() -> ClientJsonRpcMessage,
     FExtract: Fn(ServerResult) -> Option<T>,
 {
-    if hop >= MAX_HOPS {
+    if ctx.hop >= MAX_HOPS {
         return Err((
             StatusCode::BAD_GATEWAY,
             "proxy loop detected (max hops exceeded)",
@@ -244,15 +347,15 @@ where
             .into_response());
     }
     let mut out = Vec::new();
-    for binding in &payload.bindings {
-        let Some(endpoint) = resolve_endpoint(state, profile_id, binding).await? else {
+    for binding in &ctx.payload.bindings {
+        let Some(endpoint) = resolve_endpoint(ctx.state, ctx.profile_id, binding).await? else {
             continue;
         };
         let endpoint_url = apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
-        let headers = build_upstream_headers(endpoint.auth.as_ref(), hop + 1);
+        let headers = build_upstream_headers(endpoint.auth.as_ref(), ctx.hop + 1);
         let request = build_request();
         match streamable_http::post_message(
-            &state.http,
+            &ctx.state.http,
             endpoint_url.into(),
             request,
             Some(binding.session.clone().into()),
@@ -270,7 +373,7 @@ where
                     tracing::warn!(
                         upstream_id = %binding.upstream,
                         error = %e,
-                        "{request_failed_message}"
+                        "{}", ctx.request_failed_message
                     );
                 }
             },
@@ -278,7 +381,7 @@ where
                 tracing::warn!(
                     upstream_id = %binding.upstream,
                     error = %e,
-                    "{transport_failed_message}"
+                    "{}", ctx.transport_failed_message
                 );
             }
         }
@@ -293,9 +396,14 @@ pub(super) async fn list_tools_all_upstreams(
     hop: u32,
 ) -> Result<Vec<(String, Vec<rmcp::model::Tool>)>, Response> {
     list_all_upstreams(
-        state,
-        profile_id,
-        payload,
+        ListAllUpstreamsCtx {
+            state,
+            profile_id,
+            payload,
+            request_failed_message: "tools/list failed",
+            transport_failed_message: "tools/list transport failed",
+            hop,
+        },
         || {
             ClientJsonRpcMessage::Request(JsonRpcRequest {
                 jsonrpc: JsonRpcVersion2_0,
@@ -311,9 +419,6 @@ pub(super) async fn list_tools_all_upstreams(
             ServerResult::ListToolsResult(r) => Some(r.tools),
             _ => None,
         },
-        "tools/list failed",
-        "tools/list transport failed",
-        hop,
     )
     .await
 }
@@ -325,9 +430,14 @@ pub(super) async fn list_resources_all_upstreams(
     hop: u32,
 ) -> Result<Vec<(String, Vec<rmcp::model::Resource>)>, Response> {
     list_all_upstreams(
-        state,
-        profile_id,
-        payload,
+        ListAllUpstreamsCtx {
+            state,
+            profile_id,
+            payload,
+            request_failed_message: "resources/list failed",
+            transport_failed_message: "resources/list transport failed",
+            hop,
+        },
         || {
             ClientJsonRpcMessage::Request(JsonRpcRequest {
                 jsonrpc: JsonRpcVersion2_0,
@@ -343,9 +453,6 @@ pub(super) async fn list_resources_all_upstreams(
             ServerResult::ListResourcesResult(r) => Some(r.resources),
             _ => None,
         },
-        "resources/list failed",
-        "resources/list transport failed",
-        hop,
     )
     .await
 }
@@ -357,9 +464,14 @@ pub(super) async fn list_prompts_all_upstreams(
     hop: u32,
 ) -> Result<Vec<(String, Vec<rmcp::model::Prompt>)>, Response> {
     list_all_upstreams(
-        state,
-        profile_id,
-        payload,
+        ListAllUpstreamsCtx {
+            state,
+            profile_id,
+            payload,
+            request_failed_message: "prompts/list failed",
+            transport_failed_message: "prompts/list transport failed",
+            hop,
+        },
         || {
             ClientJsonRpcMessage::Request(JsonRpcRequest {
                 jsonrpc: JsonRpcVersion2_0,
@@ -375,9 +487,6 @@ pub(super) async fn list_prompts_all_upstreams(
             ServerResult::ListPromptsResult(r) => Some(r.prompts),
             _ => None,
         },
-        "prompts/list failed",
-        "prompts/list transport failed",
-        hop,
     )
     .await
 }

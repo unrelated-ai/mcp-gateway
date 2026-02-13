@@ -176,6 +176,17 @@ struct TenantAuditSettingsCached {
 #[async_trait::async_trait]
 pub trait AuditSink: Send + Sync {
     async fn record(&self, event: AuditEvent);
+
+    /// Tenant-level default audit detail level (best-effort; cached when DB-backed).
+    ///
+    /// Returns `AuditLevel::Off` when audit is disabled for the tenant or when the setting cannot
+    /// be loaded.
+    async fn tenant_default_level(&self, tenant_id: &str) -> AuditLevel;
+
+    /// Best-effort cache invalidation hook for tenant audit settings.
+    ///
+    /// Implementations without in-memory tenant-level caches can ignore this.
+    fn invalidate_tenant_settings_cache(&self, _tenant_id: &str) {}
 }
 
 #[derive(Default)]
@@ -184,6 +195,10 @@ pub struct NoopAuditSink;
 #[async_trait::async_trait]
 impl AuditSink for NoopAuditSink {
     async fn record(&self, _event: AuditEvent) {}
+
+    async fn tenant_default_level(&self, _tenant_id: &str) -> AuditLevel {
+        AuditLevel::Off
+    }
 }
 
 pub struct PostgresAuditSink {
@@ -250,12 +265,12 @@ impl PostgresAuditSink {
         });
     }
 
-    async fn tenant_audit_enabled(&self, tenant_id: &str) -> bool {
+    async fn tenant_audit_settings(&self, tenant_id: &str) -> (bool, AuditLevel) {
         let now = Instant::now();
         if let Some(cached) = self.tenant_cache.read().get(tenant_id)
             && cached.expires_at > now
         {
-            return cached.enabled && cached.level != AuditLevel::Off;
+            return (cached.enabled, cached.level);
         }
 
         // Refresh from DB (best-effort).
@@ -290,14 +305,15 @@ where id = $1
             },
         );
 
-        enabled && level != AuditLevel::Off
+        (enabled, level)
     }
 
     async fn flush_batch(&self, buf: &mut Vec<AuditEvent>) {
         // Filter by per-tenant enablement first, then insert.
         let mut batch: Vec<AuditEvent> = Vec::with_capacity(buf.len());
         for ev in buf.drain(..) {
-            if self.tenant_audit_enabled(&ev.tenant_id).await {
+            let (enabled, level) = self.tenant_audit_settings(&ev.tenant_id).await;
+            if enabled && level != AuditLevel::Off {
                 batch.push(ev);
             }
         }
@@ -374,6 +390,15 @@ impl AuditSink for PostgresAuditSink {
         if self.sender.try_send(event).is_err() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    async fn tenant_default_level(&self, tenant_id: &str) -> AuditLevel {
+        let (enabled, level) = self.tenant_audit_settings(tenant_id).await;
+        if enabled { level } else { AuditLevel::Off }
+    }
+
+    fn invalidate_tenant_settings_cache(&self, tenant_id: &str) {
+        self.tenant_cache.write().remove(tenant_id);
     }
 }
 

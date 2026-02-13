@@ -216,6 +216,13 @@ pub struct TokenPayloadV1 {
     /// Expiry (unix seconds). Present for PASETO tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exp: Option<u64>,
+    /// Per-session proxy signing key (base64url, no padding).
+    ///
+    /// When present, the Gateway uses it to sign proxied upstream server→client request IDs and to
+    /// validate downstream responses/cancellations for those IDs (mitigates forged responses from
+    /// malicious downstream clients).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -328,6 +335,7 @@ mod tests {
             oidc: None,
             iat: None,
             exp: None,
+            proxy_key: None,
         };
 
         let token = signer.sign(payload).expect("token");
@@ -366,6 +374,7 @@ mod tests {
             oidc: None,
             iat: None,
             exp: None,
+            proxy_key: None,
         };
         let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(serde_json::to_vec(&payload).unwrap());
@@ -406,6 +415,7 @@ mod tests {
             oidc: None,
             iat: None,
             exp: None,
+            proxy_key: None,
         };
         // Create a legacy token and then tamper it.
         let legacy = {

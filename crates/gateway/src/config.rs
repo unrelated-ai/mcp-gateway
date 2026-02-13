@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 
+use crate::serde_helpers::default_true;
 use crate::store::McpProfileSettings;
 use crate::tool_policy::ToolPolicy;
 use unrelated_http_tools::config as http_tools;
@@ -45,7 +46,7 @@ pub struct DataPlaneAuthConfig {
     #[serde(default)]
     pub api_keys: Vec<String>,
     /// If true, accept `x-api-key: <secret>` as an alias for `Authorization: Bearer <secret>`.
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub accept_x_api_key: bool,
     /// If true, require the API key on every request (POST/GET/DELETE) rather than only on
     /// `initialize`.
@@ -136,10 +137,6 @@ pub enum SharedSourceConfig {
     },
 }
 
-const fn default_true() -> bool {
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,7 +161,7 @@ profiles:
     }
 
     #[test]
-    fn mode1_data_plane_auth_accept_x_api_key_defaults_true_and_require_every_request_defaults_false()
+    fn mode1_data_plane_auth_accept_x_api_key_defaults_false_and_require_every_request_defaults_false()
      {
         let cfg: GatewayConfig = serde_yaml::from_str(
             r"
@@ -177,7 +174,7 @@ dataPlaneAuth: {}
         )
         .expect("valid yaml");
 
-        assert!(cfg.data_plane_auth.accept_x_api_key);
+        assert!(!cfg.data_plane_auth.accept_x_api_key);
         assert!(!cfg.data_plane_auth.require_every_request);
         assert_eq!(cfg.data_plane_auth.mode, Mode1AuthMode::None);
     }

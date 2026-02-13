@@ -1,0 +1,19 @@
+name: security-trivy-gateway
+
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "20 6 * * 1" # Mondays 06:20 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  trivy_gateway:
+    uses: ./.github/workflows/reusable-security-trivy-image.yml
+    with:
+      image_ref: local/unrelated-mcp-gateway:pr
+      dockerfile: Dockerfile
+      context: .
+      docker_target: gateway-runtime

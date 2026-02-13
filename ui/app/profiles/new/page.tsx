@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
-import { Badge, Button, StatusBadge, Toggle } from "@/components/ui";
+import { Badge, Button, Toggle } from "@/components/ui";
 import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
 import { useToastStore } from "@/src/lib/toast-store";
@@ -75,6 +75,7 @@ export default function NewProfileWizardPage() {
         description: description ? description : undefined,
         enabled: true,
         allowPartialUpstreams: draft.allowPartialUpstreams,
+        dataPlaneAuth: { mode: "apiKeyEveryRequest", acceptXApiKey: false },
         upstreams: normalizeIdList(draft.upstreams),
         sources: normalizeIdList(draft.sources),
       });
@@ -284,19 +285,23 @@ export default function NewProfileWizardPage() {
                                 <div className="font-mono text-sm text-zinc-100 break-all">
                                   {u.id}
                                 </div>
-                                <div className="mt-1 text-xs text-zinc-500">owner: {u.owner}</div>
+                                <div className="mt-1 text-xs text-zinc-500">
+                                  owner: {u.owner} • status: {u.enabled ? "enabled" : "disabled"}
+                                </div>
                               </div>
                               <div className="flex items-center gap-2 shrink-0">
                                 <div className="hidden sm:flex items-center gap-2">
                                   <Badge variant={u.owner === "tenant" ? "violet" : "default"}>
                                     {u.owner === "tenant" ? "tenant" : "global"}
                                   </Badge>
-                                  <StatusBadge enabled={u.enabled} />
                                 </div>
                                 <div
                                   onClick={(e) => e.stopPropagation()}
-                                  className="flex items-center"
+                                  className="flex items-center gap-2"
                                 >
+                                  <span className="hidden sm:inline text-xs text-zinc-500">
+                                    Attach
+                                  </span>
                                   <Toggle
                                     checked={selected}
                                     onChange={() =>
@@ -353,19 +358,23 @@ export default function NewProfileWizardPage() {
                                 <div className="font-mono text-sm text-zinc-100 break-all">
                                   {s.id}
                                 </div>
-                                <div className="mt-1 text-xs text-zinc-500">type: {s.type}</div>
+                                <div className="mt-1 text-xs text-zinc-500">
+                                  type: {s.type} • status: {s.enabled ? "enabled" : "disabled"}
+                                </div>
                               </div>
                               <div className="flex items-center gap-2 shrink-0">
                                 <div className="hidden sm:flex items-center gap-2">
                                   <Badge variant={s.type === "openapi" ? "success" : "info"}>
                                     {s.type}
                                   </Badge>
-                                  <StatusBadge enabled={s.enabled} />
                                 </div>
                                 <div
                                   onClick={(e) => e.stopPropagation()}
-                                  className="flex items-center"
+                                  className="flex items-center gap-2"
                                 >
+                                  <span className="hidden sm:inline text-xs text-zinc-500">
+                                    Attach
+                                  </span>
                                   <Toggle
                                     checked={selected}
                                     onChange={() =>

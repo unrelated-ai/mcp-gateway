@@ -1,0 +1,14 @@
+name: security-rustsec
+
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  rustsec:
+    uses: ./.github/workflows/reusable-security-rustsec.yml

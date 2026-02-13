@@ -19,6 +19,8 @@ pub struct AppState {
     pub aggregator: Arc<Aggregator>,
     pub start_time: Instant,
     pub version: &'static str,
+    /// Optional static bearer token required for non-health HTTP endpoints (including `/mcp`).
+    pub mcp_bearer_token: Option<String>,
     pub total_requests: AtomicU64,
     pub failed_requests: AtomicU64,
 }
@@ -67,6 +69,57 @@ pub fn with_request_counting(router: Router, state: Arc<AppState>) -> Router {
     }
 
     router.layer(from_fn_with_state(state, count_requests))
+}
+
+/// Optional bearer-token auth for HTTP endpoints.
+///
+/// If `state.mcp_bearer_token` is set, all requests except `/health*` and `/ready` must include:
+/// `Authorization: Bearer <token>`.
+pub fn with_optional_bearer_auth(router: Router, state: Arc<AppState>) -> Router {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+        middleware::{Next, from_fn_with_state},
+        response::{IntoResponse as _, Response},
+    };
+
+    async fn require_bearer(
+        State(state): State<Arc<AppState>>,
+        request: Request<Body>,
+        next: Next,
+    ) -> Response {
+        let path = request.uri().path();
+        if path.starts_with("/health") || path == "/ready" {
+            return next.run(request).await;
+        }
+
+        let expected = state.mcp_bearer_token.as_deref().unwrap_or_default().trim();
+        if expected.is_empty() {
+            return next.run(request).await;
+        }
+
+        let got = request
+            .headers()
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|h| h.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer ").map(str::trim));
+
+        if got == Some(expected) {
+            return next.run(request).await;
+        }
+
+        (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
+    }
+
+    if state
+        .mcp_bearer_token
+        .as_deref()
+        .is_none_or(|t| t.trim().is_empty())
+    {
+        return router;
+    }
+
+    router.layer(from_fn_with_state(state, require_bearer))
 }
 
 // ============================================================================

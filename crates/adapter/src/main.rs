@@ -17,7 +17,7 @@ mod timeouts;
 
 use crate::aggregator::Aggregator;
 use crate::config::{AdapterConfig, CliArgs, ServerConfig};
-use crate::http::{AppState, create_router, with_request_counting};
+use crate::http::{AppState, create_router, with_optional_bearer_auth, with_request_counting};
 use crate::mcp_server::AdapterMcpServer;
 use crate::openapi::OpenApiBackend;
 use crate::session_manager::AdapterSessionManager;
@@ -27,6 +27,7 @@ use crate::supervisor::StdioBackendSettings;
 use clap::Parser;
 use rmcp::model::AnnotateAble;
 use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
+use std::io::{IsTerminal as _, stdout};
 use std::net::SocketAddr;
 use std::sync::{Arc, atomic::AtomicU64};
 use std::time::{Duration, Instant};
@@ -118,6 +119,7 @@ async fn main() -> anyhow::Result<()> {
         aggregator: aggregator.clone(),
         start_time: Instant::now(),
         version: VERSION,
+        mcp_bearer_token: config.adapter.mcp_bearer_token.clone(),
         total_requests: AtomicU64::new(0),
         failed_requests: AtomicU64::new(0),
     });
@@ -145,7 +147,10 @@ async fn main() -> anyhow::Result<()> {
     // Build combined router: auxiliary endpoints + MCP endpoint.
     let http_router = create_router(state.clone());
     let app = with_request_counting(
-        http_router.nest_service("/mcp", streamable_http_service),
+        with_optional_bearer_auth(
+            http_router.nest_service("/mcp", streamable_http_service),
+            state.clone(),
+        ),
         state.clone(),
     );
 
@@ -195,6 +200,7 @@ fn build_streamable_http_service(
         StreamableHttpServerConfig {
             stateful_mode: true,
             sse_keep_alive: Some(Duration::from_secs(15)),
+            sse_retry: None,
             cancellation_token: ct.child_token(),
         },
     )
@@ -398,7 +404,7 @@ fn init_logging(log_level: &str) {
     let env_filter = EnvFilter::try_new(log_level).unwrap_or_else(|_| EnvFilter::new("info"));
 
     // Check if stdout is a TTY for format selection
-    let is_tty = atty::is(atty::Stream::Stdout);
+    let is_tty = stdout().is_terminal();
 
     if is_tty {
         // Human-readable format for development

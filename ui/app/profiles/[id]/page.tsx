@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
 import type { Profile } from "@/src/lib/types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, ConfirmModal, Modal, ModalActions, Toggle } from "@/components/ui";
+import { Button, Callout, ConfirmModal, Modal, ModalActions, Toggle } from "@/components/ui";
 import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
 import type { ProfileSurface } from "@/src/lib/tenantApi";
@@ -20,17 +20,24 @@ import { EditProfilePanel } from "./_components/edit-profile-panel";
 import { McpSurfaceSection } from "./_components/mcp-surface-section";
 import { ProfileKeysSection } from "./_components/profile-keys-section";
 import { SourcesTab } from "./_components/sources-tab";
+import { SecurityTab } from "./_components/security-tab";
 
 export default function ProfileDetailPage() {
   const params = useParams();
   const router = useRouter();
   const profileId = String(params.id ?? "");
-  const [activeTab, setActiveTab] = useState<"tools" | "sources" | "keys" | "other">("tools");
+  const [activeTab, setActiveTab] = useState<"tools" | "sources" | "keys" | "security" | "other">(
+    "tools",
+  );
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showMcpAuthHelp, setShowMcpAuthHelp] = useState(false);
   const [showAuthSettings, setShowAuthSettings] = useState(false);
   const [editingMeta, setEditingMeta] = useState(false);
   const [authDraft, setAuthDraft] = useState<{
+    mode: "disabled" | "apiKeyInitializeOnly" | "apiKeyEveryRequest" | "jwtEveryRequest";
+    acceptXApiKey: boolean;
+  } | null>(null);
+  const [confirmWeakAuthMode, setConfirmWeakAuthMode] = useState<{
     mode: "disabled" | "apiKeyInitializeOnly" | "apiKeyEveryRequest" | "jwtEveryRequest";
     acceptXApiKey: boolean;
   } | null>(null);
@@ -474,6 +481,7 @@ export default function ProfileDetailPage() {
               { key: "tools", label: "Tools" },
               { key: "sources", label: "Sources" },
               { key: "keys", label: "API Keys" },
+              { key: "security", label: "Security" },
               { key: "other", label: "MCP Settings" },
             ] as const
           ).map((tab) => (
@@ -527,6 +535,8 @@ export default function ProfileDetailPage() {
           />
         )}
 
+        {activeTab === "security" && <SecurityTab profile={profile} />}
+
         {/* `Transforms` and `Tool calls` tabs removed (merged into Tools). */}
 
         {activeTab === "keys" && (
@@ -549,6 +559,30 @@ export default function ProfileDetailPage() {
         confirmLabel="Delete Profile"
         danger
         loading={deleteMutation.isPending}
+      />
+
+      <ConfirmModal
+        open={!!confirmWeakAuthMode}
+        onClose={() => setConfirmWeakAuthMode(null)}
+        onConfirm={() => {
+          if (!confirmWeakAuthMode) return;
+          updateAuthMutation.mutate(confirmWeakAuthMode);
+          setConfirmWeakAuthMode(null);
+        }}
+        title={
+          confirmWeakAuthMode?.mode === "disabled"
+            ? "Disable profile auth?"
+            : "Use API key (init only)?"
+        }
+        description={
+          confirmWeakAuthMode?.mode === "disabled"
+            ? "This will expose your MCP endpoint without authentication. Only do this for local/dev or behind a trusted reverse proxy/network boundary."
+            : "This is a compatibility mode and is not recommended for internet-exposed deployments. After initialize, the session token can be replayed until it expires."
+        }
+        requireText={confirmWeakAuthMode?.mode === "disabled" ? "disable auth" : "init-only"}
+        confirmLabel={confirmWeakAuthMode?.mode === "disabled" ? "Disable auth" : "Use init-only"}
+        danger={confirmWeakAuthMode?.mode === "disabled"}
+        loading={updateAuthMutation.isPending}
       />
 
       <Modal
@@ -582,10 +616,12 @@ export default function ProfileDetailPage() {
                 }}
                 className="w-full rounded-lg border border-zinc-700/80 bg-zinc-900/50 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500/50 hover:border-zinc-600/80"
               >
-                <option value="apiKeyInitializeOnly">API key (init only)</option>
-                <option value="apiKeyEveryRequest">API key (every request)</option>
-                <option value="jwtEveryRequest">JWT/OIDC (every request)</option>
-                <option value="disabled">Disabled</option>
+                <option value="apiKeyEveryRequest">API key (every request) — Recommended</option>
+                <option value="jwtEveryRequest">JWT/OIDC (every request) — Recommended</option>
+                <option value="apiKeyInitializeOnly">
+                  API key (init only) — Compatibility (not recommended)
+                </option>
+                <option value="disabled">Disabled (not recommended)</option>
               </select>
               <div className="text-xs text-zinc-500">
                 API key modes accept <span className="font-mono">Authorization: Bearer</span> and
@@ -597,6 +633,30 @@ export default function ProfileDetailPage() {
                   JWT/OIDC is unavailable because OIDC is not configured on the Gateway (missing
                   UNRELATED_GATEWAY_OIDC_ISSUER). Configure OIDC or choose a different mode.
                 </div>
+              ) : null}
+
+              {authDraft.mode === "apiKeyInitializeOnly" ? (
+                <Callout
+                  tone="warning"
+                  title="Compatibility mode (not recommended)"
+                  className="mt-2 rounded-lg"
+                >
+                  After <span className="font-mono">initialize</span>, the{" "}
+                  <span className="font-mono">Mcp-Session-Id</span> becomes sufficient for follow-up
+                  requests. If that session token is leaked, it can be replayed until it expires.
+                  Prefer “every request” modes for internet-exposed deployments.
+                </Callout>
+              ) : null}
+
+              {authDraft.mode === "disabled" ? (
+                <Callout
+                  tone="danger"
+                  title="No auth (not recommended)"
+                  className="mt-2 rounded-lg"
+                >
+                  Anyone with the profile URL can call tools. Use only for local/dev or when the
+                  data plane is protected by a trusted reverse proxy/network boundary.
+                </Callout>
               ) : null}
             </div>
 
@@ -640,6 +700,13 @@ export default function ProfileDetailPage() {
                 }
                 onClick={() => {
                   if (authDraft.mode === "jwtEveryRequest" && oidcConfigured === false) return;
+                  const changingMode = authDraft.mode !== profile.dataPlaneAuth.mode;
+                  const weak =
+                    authDraft.mode === "apiKeyInitializeOnly" || authDraft.mode === "disabled";
+                  if (changingMode && weak) {
+                    setConfirmWeakAuthMode(authDraft);
+                    return;
+                  }
                   updateAuthMutation.mutate(authDraft);
                 }}
               >
@@ -669,6 +736,18 @@ export default function ProfileDetailPage() {
             </p>
           </div>
 
+          <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/40 p-4">
+            <div className="text-sm font-semibold text-zinc-100">Recommended modes</div>
+            <p className="mt-2 text-sm text-zinc-400">
+              For production / internet-exposed profiles, prefer per-request authentication:
+              <span className="ml-1 font-medium text-zinc-200">
+                API key (every request)
+              </span> or <span className="font-medium text-zinc-200">JWT/OIDC (every request)</span>
+              . <span className="font-medium text-zinc-200">API key (init only)</span> is a
+              compatibility mode and is not recommended.
+            </p>
+          </div>
+
           {profile?.dataPlaneAuth.mode.startsWith("apiKey") ? (
             <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/40 p-4">
               <div className="text-sm font-semibold text-zinc-100">API key header</div>
@@ -688,7 +767,7 @@ export default function ProfileDetailPage() {
               </div>
               {profile.dataPlaneAuth.mode === "apiKeyInitializeOnly" ? (
                 <p className="mt-3 text-sm text-zinc-400">
-                  Tip: in “init only” mode the API key is required only for{" "}
+                  Compatibility note: in “init only” mode the API key is required only for{" "}
                   <code className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">
                     initialize
                   </code>
@@ -696,7 +775,8 @@ export default function ProfileDetailPage() {
                   <code className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">
                     Mcp-Session-Id
                   </code>{" "}
-                  for follow-up requests.
+                  for follow-up requests. This is less secure (session replay risk) and is not
+                  recommended for internet-exposed deployments.
                 </p>
               ) : null}
             </div>

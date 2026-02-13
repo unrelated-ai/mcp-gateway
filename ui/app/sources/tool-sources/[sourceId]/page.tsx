@@ -4,7 +4,14 @@ import { useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, ConfirmModal, Input, Textarea, Toggle } from "@/components/ui";
+import {
+  Button,
+  ConfirmModal,
+  Input,
+  QueryParamAuthWarning,
+  Textarea,
+  Toggle,
+} from "@/components/ui";
 import { qk } from "@/src/lib/queryKeys";
 import { useToastStore } from "@/src/lib/toast-store";
 import * as tenantApi from "@/src/lib/tenantApi";
@@ -526,10 +533,17 @@ function OpenApiEditor({
           </div>
         )}
         {authMode === "query" && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Input label="Query param name" placeholder="api_key" {...form.register("queryName")} />
-            <Input label="Query param value" {...form.register("queryValue")} />
-          </div>
+          <>
+            <QueryParamAuthWarning />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Input
+                label="Query param name"
+                placeholder="api_key"
+                {...form.register("queryName")}
+              />
+              <Input label="Query param value" {...form.register("queryValue")} />
+            </div>
+          </>
         )}
       </Section>
 

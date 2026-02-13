@@ -8,7 +8,7 @@ use crate::error::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rmcp::model::{
-    CallToolResult, CompleteRequestParam, CompleteResult, GetPromptResult, PromptArgument,
+    CallToolResult, CompleteRequestParams, CompleteResult, GetPromptResult, PromptArgument,
     ReadResourceResult, ToolAnnotations,
 };
 use serde::{Deserialize, Serialize};
@@ -211,7 +211,7 @@ pub trait Backend: Send + Sync {
     async fn complete(
         &self,
         _session_id: Option<&str>,
-        _request: CompleteRequestParam,
+        _request: CompleteRequestParams,
     ) -> Result<CompleteResult> {
         Ok(CompleteResult::default())
     }

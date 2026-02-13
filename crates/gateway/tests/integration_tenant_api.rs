@@ -111,6 +111,7 @@ impl MockUpstream {
                 name: "mock-upstream".to_string(),
                 title: None,
                 version: "0".to_string(),
+                description: None,
                 icons: None,
                 website_url: None,
             },

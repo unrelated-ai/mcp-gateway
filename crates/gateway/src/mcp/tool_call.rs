@@ -5,6 +5,7 @@ use crate::session_token::TokenPayloadV1;
 use crate::tool_policy::RetryPolicy;
 use crate::tools_cache::{CachedToolsSurface, ToolRoute, ToolRouteKind, profile_fingerprint};
 use axum::{Json, http::StatusCode, response::IntoResponse as _, response::Response};
+use futures::{Stream, StreamExt as _};
 use rmcp::model::GetMeta as _;
 use rmcp::{
     model::{ClientJsonRpcMessage, ErrorCode, JsonRpcRequest, JsonRpcVersion2_0, RequestId},
@@ -12,6 +13,7 @@ use rmcp::{
 };
 use std::borrow::Cow;
 use std::time::Instant;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 pub(super) async fn route_and_proxy_tools_call(
@@ -572,6 +574,164 @@ fn inject_timeout_budget_meta(msg: &mut ClientJsonRpcMessage, remaining: std::ti
     }
 }
 
+#[derive(Clone)]
+struct ToolCallSseLimitCtx {
+    tenant_id: String,
+    profile_id: String,
+    upstream_id: String,
+    limits: crate::transport_limits::EffectiveTransportLimits,
+    audit: std::sync::Arc<dyn crate::audit::AuditSink>,
+    stop: CancellationToken,
+}
+
+fn truncate_string_to_bytes(mut s: String, max_bytes: usize) -> (String, bool) {
+    if s.len() <= max_bytes {
+        return (s, false);
+    }
+    let mut cut = max_bytes;
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    s.truncate(cut);
+    (s, true)
+}
+
+async fn effective_transport_limits_for_profile(
+    state: &McpState,
+    profile: &crate::store::Profile,
+) -> crate::transport_limits::EffectiveTransportLimits {
+    let tenant_limits = match state
+        .store
+        .get_tenant_transport_limits(&profile.tenant_id)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                tenant_id = %profile.tenant_id,
+                "load tenant transport limits failed; using defaults"
+            );
+            None
+        }
+    };
+
+    crate::transport_limits::EffectiveTransportLimits::from_profile_and_tenant(
+        &profile.mcp.security.transport_limits,
+        tenant_limits.as_ref(),
+    )
+}
+
+async fn enforce_tool_call_sse_limits_or_close(ctx: &ToolCallSseLimitCtx, data: &str) -> bool {
+    let observed = data.len() as u64;
+    if observed > ctx.limits.max_sse_event_bytes {
+        super::record_payload_limit_exceeded(
+            ctx.audit.as_ref(),
+            super::PayloadLimitExceededAudit {
+                tenant_id: &ctx.tenant_id,
+                profile_id: &ctx.profile_id,
+                http_method: "POST",
+                http_route: "/{profile_id}/mcp",
+                status_code: None,
+                direction: "upstream_sse",
+                action_taken: "closed_stream",
+                reason: "maxSseEventBytes",
+                metric: "bytes",
+                observed,
+                limit: ctx.limits.max_sse_event_bytes,
+                upstream_id: Some(&ctx.upstream_id),
+                sample: Some(truncate_string_to_bytes(data.to_string(), 4096)),
+            },
+        )
+        .await;
+        ctx.stop.cancel();
+        return false;
+    }
+
+    if ctx.limits.has_json_complexity_limits()
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(data)
+        && let Some(vio) = crate::transport_limits::check_json_complexity(&v, ctx.limits)
+    {
+        super::record_payload_limit_exceeded(
+            ctx.audit.as_ref(),
+            super::PayloadLimitExceededAudit {
+                tenant_id: &ctx.tenant_id,
+                profile_id: &ctx.profile_id,
+                http_method: "POST",
+                http_route: "/{profile_id}/mcp",
+                status_code: None,
+                direction: "upstream_sse",
+                action_taken: "closed_stream",
+                reason: vio.kind,
+                metric: "complexity",
+                observed: vio.observed,
+                limit: vio.limit,
+                upstream_id: Some(&ctx.upstream_id),
+                sample: Some(truncate_string_to_bytes(data.to_string(), 4096)),
+            },
+        )
+        .await;
+        ctx.stop.cancel();
+        return false;
+    }
+
+    true
+}
+
+fn sse_from_upstream_stream_with_timeout_and_limits<S>(
+    stream: S,
+    timeout: std::time::Duration,
+    limit_ctx: ToolCallSseLimitCtx,
+) -> Response
+where
+    S: Stream<Item = Result<sse_stream::Sse, sse_stream::Error>> + Send + 'static,
+{
+    let deadline = tokio::time::sleep(timeout);
+    let mapped = stream
+        .take_until(deadline)
+        .take_until(limit_ctx.stop.clone().cancelled_owned())
+        .then(move |evt| {
+            let limit_ctx = limit_ctx.clone();
+            async move {
+                match evt {
+                    Ok(sse) => {
+                        if let Some(data) = sse.data.as_deref()
+                            && !data.trim().is_empty()
+                            && !enforce_tool_call_sse_limits_or_close(&limit_ctx, data).await
+                        {
+                            return None;
+                        }
+
+                        let mut ev = axum::response::sse::Event::default();
+                        if let Some(id) = sse.id {
+                            ev = ev.id(id);
+                        }
+                        if let Some(data) = sse.data {
+                            ev = ev.data(data);
+                        }
+                        Some(Ok::<_, std::convert::Infallible>(ev))
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "upstream sse error");
+                        Some(Ok::<_, std::convert::Infallible>(
+                            axum::response::sse::Event::default().comment("upstream error"),
+                        ))
+                    }
+                }
+            }
+        })
+        .filter_map(futures::future::ready);
+
+    let mut resp = axum::response::Sse::new(mapped).into_response();
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static(
+            rmcp::transport::common::http_header::EVENT_STREAM_MIME_TYPE,
+        ),
+    );
+    resp
+}
+
 struct UpstreamToolCall<'a> {
     state: &'a McpState,
     profile_id: &'a str,
@@ -745,8 +905,16 @@ async fn proxy_upstream_tool_call_with_retry(
                     call.timeout_secs,
                 ));
             }
-            Ok(super::sse_from_upstream_stream_with_timeout(
-                stream, remaining,
+            let limit_ctx = ToolCallSseLimitCtx {
+                tenant_id: call.profile.tenant_id.clone(),
+                profile_id: call.profile_id.to_string(),
+                upstream_id: call.route.source_id.clone(),
+                limits: effective_transport_limits_for_profile(call.state, call.profile).await,
+                audit: call.state.audit.clone(),
+                stop: CancellationToken::new(),
+            };
+            Ok(sse_from_upstream_stream_with_timeout_and_limits(
+                stream, remaining, limit_ctx,
             ))
         }
     }

@@ -75,6 +75,8 @@ Example:
 ```yaml
 adapter:
   bind: 0.0.0.0:8080
+  # Optional: protect HTTP endpoints (including /mcp) with a static bearer token.
+  # mcpBearerToken: ${ADAPTER_BEARER_TOKEN}
   logLevel: info
   callTimeout: 30
   startupTimeout: 30
@@ -208,7 +210,9 @@ The MCP handler uses the aggregator’s mapping to route calls/resources/prompts
 
 ## Security model (current scope)
 
-- No built-in **inbound** authn/z, TLS termination, or rate limiting.
+- No built-in **multi-tenant inbound** authn/z, TLS termination, or rate limiting.
+- Safety guardrails are implemented:
+  - optional static bearer-token protection for HTTP endpoints (including `/mcp`) via `adapter.mcpBearerToken`
 - Outbound backend auth **is supported** for `type: http` and `type: openapi` via `auth:` blocks (see `docs/adapter/config/AUTH.md`).
 - Assumes a trusted network / reverse proxy / Gateway provides inbound controls.
 

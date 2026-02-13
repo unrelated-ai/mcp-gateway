@@ -157,6 +157,7 @@ impl DynamicUpstream {
                 name: format!("dynamic-upstream-{}", self.upstream_id),
                 title: None,
                 version: "0".to_string(),
+                description: None,
                 icons: None,
                 website_url: None,
             },

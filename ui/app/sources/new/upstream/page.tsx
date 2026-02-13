@@ -4,7 +4,7 @@ import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
-import { Button, Input } from "@/components/ui";
+import { Button, Input, QueryParamAuthWarning } from "@/components/ui";
 import * as tenantApi from "@/src/lib/tenantApi";
 import { useToastStore } from "@/src/lib/toast-store";
 
@@ -242,6 +242,7 @@ function NewUpstreamWizardInner() {
                       Optional. Used only for Gateway → upstream connections; client auth is never
                       forwarded.
                     </div>
+                    {authType === "query" ? <QueryParamAuthWarning /> : null}
                   </div>
 
                   {authType === "bearer" ? (

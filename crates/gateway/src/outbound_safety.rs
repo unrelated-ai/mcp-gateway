@@ -1,25 +1,4 @@
-use std::collections::HashSet;
 use unrelated_http_tools::safety::OutboundHttpSafety;
-
-fn env_flag(name: &str) -> bool {
-    matches!(
-        std::env::var(name)
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .as_str(),
-        "1" | "true" | "yes" | "on"
-    )
-}
-
-fn env_csv_set(name: &str) -> Option<HashSet<String>> {
-    let raw = std::env::var(name).ok()?;
-    let set: HashSet<String> = raw
-        .split(',')
-        .map(|s| s.trim().to_ascii_lowercase())
-        .filter(|s| !s.is_empty())
-        .collect();
-    (!set.is_empty()).then_some(set)
-}
 
 /// Outbound HTTP safety policy for the Gateway.
 ///
@@ -33,13 +12,76 @@ fn env_csv_set(name: &str) -> Option<HashSet<String>> {
 pub fn gateway_outbound_http_safety() -> OutboundHttpSafety {
     let mut safety = OutboundHttpSafety::gateway_default();
 
-    if env_flag("UNRELATED_GATEWAY_OUTBOUND_ALLOW_PRIVATE_NETWORKS") {
+    // Unit tests commonly spin up mock services on loopback. Allow private networks in tests so
+    // outbound safety hardening does not break local test servers.
+    #[cfg(test)]
+    {
         safety.allow_private_networks = true;
     }
 
-    if let Some(set) = env_csv_set("UNRELATED_GATEWAY_OUTBOUND_ALLOWED_HOSTS") {
+    if unrelated_env::flag("UNRELATED_GATEWAY_OUTBOUND_ALLOW_PRIVATE_NETWORKS") {
+        safety.allow_private_networks = true;
+    }
+
+    if let Some(set) = unrelated_env::csv_set_lower("UNRELATED_GATEWAY_OUTBOUND_ALLOWED_HOSTS") {
         safety.allowed_hosts = Some(set);
     }
 
     safety
+}
+
+/// Validate a URL against the provided outbound safety policy.
+///
+/// This is a small helper wrapper around `OutboundHttpSafety::check_url` so call sites can share
+/// consistent parsing + error strings.
+pub async fn check_url_allowed(safety: &OutboundHttpSafety, url: &str) -> Result<(), String> {
+    let u = reqwest::Url::parse(url).map_err(|e| format!("invalid URL: {e}"))?;
+    safety.check_url(&u).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Process-level policy for upstream MCP endpoint URL schemes.
+///
+/// Default posture: require `https://` for upstream endpoints.
+///
+/// Dev override:
+/// - set `UNRELATED_GATEWAY_UPSTREAM_ALLOW_HTTP=1` to allow `http://` upstream endpoints
+#[must_use]
+pub fn upstream_allows_http() -> bool {
+    unrelated_env::flag("UNRELATED_GATEWAY_UPSTREAM_ALLOW_HTTP")
+}
+
+/// Enforce the upstream HTTPS policy for a candidate endpoint URL.
+pub fn check_upstream_https_policy(url: &str) -> Result<(), String> {
+    let u = reqwest::Url::parse(url).map_err(|e| format!("invalid URL: {e}"))?;
+    match u.scheme() {
+        "https" => Ok(()),
+        "http" => {
+            // Unit tests commonly spin up mock upstreams on loopback via plain HTTP. Allow that in
+            // tests without requiring process-global env mutation (which is unsafe to do in
+            // multi-threaded test runners).
+            #[cfg(test)]
+            {
+                if let Some(host) = u.host_str() {
+                    if host.eq_ignore_ascii_case("localhost") {
+                        return Ok(());
+                    }
+                    if let Ok(ip) = host.parse::<std::net::IpAddr>()
+                        && ip.is_loopback()
+                    {
+                        return Ok(());
+                    }
+                }
+            }
+
+            if upstream_allows_http() {
+                Ok(())
+            } else {
+                Err("upstream endpoint must use https (dev override: UNRELATED_GATEWAY_UPSTREAM_ALLOW_HTTP=1)".to_string())
+            }
+        }
+        other => Err(format!(
+            "unsupported upstream URL scheme '{other}' (expected https)"
+        )),
+    }
 }

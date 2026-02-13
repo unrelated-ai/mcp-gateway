@@ -4,7 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
-import { Button, ConfirmModal, Input } from "@/components/ui";
+import { Button, ConfirmModal, Input, QueryParamAuthWarning } from "@/components/ui";
 import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
 import { useToastStore } from "@/src/lib/toast-store";
@@ -297,6 +297,9 @@ export default function UpstreamDetailPage() {
                           <div className="mt-2 text-xs text-zinc-500">
                             Used only for Gateway → upstream connections.
                           </div>
+                          {ep.authType === "query" ? (
+                            <QueryParamAuthWarning className="mt-2" />
+                          ) : null}
                         </div>
                       </div>
 

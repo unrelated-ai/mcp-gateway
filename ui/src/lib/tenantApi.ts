@@ -3,6 +3,7 @@ import type {
   ApiKeyMetadata,
   CreateApiKeyResponse,
   TenantAuditSettings,
+  TenantTransportLimitsSettings,
   AuditEventsResponse,
   ToolCallStatsByApiKeyResponse,
   ToolCallStatsByToolResponse,
@@ -261,6 +262,22 @@ export async function getTenantAuditSettings(): Promise<TenantAuditSettings> {
 
 export async function putTenantAuditSettings(body: TenantAuditSettings): Promise<{ ok: boolean }> {
   return await tenantFetchJson<{ ok: boolean }>("/api/tenant/audit/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function getTenantTransportLimits(): Promise<TenantTransportLimitsSettings> {
+  return await tenantFetchJson<TenantTransportLimitsSettings>("/api/tenant/transport/limits", {
+    cache: "no-store",
+  });
+}
+
+export async function putTenantTransportLimits(
+  body: TenantTransportLimitsSettings,
+): Promise<{ ok: boolean }> {
+  return await tenantFetchJson<{ ok: boolean }>("/api/tenant/transport/limits", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

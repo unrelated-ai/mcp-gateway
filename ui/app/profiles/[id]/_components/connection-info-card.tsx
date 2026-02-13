@@ -31,7 +31,7 @@ function getMcpJsonText(
       entry.note = noteFromProfileDescription
         ? noteFromProfileDescription
         : mode === "apiKeyInitializeOnly"
-          ? "Unrelated MCP Gateway profile (API key required only for initialize)"
+          ? "Unrelated MCP Gateway profile (API key required only for initialize; compatibility mode, not recommended)"
           : "Unrelated MCP Gateway profile (API key required on every request)";
     } else if (mode.startsWith("jwt")) {
       entry.headers = { Authorization: "Bearer <jwt>" };

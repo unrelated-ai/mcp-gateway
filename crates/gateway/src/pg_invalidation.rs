@@ -13,6 +13,9 @@ pub enum InvalidationEvent {
         tenant_id: String,
         name: Option<String>,
     },
+    TenantAuditSettings {
+        tenant_id: String,
+    },
     TenantToolSource {
         tenant_id: String,
         source_id: String,

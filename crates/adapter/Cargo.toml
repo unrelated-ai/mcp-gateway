@@ -10,7 +10,7 @@ repository.workspace = true
 
 [dependencies]
 # MCP Protocol - Official Rust SDK
-rmcp = { version = "0.12.0", features = ["client", "transport-child-process", "transport-streamable-http-server", "elicitation"] }
+rmcp = { version = "0.15.0", features = ["client", "transport-child-process", "transport-streamable-http-server", "elicitation"] }
 tokio = { version = "1", features = ["full", "signal"] }
 tokio-util = "0.7"
 axum = { version = "0.8", features = ["macros"] }
@@ -27,7 +27,6 @@ anyhow = "1"
 futures = "0.3"
 parking_lot = "0.12"
 chrono = { version = "0.4", features = ["serde"] }
-atty = "0.2"
 async-trait = "0.1"
 
 # OpenAPI support
@@ -37,10 +36,11 @@ hex = "0.4"
 unrelated-http-tools = { path = "../http-tools" }
 unrelated-openapi-tools = { path = "../openapi-tools" }
 unrelated-tool-transforms = { path = "../tool-transforms" }
+unrelated-env = { path = "../env" }
 
 [dev-dependencies]
 tempfile = "3"
-testcontainers = "0.26.3"
+testcontainers = "0.27.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 unrelated-test-support = { path = "../test-support" }
 

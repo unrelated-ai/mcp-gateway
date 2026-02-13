@@ -1583,7 +1583,7 @@ fn build_data_plane_auth_for_create(args: &ProfileAuthArgs) -> Option<api::DataP
             .data_plane_auth_mode
             .unwrap_or(DataPlaneAuthModeArg::ApiKeyInitializeOnly)
             .into(),
-        accept_x_api_key: args.accept_x_api_key.unwrap_or(true),
+        accept_x_api_key: args.accept_x_api_key.unwrap_or(false),
     })
 }
 

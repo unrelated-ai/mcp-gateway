@@ -912,6 +912,30 @@ where tenant_id = $1
         Ok(None)
     }
 
+    async fn get_tenant_transport_limits(
+        &self,
+        tenant_id: &str,
+    ) -> anyhow::Result<Option<crate::store::TransportLimitsSettings>> {
+        let row = sqlx::query(
+            r"
+select transport_limits
+from tenants
+where id = $1
+  and enabled = true
+",
+        )
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        let v: Value = row.try_get("transport_limits")?;
+        Ok(Some(serde_json::from_value(v)?))
+    }
+
     async fn authenticate_api_key(
         &self,
         tenant_id: &str,
@@ -1514,39 +1538,21 @@ where id = $1
         Ok(res.rows_affected() > 0)
     }
 
-    async fn put_profile(
-        &self,
-        profile_id: &str,
-        tenant_id: &str,
-        name: &str,
-        description: Option<&str>,
-        enabled: bool,
-        allow_partial_upstreams: bool,
-        upstream_ids: &[String],
-        source_ids: &[String],
-        transforms: &TransformPipeline,
-        enabled_tools: &[String],
-        data_plane_auth_mode: DataPlaneAuthMode,
-        accept_x_api_key: bool,
-        rate_limit_enabled: bool,
-        rate_limit_tool_calls_per_minute: Option<i64>,
-        quota_enabled: bool,
-        quota_tool_calls: Option<i64>,
-        tool_call_timeout_secs: Option<u64>,
-        tool_policies: &[ToolPolicy],
-        mcp: &crate::store::McpProfileSettings,
-    ) -> anyhow::Result<()> {
-        let profile_id = Uuid::parse_str(profile_id)
+    async fn put_profile(&self, input: crate::store::PutProfileInput<'_>) -> anyhow::Result<()> {
+        let profile_id = Uuid::parse_str(input.profile_id)
             .map_err(|_| anyhow::anyhow!("invalid profile id (expected UUID)"))?;
 
-        let rate_limit_tool_calls_per_minute: Option<i32> = rate_limit_tool_calls_per_minute
+        let rate_limit_tool_calls_per_minute: Option<i32> = input
+            .limits
+            .rate_limit_tool_calls_per_minute
             .map(|v| {
                 i32::try_from(v)
                     .map_err(|_| anyhow::anyhow!("rateLimitToolCallsPerMinute out of range"))
             })
             .transpose()?;
 
-        let tool_call_timeout_secs: Option<i32> = tool_call_timeout_secs
+        let tool_call_timeout_secs: Option<i32> = input
+            .tool_call_timeout_secs
             .map(|v| {
                 i32::try_from(v).map_err(|_| anyhow::anyhow!("toolCallTimeoutSecs out of range"))
             })
@@ -1554,37 +1560,40 @@ where id = $1
 
         let mut tx: Transaction<'_, Postgres> = self.pool.begin().await?;
 
-        self.ensure_tenant_exists_tx(&mut tx, tenant_id).await?;
+        self.ensure_tenant_exists_tx(&mut tx, input.tenant_id)
+            .await?;
         self.upsert_profile_row_tx(
             &mut tx,
             profile_id,
             ProfileUpsertInput {
-                tenant_id,
-                name,
-                description,
+                tenant_id: input.tenant_id,
+                name: input.name,
+                description: input.description,
                 flags: ProfileUpsertFlags {
-                    enabled,
-                    allow_partial_upstreams,
+                    enabled: input.flags.enabled,
+                    allow_partial_upstreams: input.flags.allow_partial_upstreams,
                 },
-                enabled_tools,
-                transforms,
-                mcp,
-                data_plane_auth_mode,
-                auth: ProfileUpsertAuth { accept_x_api_key },
+                enabled_tools: input.enabled_tools,
+                transforms: input.transforms,
+                mcp: input.mcp,
+                data_plane_auth_mode: input.data_plane_auth.mode,
+                auth: ProfileUpsertAuth {
+                    accept_x_api_key: input.data_plane_auth.accept_x_api_key,
+                },
                 limits: ProfileUpsertLimits {
-                    rate_limit_enabled,
-                    quota_enabled,
+                    rate_limit_enabled: input.limits.rate_limit_enabled,
+                    quota_enabled: input.limits.quota_enabled,
                 },
                 rate_limit_tool_calls_per_minute,
-                quota_tool_calls,
+                quota_tool_calls: input.limits.quota_tool_calls,
                 tool_call_timeout_secs,
-                tool_policies,
+                tool_policies: input.tool_policies,
             },
         )
         .await?;
-        self.replace_profile_upstreams_tx(&mut tx, profile_id, upstream_ids)
+        self.replace_profile_upstreams_tx(&mut tx, profile_id, input.upstream_ids)
             .await?;
-        self.replace_profile_sources_tx(&mut tx, profile_id, source_ids)
+        self.replace_profile_sources_tx(&mut tx, profile_id, input.source_ids)
             .await?;
 
         tx.commit().await?;
@@ -2137,6 +2146,52 @@ where tenant_id = $1
         Ok(res.rows_affected())
     }
 
+    async fn get_tenant_transport_limits(
+        &self,
+        tenant_id: &str,
+    ) -> anyhow::Result<Option<crate::store::TransportLimitsSettings>> {
+        let row = sqlx::query(
+            r"
+select transport_limits
+from tenants
+where id = $1
+",
+        )
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        let v: Value = row.try_get("transport_limits")?;
+        Ok(Some(serde_json::from_value(v)?))
+    }
+
+    async fn put_tenant_transport_limits(
+        &self,
+        tenant_id: &str,
+        limits: &crate::store::TransportLimitsSettings,
+    ) -> anyhow::Result<()> {
+        let res = sqlx::query(
+            r"
+update tenants
+set transport_limits = $2
+where id = $1
+",
+        )
+        .bind(tenant_id)
+        .bind(serde_json::to_value(limits)?)
+        .execute(&self.pool)
+        .await?;
+
+        if res.rows_affected() == 0 {
+            anyhow::bail!("tenant not found");
+        }
+        Ok(())
+    }
+
     async fn get_tenant_audit_settings(
         &self,
         tenant_id: &str,
@@ -2187,6 +2242,14 @@ where id = $1
         if res.rows_affected() == 0 {
             anyhow::bail!("tenant not found");
         }
+        // Best-effort HA invalidation for per-tenant audit settings cache.
+        let _ = pg_invalidation::publish(
+            &self.pool,
+            &pg_invalidation::InvalidationEvent::TenantAuditSettings {
+                tenant_id: tenant_id.to_string(),
+            },
+        )
+        .await;
         Ok(())
     }
 

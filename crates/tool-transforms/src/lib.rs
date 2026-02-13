@@ -8,14 +8,14 @@ use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-const fn default_true() -> bool {
-    true
+mod serde_helpers {
+    // Serde's `default = "..."` expects helpers with the signature `fn() -> T`.
+    pub const fn default_true() -> bool {
+        true
+    }
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)] // required by serde `skip_serializing_if` signature
-const fn is_true(v: &bool) -> bool {
-    *v
-}
+use serde_helpers::default_true;
 
 /// A minimal transform pipeline for shaping tool surfaces.
 ///
@@ -55,12 +55,18 @@ pub struct ParamOverride {
     /// Whether this argument is exposed to clients in `tools/list`.
     ///
     /// When `false`, the parameter is removed from the exposed JSON Schema.
-    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    #[serde(
+        default = "default_true",
+        skip_serializing_if = "std::clone::Clone::clone"
+    )]
     pub visible: bool,
     /// If true (default), treat `null` like "missing" when applying defaults.
     ///
     /// If false, defaults are applied only when the argument is absent.
-    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    #[serde(
+        default = "default_true",
+        skip_serializing_if = "std::clone::Clone::clone"
+    )]
     pub treat_null_as_missing: bool,
 }
 

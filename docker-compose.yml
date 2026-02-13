@@ -94,7 +94,10 @@ services:
       # By default, the Gateway blocks private network destinations for gateway-native HTTP/OpenAPI tool sources.
       # If you want to point a tenant tool source at docker-compose services (e.g. `http://petstore:8080/...`),
       # opt in explicitly by setting this to "1" in your environment:
-      # UNRELATED_GATEWAY_OUTBOUND_ALLOW_PRIVATE_NETWORKS: ${UNRELATED_GATEWAY_OUTBOUND_ALLOW_PRIVATE_NETWORKS:-0}
+      #
+      # Dev default: allow private-network destinations so the Gateway can reach docker-compose upstreams
+      # (Adapters, petstore, etc.).
+      UNRELATED_GATEWAY_OUTBOUND_ALLOW_PRIVATE_NETWORKS: ${UNRELATED_GATEWAY_OUTBOUND_ALLOW_PRIVATE_NETWORKS:-1}
     healthcheck:
       # `gateway-runtime` is alpine (busybox), so `wget` is available.
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4001/health >/dev/null || exit 1"]

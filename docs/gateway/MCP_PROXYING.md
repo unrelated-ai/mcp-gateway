@@ -6,7 +6,7 @@ This page describes how the Gateway behaves as an MCP server when it is aggregat
 
 - Gateway overview: [`docs/gateway/INDEX.md`](INDEX.md)
 - Adapter overview: [`docs/adapter/INDEX.md`](../adapter/INDEX.md)
-- Profile MCP settings (capabilities, notifications, namespacing): [`docs/gateway/MCP_SETTINGS.md`](MCP_SETTINGS.md)
+- Profile MCP settings (capabilities, notifications, namespacing, security): [`docs/gateway/MCP_SETTINGS.md`](MCP_SETTINGS.md)
 
 ## What “aggregation” means for MCP
 
@@ -22,13 +22,29 @@ This introduces three classes of collisions:
 
 ### Server → client requests (interactive flows)
 
-The Gateway supports upstream server→client requests by rewriting the JSON-RPC `id` in the merged SSE stream so the downstream client’s response can be routed back to the correct upstream session:
+The Gateway can forward upstream server→client requests (JSON-RPC `request` messages) by rewriting
+the JSON-RPC `id` in the merged SSE stream so the downstream client’s response can be routed back
+to the correct upstream session.
 
-This applies to any upstream server→client request (any JSON-RPC `request` message), for example:
+Security / policy:
+
+- Forwarding is gated by **per-upstream** policy under `mcp.security.*.serverRequests`.
+- If a request method is blocked, the Gateway:
+  - does **not** forward it to the downstream client
+  - replies upstream with a JSON-RPC error (typically `-32601 Method not found`)
+
+This applies to any upstream server→client request, for example:
 
 - `sampling/createMessage`
 - `roots/list`
 - `elicitation/create`
+
+### Response-forgery hardening (signed proxied request IDs)
+
+When enabled (`mcp.security.signedProxiedRequestIds: true`), the Gateway emits **signed** proxied
+request IDs (HMAC, per-session key stored inside the encrypted session token). Downstream responses
+are only routed upstream if the proxied ID verifies. This mitigates malicious downstream clients
+fabricating “valid-looking” proxied IDs.
 
 ### Client → server methods (routed / fanned out)
 
@@ -70,6 +86,16 @@ On each proxy hop, the Gateway increments the value and rejects forwarding once 
 
 **Future improvement recommendation**: standardize this hop header across gateways/proxies so multi-gateway deployments can prevent loops deterministically, and consider making the max configurable per environment.
 
+## Outbound safety for upstream MCP endpoints (implemented)
+
+The Gateway applies its outbound HTTP safety policy (SSRF hardening) to **upstream MCP endpoint URLs**:
+
+- non-`http(s)` schemes are rejected
+- private/loopback/link-local/reserved destinations are blocked by default (unless explicitly allowed)
+- redirects are not followed for upstream MCP proxying
+
+See: [`docs/gateway/OUTBOUND_HTTP_SAFETY.md`](OUTBOUND_HTTP_SAFETY.md)
+
 ## Config knobs that improve UX
 
 All of these are per-profile settings under `mcp:` (see [`docs/gateway/MCP_SETTINGS.md`](MCP_SETTINGS.md)):
@@ -77,6 +103,7 @@ All of these are per-profile settings under `mcp:` (see [`docs/gateway/MCP_SETTI
 - **`mcp.capabilities` allow/deny**: controls what the Gateway advertises in `initialize` and enforces at runtime.
 - **`mcp.notifications` allow/deny**: filter noisy upstream notifications without changing defaults (defaults allow everything).
 - **`mcp.namespacing`**: choose request-id and SSE-event-id namespacing formats (defaults are safe for aggregation).
+- **`mcp.security`**: per-upstream trust controls (client capability forwarding, server→client request filtering, signed proxied IDs).
 
 ## Additional runtime behavior (implemented)
 

@@ -2,6 +2,7 @@ use anyhow::Context as _;
 use axum::{Json, Router, extract::State, routing::get};
 use clap::Parser;
 use serde::Serialize;
+use std::io::{IsTerminal as _, stdout};
 use std::time::Duration;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Instant};
 use tokio_util::sync::CancellationToken;
@@ -23,6 +24,7 @@ mod pg_invalidation;
 mod pg_store;
 mod profile_http;
 mod secrets_crypto;
+mod serde_helpers;
 mod session_token;
 mod store;
 mod tenant;
@@ -31,6 +33,7 @@ mod tenant_token;
 mod timeouts;
 mod tool_policy;
 mod tools_cache;
+mod transport_limits;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const LICENSE: &str = env!("CARGO_PKG_LICENSE");
@@ -133,12 +136,8 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
 
     audit_retention::spawn_audit_retention_task(pg_pool.clone(), ct.clone());
 
-    let http = reqwest::Client::default();
-    // OIDC discovery/JWKS fetch should never follow redirects (SSRF hardening).
-    let oidc_http = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .context("build OIDC HTTP client")?;
+    let http = build_no_redirect_http_client("upstream HTTP client")?;
+    let oidc_http = build_no_redirect_http_client("OIDC HTTP client")?;
     let oidc = oidc::OidcValidator::from_env(oidc_http).await?;
     let oidc_issuer = oidc.as_ref().map(|o| o.issuer().to_string());
 
@@ -166,13 +165,7 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
     let admin_state = Arc::new(admin::AdminState {
         store: admin_store,
         admin_token: std::env::var("UNRELATED_GATEWAY_ADMIN_TOKEN").ok(),
-        bootstrap_enabled: matches!(
-            std::env::var("UNRELATED_GATEWAY_BOOTSTRAP_ENABLED")
-                .unwrap_or_default()
-                .to_ascii_lowercase()
-                .as_str(),
-            "1" | "true" | "yes" | "on"
-        ),
+        bootstrap_enabled: env_truthy("UNRELATED_GATEWAY_BOOTSTRAP_ENABLED"),
         tenant_signer: tenant_token::TenantSigner::new(session_secrets[0].clone()),
         shared_source_ids: shared_source_ids.clone(),
         oidc_issuer: oidc_issuer.clone(),
@@ -235,6 +228,26 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn build_no_redirect_http_client(label: &'static str) -> anyhow::Result<reqwest::Client> {
+    // Redirects are disabled (SSRF hardening). Upstream endpoints should be configured with their
+    // final URL.
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .with_context(|| format!("build {label}"))
+}
+
+fn env_truthy(name: &str) -> bool {
+    let Ok(v) = std::env::var(name) else {
+        return false;
+    };
+    let s = v.trim();
+    s == "1"
+        || s.eq_ignore_ascii_case("true")
+        || s.eq_ignore_ascii_case("yes")
+        || s.eq_ignore_ascii_case("on")
+}
+
 fn build_audit_sink(
     pg_pool: Option<sqlx::PgPool>,
     ct: &CancellationToken,
@@ -258,10 +271,14 @@ async fn start_mode3_ha_tasks(
     let tools_cache = mcp_state.tools_cache.clone();
     let endpoint_cache = mcp_state.endpoint_cache.clone();
     let tenant_catalog = mcp_state.tenant_catalog.clone();
+    let audit = mcp_state.audit.clone();
     let on_event: std::sync::Arc<dyn Fn(pg_invalidation::InvalidationEvent) + Send + Sync> =
         std::sync::Arc::new(move |evt| match evt {
             pg_invalidation::InvalidationEvent::TenantSecret { tenant_id, .. } => {
                 tenant_catalog.invalidate_tenant(&tenant_id);
+            }
+            pg_invalidation::InvalidationEvent::TenantAuditSettings { tenant_id } => {
+                audit.invalidate_tenant_settings_cache(&tenant_id);
             }
             pg_invalidation::InvalidationEvent::TenantToolSource {
                 tenant_id,
@@ -615,7 +632,7 @@ fn init_logging(log_level: &str) {
     let env_filter = EnvFilter::try_new(log_level).unwrap_or_else(|_| EnvFilter::new("info"));
 
     // Check if stdout is a TTY for format selection.
-    let is_tty = atty::is(atty::Stream::Stdout);
+    let is_tty = stdout().is_terminal();
 
     if is_tty {
         tracing_subscriber::registry()

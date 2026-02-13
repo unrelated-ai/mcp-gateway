@@ -69,6 +69,26 @@ Stop everything:
 make down
 ```
 
+## Optional HTTP bearer-token guardrail
+
+If you set `UNRELATED_MCP_BEARER_TOKEN` (or `adapter.mcpBearerToken`), the adapter will require
+`Authorization: Bearer <token>` for all non-health endpoints (including `/mcp`).
+
+Quick manual check:
+
+```bash
+# Start an adapter with bearer auth enabled
+UNRELATED_MCP_BEARER_TOKEN=devtoken cargo run -p unrelated-mcp-adapter --bin unrelated-mcp-adapter -- \
+  --config tests/fixtures/minimal-no-servers.yaml
+
+# Health stays unauthenticated
+curl -i http://127.0.0.1:3000/health
+
+# Non-health endpoints require the token
+curl -i http://127.0.0.1:3000/map
+curl -i -H "Authorization: Bearer devtoken" http://127.0.0.1:3000/map
+```
+
 ## Unit tests
 
 ```bash

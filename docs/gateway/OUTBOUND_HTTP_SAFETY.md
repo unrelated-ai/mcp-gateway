@@ -5,6 +5,7 @@ The Gateway can make outbound HTTP requests when it executes:
 - gateway-native **HTTP tool sources**
 - gateway-native **OpenAPI tool sources**
 - `OpenAPI inspect` (wizard endpoint)
+- proxying to **upstream MCP servers** (Streamable HTTP upstream endpoints)
 
 Because the Gateway is intended to be deployed in **multi-tenant** environments, it applies a restrictive outbound policy by default to reduce SSRF risk.
 
@@ -55,10 +56,33 @@ Notes:
 
 Gateway defaults are intentionally strict:
 
-- redirects: **not followed**
-- max response body: **1 MiB**
+- redirects: **not followed** (gateway-native HTTP/OpenAPI tools and upstream MCP proxying)
+- max response body: **1 MiB** (gateway-native HTTP/OpenAPI tool sources only)
+
+## HTTPS requirement for upstream MCP endpoints (scheme policy)
+
+For upstream MCP endpoint URLs (Streamable HTTP), the Gateway prefers **TLS by default**:
+
+- upstream endpoint URLs must use **`https://`**
+- `http://` is rejected unless an explicit dev override is set:
+  - `UNRELATED_GATEWAY_UPSTREAM_ALLOW_HTTP=1`
+
+This is enforced both:
+
+- when upstream endpoints are created/updated (validation), and
+- at connect-time (second line of defense).
+
+Notes:
+
+- This is **separate** from the private-network SSRF override. Even with HTTPS, private IP ranges are still blocked unless `UNRELATED_GATEWAY_OUTBOUND_ALLOW_PRIVATE_NETWORKS=1` is set.
+- Today, this HTTPS scheme policy applies to **upstream MCP endpoints** only (not to gateway-native HTTP/OpenAPI tool sources).
 
 ## Scope / what this does *not* cover
 
-This policy applies to **gateway-native HTTP/OpenAPI tool sources** (and `openapi/inspect`). It does not change the Gateway’s “no Authorization passthrough” stance.
+This policy applies to:
+
+- **gateway-native HTTP/OpenAPI tool sources** (and `openapi/inspect`), and
+- **upstream MCP endpoint URLs** (when the Gateway connects to upstream MCP servers over Streamable HTTP).
+
+It does not change the Gateway’s “no Authorization passthrough” stance.
 

@@ -6,11 +6,11 @@
 
 use crate::error::{AdapterError, Result};
 use clap::Parser;
-use serde::de::Error as DeError;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
+use unrelated_env::serde_helpers::{deserialize_option_bool_env, deserialize_option_u64_env};
 use unrelated_tool_transforms::TransformPipeline;
 
 // Re-export shared HTTP/OpenAPI config types so the Adapter keeps its current config schema,
@@ -23,57 +23,7 @@ pub use unrelated_openapi_tools::config::{
     OpenApiOverridesConfig,
 };
 
-fn deserialize_option_u64_env<'de, D>(deserializer: D) -> std::result::Result<Option<u64>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    match value {
-        None | Some(serde_json::Value::Null) => Ok(None),
-        Some(serde_json::Value::Number(n)) => n
-            .as_u64()
-            .map(Some)
-            .ok_or_else(|| D::Error::custom("expected unsigned integer")),
-        Some(serde_json::Value::String(s)) => {
-            let expanded = expand_env_string(&s).map_err(D::Error::custom)?;
-            let expanded = expanded.trim();
-            let n = expanded.parse::<u64>().map_err(|e| {
-                D::Error::custom(format!("expected unsigned integer, got '{expanded}': {e}"))
-            })?;
-            Ok(Some(n))
-        }
-        Some(other) => Err(D::Error::custom(format!(
-            "expected unsigned integer or string, got {other}"
-        ))),
-    }
-}
-
-fn deserialize_option_bool_env<'de, D>(
-    deserializer: D,
-) -> std::result::Result<Option<bool>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    match value {
-        None | Some(serde_json::Value::Null) => Ok(None),
-        Some(serde_json::Value::Bool(b)) => Ok(Some(b)),
-        Some(serde_json::Value::String(s)) => {
-            let expanded = expand_env_string(&s).map_err(D::Error::custom)?;
-            let expanded = expanded.trim().to_lowercase();
-            match expanded.as_str() {
-                "true" | "1" | "yes" | "y" | "on" => Ok(Some(true)),
-                "false" | "0" | "no" | "n" | "off" => Ok(Some(false)),
-                _ => Err(D::Error::custom(format!(
-                    "expected boolean, got '{expanded}'"
-                ))),
-            }
-        }
-        Some(other) => Err(D::Error::custom(format!(
-            "expected boolean or string, got {other}"
-        ))),
-    }
-}
+// NOTE: env-backed deserializers live in `unrelated-env` so they can be shared across crates.
 
 // ============================================================================
 // CLI Arguments
@@ -112,6 +62,12 @@ pub struct CliArgs {
     /// HTTP bind address (ip:port)
     #[arg(short = 'b', long, env = "UNRELATED_BIND")]
     pub bind: Option<String>,
+
+    /// Optional static bearer token required for all non-health HTTP endpoints (including `/mcp`).
+    ///
+    /// If set, requests must include: `Authorization: Bearer <token>`.
+    #[arg(long = "mcp-bearer-token", env = "UNRELATED_MCP_BEARER_TOKEN")]
+    pub mcp_bearer_token: Option<String>,
 
     /// Log level. Supports tracing filter syntax.
     #[arg(short = 'l', long = "log-level", env = "UNRELATED_LOG")]
@@ -221,6 +177,9 @@ const DEFAULT_RESTART_BACKOFF_MAX_MS: u64 = 30000;
 #[serde(rename_all = "camelCase")]
 pub struct AdapterSettings {
     pub bind: String,
+    /// Optional static bearer token required for all non-health HTTP endpoints (including `/mcp`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_bearer_token: Option<String>,
     pub log_level: String,
     pub call_timeout: u64,
     pub startup_timeout: u64,
@@ -242,6 +201,7 @@ impl Default for AdapterSettings {
     fn default() -> Self {
         Self {
             bind: DEFAULT_BIND.to_string(),
+            mcp_bearer_token: None,
             log_level: DEFAULT_LOG_LEVEL.to_string(),
             call_timeout: crate::timeouts::tool_call_timeout_default_secs(),
             startup_timeout: DEFAULT_STARTUP_TIMEOUT_SECS,
@@ -285,6 +245,9 @@ impl AdapterSettings {
 pub struct AdapterSection {
     #[serde(default)]
     pub bind: Option<String>,
+    /// Optional static bearer token required for all non-health HTTP endpoints (including `/mcp`).
+    #[serde(default)]
+    pub mcp_bearer_token: Option<String>,
     #[serde(default)]
     pub log_level: Option<String>,
     #[serde(default, deserialize_with = "deserialize_option_u64_env")]
@@ -546,6 +509,11 @@ fn apply_adapter_section(adapter: &mut AdapterSettings, section: AdapterSection)
     if let Some(bind) = section.bind {
         adapter.bind = expand_env_string(&bind)?;
     }
+    if let Some(v) = section.mcp_bearer_token {
+        let t = expand_env_string(&v)?;
+        let t = t.trim().to_string();
+        adapter.mcp_bearer_token = (!t.is_empty()).then_some(t);
+    }
     if let Some(level) = section.log_level {
         adapter.log_level = expand_env_string(&level)?;
     }
@@ -579,6 +547,11 @@ fn apply_adapter_section(adapter: &mut AdapterSettings, section: AdapterSection)
 fn apply_cli_overrides(adapter: &mut AdapterSettings, cli: &CliArgs) -> Result<()> {
     if let Some(bind) = &cli.bind {
         adapter.bind = expand_env_string(bind)?;
+    }
+    if let Some(v) = &cli.mcp_bearer_token {
+        let t = expand_env_string(v)?;
+        let t = t.trim().to_string();
+        adapter.mcp_bearer_token = (!t.is_empty()).then_some(t);
     }
 
     // Precedence for log level:
@@ -866,31 +839,7 @@ fn expand_auth_env_vars(auth: AuthConfig) -> Result<AuthConfig> {
 
 /// Expand ${VAR} patterns in a string.
 pub fn expand_env_string(s: &str) -> Result<String> {
-    let mut result = s.to_string();
-    let mut start = 0;
-
-    while let Some(dollar_pos) = result[start..].find("${") {
-        let abs_pos = start + dollar_pos;
-        if let Some(end_pos) = result[abs_pos..].find('}') {
-            let var_name = &result[abs_pos + 2..abs_pos + end_pos];
-            let var_value = std::env::var(var_name).map_err(|_| {
-                AdapterError::Config(format!(
-                    "Environment variable '{var_name}' not found (referenced in config)",
-                ))
-            })?;
-            result = format!(
-                "{}{}{}",
-                &result[..abs_pos],
-                var_value,
-                &result[abs_pos + end_pos + 1..]
-            );
-            start = abs_pos + var_value.len();
-        } else {
-            start = abs_pos + 2;
-        }
-    }
-
-    Ok(result)
+    unrelated_env::expand_env_string(s).map_err(AdapterError::Config)
 }
 
 // ============================================================================
@@ -985,6 +934,7 @@ mod tests {
             api_spec: None,
             print_effective_config: false,
             bind: None,
+            mcp_bearer_token: None,
             log_level: None,
             call_timeout: None,
             startup_timeout: None,
@@ -1043,6 +993,7 @@ mod tests {
             api_spec: None,
             print_effective_config: false,
             bind: None,
+            mcp_bearer_token: None,
             log_level: None,
             call_timeout: None,
             startup_timeout: None,
@@ -1101,6 +1052,7 @@ mod tests {
             api_spec: None,
             print_effective_config: false,
             bind: None,
+            mcp_bearer_token: None,
             log_level: None,
             call_timeout: None,
             startup_timeout: None,
@@ -1159,6 +1111,7 @@ mod tests {
             api_spec: None,
             print_effective_config: false,
             bind: None,
+            mcp_bearer_token: None,
             log_level: None,
             call_timeout: None,
             startup_timeout: None,

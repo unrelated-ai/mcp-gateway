@@ -25,10 +25,6 @@ pub(crate) fn resolve_nullable_u64(req: Option<NullableU64>, existing: Option<u6
     }
 }
 
-pub(crate) const fn default_true() -> bool {
-    true
-}
-
 pub(crate) const fn default_data_plane_auth_mode() -> DataPlaneAuthMode {
     DataPlaneAuthMode::ApiKeyInitializeOnly
 }
@@ -38,7 +34,7 @@ pub(crate) const fn default_data_plane_auth_mode() -> DataPlaneAuthMode {
 pub(crate) struct DataPlaneAuthSettings {
     #[serde(default = "default_data_plane_auth_mode")]
     pub(crate) mode: DataPlaneAuthMode,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub(crate) accept_x_api_key: bool,
 }
 

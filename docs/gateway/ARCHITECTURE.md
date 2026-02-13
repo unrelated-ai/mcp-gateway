@@ -37,7 +37,7 @@ Systems
   - Expose tools/resources/prompts over `/mcp`
   - Aggregate multiple backends
   - Provide operational metadata via `/map` for routing/UI
-  - No inbound authn/z, tenancy, or policy
+  - No multi-tenant inbound authn/z, tenancy, or policy (optional guardrails exist; see adapter docs)
 
 - **Gateway**
   - Authenticate/authorize incoming clients
@@ -65,6 +65,7 @@ Related docs:
 - Mode 3 secrets and `${secret:...}` placeholders: `docs/gateway/MODE3_TENANT_OVERLAY.md`
   - In Mode 3, tenant secrets are encrypted at rest by the Gateway (configure `UNRELATED_GATEWAY_SECRET_KEYS`).
 - Adapter outbound auth config: `docs/adapter/config/AUTH.md`
+- Outbound HTTP safety (SSRF hardening for gateway-native tool sources **and upstream MCP endpoints**): `docs/gateway/OUTBOUND_HTTP_SAFETY.md`
 
 ## Configuration and control plane (current)
 

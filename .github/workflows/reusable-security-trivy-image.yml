@@ -1,0 +1,68 @@
+name: reusable-security-trivy-image
+
+on:
+  workflow_call:
+    inputs:
+      image_ref:
+        description: "Image reference to build and scan"
+        required: true
+        type: string
+      dockerfile:
+        description: "Path to Dockerfile"
+        required: true
+        type: string
+      context:
+        description: "Docker build context directory"
+        required: true
+        type: string
+      docker_target:
+        description: "Optional Dockerfile target for multi-stage builds"
+        required: false
+        default: ""
+        type: string
+      severity:
+        description: "Trivy severity filter"
+        required: false
+        default: "CRITICAL,HIGH"
+        type: string
+      vuln_type:
+        description: "Trivy vulnerability type filter"
+        required: false
+        default: "os,library"
+        type: string
+      format:
+        description: "Trivy output format"
+        required: false
+        default: "table"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  trivy_image:
+    name: trivy (${{ inputs.image_ref }})
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (default target)
+        if: ${{ inputs.docker_target == '' }}
+        run: docker build -f "${{ inputs.dockerfile }}" -t "${{ inputs.image_ref }}" "${{ inputs.context }}"
+
+      - name: Build image (selected target)
+        if: ${{ inputs.docker_target != '' }}
+        run: docker build -f "${{ inputs.dockerfile }}" --target "${{ inputs.docker_target }}" -t "${{ inputs.image_ref }}" "${{ inputs.context }}"
+
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: ${{ inputs.image_ref }}
+          format: ${{ inputs.format }}
+          exit-code: "1"
+          vuln-type: ${{ inputs.vuln_type }}
+          severity: ${{ inputs.severity }}

@@ -11,12 +11,12 @@ use parking_lot::RwLock;
 use rmcp::{
     ErrorData as McpError, ServerHandler,
     model::{
-        AnnotateAble, CallToolRequestParam, CallToolResult, CompleteRequestParam, CompleteResult,
-        Content, GetPromptRequestParam, GetPromptResult, Implementation, ListPromptsResult,
-        ListResourcesResult, ListToolsResult, PaginatedRequestParam, Prompt, ProtocolVersion,
-        RawResource, ReadResourceRequestParam, ReadResourceResult, Reference, Resource,
-        ServerCapabilities, ServerInfo, SetLevelRequestParam, SubscribeRequestParam, Tool,
-        UnsubscribeRequestParam,
+        AnnotateAble, CallToolRequestParams, CallToolResult, CompleteRequestParams, CompleteResult,
+        Content, GetPromptRequestParams, GetPromptResult, Implementation, ListPromptsResult,
+        ListResourcesResult, ListToolsResult, PaginatedRequestParams, Prompt, ProtocolVersion,
+        RawResource, ReadResourceRequestParams, ReadResourceResult, Reference, Resource,
+        ServerCapabilities, ServerInfo, SetLevelRequestParams, SubscribeRequestParams, Tool,
+        UnsubscribeRequestParams,
     },
     service::{RequestContext, RoleServer},
 };
@@ -133,7 +133,7 @@ impl ServerHandler for AdapterMcpServer {
 
     async fn set_level(
         &self,
-        request: SetLevelRequestParam,
+        request: SetLevelRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<(), McpError> {
         let session_id = mcp_session_id_from_context(&context);
@@ -152,7 +152,7 @@ impl ServerHandler for AdapterMcpServer {
 
     async fn complete(
         &self,
-        mut request: CompleteRequestParam,
+        mut request: CompleteRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CompleteResult, McpError> {
         let session_id = mcp_session_id_from_context(&context);
@@ -210,7 +210,7 @@ impl ServerHandler for AdapterMcpServer {
 
     async fn subscribe(
         &self,
-        request: SubscribeRequestParam,
+        request: SubscribeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<(), McpError> {
         let session_id = mcp_session_id_from_context(&context);
@@ -264,7 +264,7 @@ impl ServerHandler for AdapterMcpServer {
 
     async fn unsubscribe(
         &self,
-        request: UnsubscribeRequestParam,
+        request: UnsubscribeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<(), McpError> {
         let session_id = mcp_session_id_from_context(&context);
@@ -319,7 +319,7 @@ impl ServerHandler for AdapterMcpServer {
     /// List all tools from all backends.
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         let session_id = mcp_session_id_from_context(&context);
@@ -373,7 +373,7 @@ impl ServerHandler for AdapterMcpServer {
     /// Call a tool by routing to the appropriate backend.
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let session_id = mcp_session_id_from_context(&context);
@@ -461,7 +461,7 @@ impl ServerHandler for AdapterMcpServer {
     /// Read a resource by routing to the appropriate backend.
     async fn read_resource(
         &self,
-        request: ReadResourceRequestParam,
+        request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
         let session_id = mcp_session_id_from_context(&context);
@@ -533,7 +533,7 @@ impl ServerHandler for AdapterMcpServer {
     /// List resources from all backends.
     async fn list_resources(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
         let session_id = mcp_session_id_from_context(&context);
@@ -571,7 +571,7 @@ impl ServerHandler for AdapterMcpServer {
     /// Get a prompt by routing to the appropriate backend.
     async fn get_prompt(
         &self,
-        request: GetPromptRequestParam,
+        request: GetPromptRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResult, McpError> {
         let session_id = mcp_session_id_from_context(&context);
@@ -644,7 +644,7 @@ impl ServerHandler for AdapterMcpServer {
     /// List prompts from all backends.
     async fn list_prompts(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, McpError> {
         let session_id = mcp_session_id_from_context(&context);

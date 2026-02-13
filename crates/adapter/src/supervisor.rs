@@ -16,11 +16,11 @@ use parking_lot::RwLock;
 use rmcp::{
     ClientHandler, RoleClient, ServiceExt,
     model::{
-        CallToolRequestParam, CallToolResult, ClientInfo, CompleteRequestParam, CompleteResult,
-        CreateElicitationRequestParam, CreateElicitationResult, CreateMessageRequestMethod,
-        CreateMessageRequestParam, CreateMessageResult, ErrorData as McpError,
-        GetPromptRequestParam, GetPromptResult, ListRootsResult, LoggingMessageNotificationParam,
-        ProgressNotificationParam, Prompt, ReadResourceRequestParam, ReadResourceResult, Resource,
+        CallToolRequestParams, CallToolResult, ClientInfo, CompleteRequestParams, CompleteResult,
+        CreateElicitationRequestParams, CreateElicitationResult, CreateMessageRequestMethod,
+        CreateMessageRequestParams, CreateMessageResult, ErrorData as McpError,
+        GetPromptRequestParams, GetPromptResult, ListRootsResult, LoggingMessageNotificationParam,
+        ProgressNotificationParam, Prompt, ReadResourceRequestParams, ReadResourceResult, Resource,
         ResourceUpdatedNotificationParam, Tool,
     },
     service::{Peer, RequestContext, RoleServer, RunningService, ServiceError},
@@ -177,7 +177,7 @@ impl ClientHandler for ProxyClientHandler {
 
     fn create_message(
         &self,
-        params: CreateMessageRequestParam,
+        params: CreateMessageRequestParams,
         _context: RequestContext<RoleClient>,
     ) -> impl std::future::Future<Output = std::result::Result<CreateMessageResult, McpError>> + Send + '_
     {
@@ -210,7 +210,7 @@ impl ClientHandler for ProxyClientHandler {
 
     fn create_elicitation(
         &self,
-        request: CreateElicitationRequestParam,
+        request: CreateElicitationRequestParams,
         _context: RequestContext<RoleClient>,
     ) -> impl std::future::Future<Output = std::result::Result<CreateElicitationResult, McpError>>
     + Send
@@ -768,9 +768,11 @@ impl StdioBackend {
         let args = arguments.as_object().cloned();
         let request = rmcp::model::ClientRequest::CallToolRequest(rmcp::model::CallToolRequest {
             method: rmcp::model::CallToolRequestMethod,
-            params: CallToolRequestParam {
+            params: CallToolRequestParams {
                 name: name.to_string().into(),
                 arguments: args,
+                meta: None,
+                task: None,
             },
             extensions: rmcp::model::Extensions::default(),
         });
@@ -839,8 +841,9 @@ impl StdioBackend {
         let request =
             rmcp::model::ClientRequest::ReadResourceRequest(rmcp::model::ReadResourceRequest {
                 method: rmcp::model::ReadResourceRequestMethod,
-                params: ReadResourceRequestParam {
+                params: ReadResourceRequestParams {
                     uri: uri.to_string(),
+                    meta: None,
                 },
                 extensions: rmcp::model::Extensions::default(),
             });
@@ -910,9 +913,10 @@ impl StdioBackend {
         let peer = client.peer().clone();
         let request = rmcp::model::ClientRequest::GetPromptRequest(rmcp::model::GetPromptRequest {
             method: rmcp::model::GetPromptRequestMethod,
-            params: GetPromptRequestParam {
+            params: GetPromptRequestParams {
                 name: name.to_string(),
                 arguments,
+                meta: None,
             },
             extensions: rmcp::model::Extensions::default(),
         });
@@ -959,7 +963,7 @@ impl StdioBackend {
     async fn complete_per_call(
         &self,
         session_id: Option<&str>,
-        request: CompleteRequestParam,
+        request: CompleteRequestParams,
     ) -> Result<CompleteResult> {
         let startup_timeout = self.startup_timeout;
         let handler = self.per_call_handler(session_id);
@@ -1265,9 +1269,11 @@ impl Backend for StdioBackend {
 
         let request = rmcp::model::ClientRequest::CallToolRequest(rmcp::model::CallToolRequest {
             method: rmcp::model::CallToolRequestMethod,
-            params: CallToolRequestParam {
+            params: CallToolRequestParams {
                 name: name.to_string().into(),
                 arguments: args,
+                meta: None,
+                task: None,
             },
             extensions: rmcp::model::Extensions::default(),
         });
@@ -1384,8 +1390,9 @@ impl Backend for StdioBackend {
         let request =
             rmcp::model::ClientRequest::ReadResourceRequest(rmcp::model::ReadResourceRequest {
                 method: rmcp::model::ReadResourceRequestMethod,
-                params: ReadResourceRequestParam {
+                params: ReadResourceRequestParams {
                     uri: uri.to_string(),
+                    meta: None,
                 },
                 extensions: rmcp::model::Extensions::default(),
             });
@@ -1502,9 +1509,10 @@ impl Backend for StdioBackend {
 
         let request = rmcp::model::ClientRequest::GetPromptRequest(rmcp::model::GetPromptRequest {
             method: rmcp::model::GetPromptRequestMethod,
-            params: GetPromptRequestParam {
+            params: GetPromptRequestParams {
                 name: name.to_string(),
                 arguments,
+                meta: None,
             },
             extensions: rmcp::model::Extensions::default(),
         });
@@ -1585,7 +1593,7 @@ impl Backend for StdioBackend {
     async fn complete(
         &self,
         session_id: Option<&str>,
-        request: CompleteRequestParam,
+        request: CompleteRequestParams,
     ) -> Result<CompleteResult> {
         let peer = match self.lifecycle {
             StdioLifecycle::Persistent => self.get_peer().await?,
@@ -1707,8 +1715,9 @@ impl Backend for StdioBackend {
 
         let request = rmcp::model::ClientRequest::SubscribeRequest(rmcp::model::SubscribeRequest {
             method: rmcp::model::SubscribeRequestMethod,
-            params: rmcp::model::SubscribeRequestParam {
+            params: rmcp::model::SubscribeRequestParams {
                 uri: uri.to_string(),
+                meta: None,
             },
             extensions: rmcp::model::Extensions::default(),
         });
@@ -1812,8 +1821,9 @@ impl Backend for StdioBackend {
         let request =
             rmcp::model::ClientRequest::UnsubscribeRequest(rmcp::model::UnsubscribeRequest {
                 method: rmcp::model::UnsubscribeRequestMethod,
-                params: rmcp::model::UnsubscribeRequestParam {
+                params: rmcp::model::UnsubscribeRequestParams {
                     uri: uri.to_string(),
+                    meta: None,
                 },
                 extensions: rmcp::model::Extensions::default(),
             });

@@ -20,7 +20,7 @@ openapiv3 = "2"
 sha2 = "0.10"
 hex = "0.4"
 regex = "1"
-rmcp = { version = "0.12.0" }
+rmcp = { version = "0.15.0" }
 unrelated-http-tools = { path = "../http-tools" }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"

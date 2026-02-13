@@ -65,7 +65,7 @@ Tenant settings live on the `tenants` row:
 - `audit_retention_days` (integer, default `30`, must be \(\ge 0\))
 - `audit_default_level` (`off|summary|metadata|payload`, default `metadata`)
 
-Today, `audit_default_level` is mainly a **detail-level placeholder**: the stored row shape is the same regardless of level. Audit writes are enabled when:
+Today, `audit_default_level` controls whether some events are allowed to include **bounded payload samples** for forensics (still best-effort, and still not intended for secrets). Audit writes are enabled when:
 
 - `audit_enabled = true`, and
 - `audit_default_level != 'off'`
@@ -80,12 +80,29 @@ This is a **“what happened”** log (not a “who did it” log).
 
 - **Data plane**
   - `mcp.tools_call`
+  - `mcp.payload_limit_exceeded` (transport / payload safety limits)
 - **Tenant control plane** (tenant token scoped)
   - examples: `tenant.profile_put`, `tenant.profile_delete`, `tenant.tool_source_put`, `tenant.secret_put`, `tenant.api_key_create`, …
 - **Admin control plane** (admin token scoped; acts on a tenant)
   - examples: `admin.tenant_put`, `admin.profile_put`, `admin.tool_source_put`, `admin.secret_put`, …
 
 Note: updating tenant audit settings via `/tenant/v1/audit/settings` is intentionally **not** recorded as an audit event.
+
+### `mcp.payload_limit_exceeded`
+
+Emitted when the Gateway rejects/closes a request/stream due to configured transport limits (body/SSE size or JSON complexity caps).
+
+- `ok`: `false`
+- `error_kind`: `payload_limit_exceeded`
+- `meta` includes (best-effort):
+  - `direction`: `downstream_request | upstream_sse | downstream_sse`
+  - `metric`: `bytes | complexity`
+  - `observed`, `limit`
+  - `actionTaken`: e.g. `rejected | closed_stream`
+  - `reason`: which limit tripped (e.g. `maxPostBodyBytes`, `maxSseEventBytes`, `maxJsonDepth`, …)
+  - `profileId` and (if relevant) `upstreamId`
+  - convenience keys for byte limits: `bytesObserved`, `limitBytes`
+  - when `audit_default_level = payload`: a bounded sample (`sample`, plus `sampleTruncated`)
 
 ---
 

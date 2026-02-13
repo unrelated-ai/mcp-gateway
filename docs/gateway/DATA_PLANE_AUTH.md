@@ -1,4 +1,4 @@
-## Gateway data-plane authentication (Mode 1 + Mode 3)
+# Gateway data-plane authentication (Mode 1 + Mode 3)
 
 This document describes **how clients authenticate to the Gateway data plane** (`/{profile_id}/mcp`) and what is configurable per **profile**.
 
@@ -50,9 +50,19 @@ Profiles control data-plane auth via:
   - `apiKeyInitializeOnly` (default)
   - `apiKeyEveryRequest`
   - `jwtEveryRequest`
-- `acceptXApiKey` (default: `true`): whether the `x-api-key` alias is accepted
+- `acceptXApiKey` (default: `false`): whether the `x-api-key` alias is accepted
 
-### `apiKeyInitializeOnly` (recommended default)
+Recommended for production / internet-exposed profiles:
+
+- **`apiKeyEveryRequest`** or **`jwtEveryRequest`** (per-request authentication)
+
+The `apiKeyInitializeOnly` mode exists for compatibility with some MCP clients, but it is less secure.
+
+UI note:
+
+- The Gateway UI creates new profiles with **`apiKeyEveryRequest`** by default and keeps `acceptXApiKey` **off** by default.
+
+### `apiKeyInitializeOnly` (compatibility; not recommended)
 
 - The client must provide an API key **only for `initialize`**.
 - The resulting Gateway session token (`Mcp-Session-Id`) embeds `{tenant_id, api_key_id}`.
@@ -60,7 +70,7 @@ Profiles control data-plane auth via:
   - checks the key is not revoked, and
   - meters usage counters per key.
 
-This mode is the most compatible with MCP clients that may not easily attach extra headers on the SSE `GET` stream.
+This mode is the most compatible with MCP clients that may not easily attach extra headers on the SSE `GET` stream, but it increases the impact of a leaked session token (session replay until expiry).
 
 ### `apiKeyEveryRequest`
 
@@ -159,7 +169,7 @@ dataPlaneAuth:
   mode: static-api-keys
   apiKeys:
     - "ugw_sk_..."
-  acceptXApiKey: true
+  acceptXApiKey: false
   requireEveryRequest: false
 ```
 
