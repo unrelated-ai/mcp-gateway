@@ -133,7 +133,6 @@ impl InvalidationDispatcher {
         }
     }
 
-    #[allow(dead_code)] // reserved for follow-up write-path event emission centralization
     pub async fn publish_best_effort(&self, event: &InvalidationEvent) {
         if let Some(pool) = &self.pool {
             let _ = publish(pool, event).await;
@@ -201,6 +200,32 @@ pub async fn start_listener(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audit::{AuditEvent, AuditLevel};
+    use crate::endpoint_cache::UpstreamEndpoint;
+    use crate::tools_cache::CachedToolsSurface;
+    use async_trait::async_trait;
+    use parking_lot::Mutex;
+    use rmcp::model::{JsonObject, Tool};
+    use std::collections::{HashMap, HashSet};
+    use std::time::Duration;
+
+    #[derive(Default)]
+    struct TestAuditSink {
+        invalidated_tenants: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl AuditSink for TestAuditSink {
+        async fn record(&self, _event: AuditEvent) {}
+
+        async fn tenant_default_level(&self, _tenant_id: &str) -> AuditLevel {
+            AuditLevel::Off
+        }
+
+        fn invalidate_tenant_settings_cache(&self, tenant_id: &str) {
+            self.invalidated_tenants.lock().push(tenant_id.to_string());
+        }
+    }
 
     #[test]
     fn invalidation_event_serializes_expected_tag_names() {
@@ -263,6 +288,64 @@ mod tests {
             LocalInvalidationAction::Upstream {
                 upstream_id: "u1".to_string()
             }
+        );
+    }
+
+    #[test]
+    fn apply_local_invalidates_profile_and_upstream_caches_and_audit_settings() {
+        let tenant_catalog = Arc::new(TenantCatalog::new());
+        let tools_cache = Arc::new(ToolSurfaceCache::new(Duration::from_secs(60)));
+        let endpoint_cache = Arc::new(UpstreamEndpointCache::new(Duration::from_secs(60)));
+        let audit = Arc::new(TestAuditSink::default());
+
+        let dispatcher = InvalidationDispatcher::new(
+            None,
+            tenant_catalog,
+            tools_cache.clone(),
+            endpoint_cache.clone(),
+            audit.clone(),
+        );
+
+        let tool = Tool::new("echo", "echo", Arc::new(JsonObject::new()));
+        let cached_surface = CachedToolsSurface {
+            tools: Arc::new(vec![tool]),
+            routes: Arc::new(HashMap::new()),
+            ambiguous_names: Arc::new(HashSet::new()),
+        };
+        tools_cache.put(
+            "profile-1",
+            "session-1".to_string(),
+            "fingerprint-1".to_string(),
+            cached_surface,
+        );
+        assert!(tools_cache.get("session-1", "fingerprint-1").is_some());
+
+        let mut endpoints = HashMap::new();
+        endpoints.insert(
+            "primary".to_string(),
+            UpstreamEndpoint {
+                url: "https://example.com".to_string(),
+                auth: None,
+            },
+        );
+        endpoint_cache.put("upstream-1".to_string(), endpoints);
+        assert!(endpoint_cache.get("upstream-1", "primary").is_some());
+
+        dispatcher.apply_local(&InvalidationEvent::Profile {
+            profile_id: "profile-1".to_string(),
+        });
+        dispatcher.apply_local(&InvalidationEvent::Upstream {
+            upstream_id: "upstream-1".to_string(),
+        });
+        dispatcher.apply_local(&InvalidationEvent::TenantAuditSettings {
+            tenant_id: "tenant-1".to_string(),
+        });
+
+        assert!(tools_cache.get("session-1", "fingerprint-1").is_none());
+        assert!(endpoint_cache.get("upstream-1", "primary").is_none());
+        assert_eq!(
+            audit.invalidated_tenants.lock().as_slice(),
+            &["tenant-1".to_string()]
         );
     }
 }

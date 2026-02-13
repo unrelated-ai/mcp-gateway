@@ -118,13 +118,12 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
     let profile_count = config.profiles.len();
     let session_secrets = load_session_secrets();
     let session_ttl = load_session_ttl();
-
     let shared_source_ids: Arc<std::collections::HashSet<String>> =
         Arc::new(config.shared_sources.keys().cloned().collect());
 
     let catalog = Arc::new(catalog::SharedCatalog::from_config(&config).await?);
 
-    let (store, admin_store, pg_pool) = build_store(&args, config).await?;
+    let (store, admin_store, pg_pool, pg_store) = build_store(&args, config).await?;
 
     // Graceful shutdown coordination for all long-lived tasks (servers + streams).
     let ct = CancellationToken::new();
@@ -159,13 +158,9 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
         )),
     });
 
-    let invalidation = Arc::new(pg_invalidation::InvalidationDispatcher::new(
-        pg_pool.clone(),
-        mcp_state.tenant_catalog.clone(),
-        mcp_state.tools_cache.clone(),
-        mcp_state.endpoint_cache.clone(),
-        mcp_state.audit.clone(),
-    ));
+    let invalidation = build_invalidation_dispatcher(pg_pool.clone(), &mcp_state);
+
+    wire_store_invalidation_publisher(pg_store, invalidation.clone());
 
     start_mode3_ha_tasks(invalidation.clone(), ct.clone()).await?;
     start_tool_contract_invalidator(&mcp_state, ct.clone());
@@ -284,6 +279,33 @@ async fn start_mode3_ha_tasks(
         .await
         .with_context(|| "start Postgres LISTEN/NOTIFY invalidation listener")?;
     Ok(())
+}
+
+fn wire_store_invalidation_publisher(
+    pg_store: Option<Arc<pg_store::PostgresStore>>,
+    invalidation: Arc<pg_invalidation::InvalidationDispatcher>,
+) {
+    if let Some(pg_store) = pg_store {
+        pg_store.set_invalidation_publisher(Arc::new(move |event| {
+            let invalidation = invalidation.clone();
+            tokio::spawn(async move {
+                invalidation.publish_best_effort(&event).await;
+            });
+        }));
+    }
+}
+
+fn build_invalidation_dispatcher(
+    pg_pool: Option<sqlx::PgPool>,
+    mcp_state: &Arc<mcp::McpState>,
+) -> Arc<pg_invalidation::InvalidationDispatcher> {
+    Arc::new(pg_invalidation::InvalidationDispatcher::new(
+        pg_pool,
+        mcp_state.tenant_catalog.clone(),
+        mcp_state.tools_cache.clone(),
+        mcp_state.endpoint_cache.clone(),
+        mcp_state.audit.clone(),
+    ))
 }
 
 fn start_tool_contract_invalidator(mcp_state: &Arc<mcp::McpState>, ct: CancellationToken) {
@@ -531,6 +553,7 @@ async fn build_store(
     Arc<dyn store::Store>,
     Option<Arc<dyn store::AdminStore>>,
     Option<sqlx::PgPool>,
+    Option<Arc<pg_store::PostgresStore>>,
 )> {
     if let Some(database_url) = &args.database_url {
         tracing::info!(
@@ -550,12 +573,14 @@ async fn build_store(
         let pg = Arc::new(pg);
         Ok((
             pg.clone() as Arc<dyn store::Store>,
-            Some(pg as Arc<dyn store::AdminStore>),
+            Some(pg.clone() as Arc<dyn store::AdminStore>),
             Some(pool),
+            Some(pg.clone()),
         ))
     } else {
         Ok((
             Arc::new(store::ConfigStore::new(config)) as Arc<dyn store::Store>,
+            None,
             None,
             None,
         ))

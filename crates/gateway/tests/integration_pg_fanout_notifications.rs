@@ -411,6 +411,32 @@ async fn admin_put(
     resp.json().await.context("admin PUT json")
 }
 
+async fn wait_for_expected_invalidation_event(
+    listener: &mut sqlx::postgres::PgListener,
+    expected_type: &str,
+    expected_fields: &[(&str, &str)],
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let notification = tokio::time::timeout_at(deadline, listener.recv())
+            .await
+            .context("timeout waiting for invalidation event")?
+            .context("receive invalidation event")?;
+        let payload = notification.payload();
+        let parsed: serde_json::Value =
+            serde_json::from_str(payload).context("parse invalidation payload")?;
+
+        let type_matches = parsed.get("type") == Some(&json!(expected_type));
+        let fields_match = expected_fields
+            .iter()
+            .all(|(k, v)| parsed.get(*k) == Some(&json!(*v)));
+        if type_matches && fields_match {
+            return Ok(());
+        }
+    }
+}
+
 async fn admin_issue_tenant_token(
     client: &reqwest::Client,
     admin_base: &str,
@@ -507,23 +533,219 @@ async fn put_tenant_audit_settings_emits_tenant_audit_settings_event() -> anyhow
     )
     .await?;
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    let mut saw_expected = false;
-    while !saw_expected {
-        let notification = tokio::time::timeout_at(deadline, listener.recv())
-            .await
-            .context("timeout waiting for invalidation event")?
-            .context("receive invalidation event")?;
-        let payload = notification.payload();
-        let parsed: serde_json::Value =
-            serde_json::from_str(payload).context("parse invalidation payload")?;
-        if parsed.get("type") == Some(&json!("tenant_audit_settings"))
-            && parsed.get("tenant_id") == Some(&json!("t1"))
-        {
-            saw_expected = true;
-        }
-    }
-    anyhow::ensure!(saw_expected, "expected tenant_audit_settings event");
+    wait_for_expected_invalidation_event(
+        &mut listener,
+        "tenant_audit_settings",
+        &[("tenant_id", "t1")],
+        Duration::from_secs(10),
+    )
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers)"]
+async fn put_upstream_emits_upstream_invalidation_event() -> anyhow::Result<()> {
+    // Postgres
+    let pg = GenericImage::new("postgres", "16-alpine")
+        .with_exposed_port(5432.tcp())
+        .with_env_var("POSTGRES_PASSWORD", "postgres")
+        .with_env_var("POSTGRES_USER", "postgres")
+        .with_env_var("POSTGRES_DB", "gateway")
+        .start()
+        .await
+        .context("start postgres container")?;
+    let host = pg.get_host().await?.to_string();
+    let port = pg.get_host_port_ipv4(5432).await?;
+    let database_url =
+        format!("postgres://postgres:postgres@{host}:{port}/gateway?sslmode=disable");
+    wait_pg_ready(&database_url, Duration::from_secs(30)).await?;
+    apply_dbmate_migrations(&database_url).await?;
+
+    // Gateway (Mode 3).
+    let gw = spawn_gateway(&database_url, Some(ADMIN_TOKEN), SESSION_SECRET)?;
+    let admin_base = gw.admin_base.clone();
+    let _gw = KillOnDrop(gw.child);
+    wait_http_ok(&format!("{admin_base}/health"), Duration::from_secs(20)).await?;
+
+    let mut listener = sqlx::postgres::PgListener::connect(&database_url)
+        .await
+        .context("connect pg listener")?;
+    listener
+        .listen("unrelated_gateway_invalidation_v1")
+        .await
+        .context("listen invalidation channel")?;
+
+    let client = reqwest::Client::new();
+    let _ = admin_post(
+        &client,
+        &admin_base,
+        "/admin/v1/upstreams",
+        json!({
+            "id": "u1",
+            "enabled": true,
+            "endpoints": [{"id": "e1", "url": "https://example.com/mcp"}]
+        }),
+    )
+    .await?;
+
+    wait_for_expected_invalidation_event(
+        &mut listener,
+        "upstream",
+        &[("upstream_id", "u1")],
+        Duration::from_secs(10),
+    )
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers)"]
+async fn put_profile_emits_profile_invalidation_event() -> anyhow::Result<()> {
+    // Postgres
+    let pg = GenericImage::new("postgres", "16-alpine")
+        .with_exposed_port(5432.tcp())
+        .with_env_var("POSTGRES_PASSWORD", "postgres")
+        .with_env_var("POSTGRES_USER", "postgres")
+        .with_env_var("POSTGRES_DB", "gateway")
+        .start()
+        .await
+        .context("start postgres container")?;
+    let host = pg.get_host().await?.to_string();
+    let port = pg.get_host_port_ipv4(5432).await?;
+    let database_url =
+        format!("postgres://postgres:postgres@{host}:{port}/gateway?sslmode=disable");
+    wait_pg_ready(&database_url, Duration::from_secs(30)).await?;
+    apply_dbmate_migrations(&database_url).await?;
+
+    // Gateway (Mode 3).
+    let gw = spawn_gateway(&database_url, Some(ADMIN_TOKEN), SESSION_SECRET)?;
+    let admin_base = gw.admin_base.clone();
+    let _gw = KillOnDrop(gw.child);
+    wait_http_ok(&format!("{admin_base}/health"), Duration::from_secs(20)).await?;
+
+    let client = reqwest::Client::new();
+    let _ = admin_post(
+        &client,
+        &admin_base,
+        "/admin/v1/tenants",
+        json!({ "id": "t1", "enabled": true }),
+    )
+    .await?;
+    let _ = admin_post(
+        &client,
+        &admin_base,
+        "/admin/v1/upstreams",
+        json!({
+            "id": "u1",
+            "enabled": true,
+            "endpoints": [{"id": "e1", "url": "https://example.com/mcp"}]
+        }),
+    )
+    .await?;
+
+    // Start listening right before profile mutation to avoid unrelated bootstrap events.
+    let mut listener = sqlx::postgres::PgListener::connect(&database_url)
+        .await
+        .context("connect pg listener")?;
+    listener
+        .listen("unrelated_gateway_invalidation_v1")
+        .await
+        .context("listen invalidation channel")?;
+
+    let profile = admin_post(
+        &client,
+        &admin_base,
+        "/admin/v1/profiles",
+        json!({
+            "tenantId": "t1",
+            "name": "p1",
+            "allowPartialUpstreams": true,
+            "upstreams": ["u1"],
+            "tools": []
+        }),
+    )
+    .await?;
+    let profile_id = profile
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .context("create profile response missing id")?
+        .to_string();
+
+    wait_for_expected_invalidation_event(
+        &mut listener,
+        "profile",
+        &[("profile_id", &profile_id)],
+        Duration::from_secs(10),
+    )
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers)"]
+async fn put_tool_source_emits_tenant_tool_source_invalidation_event() -> anyhow::Result<()> {
+    // Postgres
+    let pg = GenericImage::new("postgres", "16-alpine")
+        .with_exposed_port(5432.tcp())
+        .with_env_var("POSTGRES_PASSWORD", "postgres")
+        .with_env_var("POSTGRES_USER", "postgres")
+        .with_env_var("POSTGRES_DB", "gateway")
+        .start()
+        .await
+        .context("start postgres container")?;
+    let host = pg.get_host().await?.to_string();
+    let port = pg.get_host_port_ipv4(5432).await?;
+    let database_url =
+        format!("postgres://postgres:postgres@{host}:{port}/gateway?sslmode=disable");
+    wait_pg_ready(&database_url, Duration::from_secs(30)).await?;
+    apply_dbmate_migrations(&database_url).await?;
+
+    // Gateway (Mode 3).
+    let gw = spawn_gateway(&database_url, Some(ADMIN_TOKEN), SESSION_SECRET)?;
+    let admin_base = gw.admin_base.clone();
+    let _gw = KillOnDrop(gw.child);
+    wait_http_ok(&format!("{admin_base}/health"), Duration::from_secs(20)).await?;
+
+    let client = reqwest::Client::new();
+    let _ = admin_post(
+        &client,
+        &admin_base,
+        "/admin/v1/tenants",
+        json!({ "id": "t1", "enabled": true }),
+    )
+    .await?;
+
+    let mut listener = sqlx::postgres::PgListener::connect(&database_url)
+        .await
+        .context("connect pg listener")?;
+    listener
+        .listen("unrelated_gateway_invalidation_v1")
+        .await
+        .context("listen invalidation channel")?;
+
+    let _ = admin_put(
+        &client,
+        &admin_base,
+        "/admin/v1/tenants/t1/tool-sources/s1",
+        json!({
+            "type": "http",
+            "enabled": true,
+            "baseUrl": "https://example.com",
+            "tools": {
+                "ping": { "method": "GET", "path": "/ping" }
+            }
+        }),
+    )
+    .await?;
+
+    wait_for_expected_invalidation_event(
+        &mut listener,
+        "tenant_tool_source",
+        &[("tenant_id", "t1"), ("source_id", "s1")],
+        Duration::from_secs(10),
+    )
+    .await?;
     Ok(())
 }
 

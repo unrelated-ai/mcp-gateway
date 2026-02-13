@@ -8,10 +8,12 @@ use crate::store::{
 };
 use crate::tool_policy::ToolPolicy;
 use async_trait::async_trait;
+use parking_lot::RwLock;
 use rand_core::{OsRng, TryRngCore as _};
 use serde_json::Value;
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Postgres, Row as _, Transaction};
+use std::sync::Arc;
 use unrelated_tool_transforms::TransformPipeline;
 use uuid::Uuid;
 
@@ -29,7 +31,11 @@ fn decode_json_opt<T: serde::de::DeserializeOwned>(
 pub struct PostgresStore {
     pool: PgPool,
     secrets_cipher: std::sync::Arc<crate::secrets_crypto::SecretsCipher>,
+    invalidation_publisher: Arc<RwLock<Option<InvalidationPublisher>>>,
 }
+
+type InvalidationPublisher =
+    Arc<dyn Fn(pg_invalidation::InvalidationEvent) + Send + Sync + 'static>;
 
 #[derive(Debug, Clone)]
 struct ProfileAuthCore {
@@ -135,6 +141,30 @@ impl PostgresStore {
         Self {
             pool,
             secrets_cipher,
+            invalidation_publisher: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    pub(crate) fn set_invalidation_publisher(&self, publisher: InvalidationPublisher) {
+        *self.invalidation_publisher.write() = Some(publisher);
+    }
+
+    fn emit_invalidation_events_best_effort(
+        &self,
+        events: Vec<pg_invalidation::InvalidationEvent>,
+    ) {
+        if events.is_empty() {
+            return;
+        }
+
+        let Some(publish) = self.invalidation_publisher.read().clone() else {
+            tracing::warn!(
+                "invalidation publisher is not configured; skipping best-effort fanout events"
+            );
+            return;
+        };
+        for event in events {
+            publish(event);
         }
     }
 
@@ -896,15 +926,11 @@ where tenant_id = $1
             .execute(&self.pool)
             .await;
 
-            // Best-effort HA invalidation.
-            let _ = pg_invalidation::publish(
-                &self.pool,
-                &pg_invalidation::InvalidationEvent::TenantSecret {
-                    tenant_id: tenant_id.to_string(),
-                    name: Some(name.to_string()),
-                },
-            )
-            .await;
+            let events = vec![pg_invalidation::InvalidationEvent::TenantSecret {
+                tenant_id: tenant_id.to_string(),
+                name: Some(name.to_string()),
+            }];
+            self.emit_invalidation_events_best_effort(events);
 
             return Ok(Some(value));
         }
@@ -1323,23 +1349,16 @@ where id = $1
 
         tx.commit().await?;
 
+        let mut events = Vec::new();
         if res.rows_affected() > 0 {
-            let _ = pg_invalidation::publish(
-                &self.pool,
-                &pg_invalidation::InvalidationEvent::Upstream {
-                    upstream_id: upstream_id.to_string(),
-                },
-            )
-            .await;
-
+            events.push(pg_invalidation::InvalidationEvent::Upstream {
+                upstream_id: upstream_id.to_string(),
+            });
             for profile_id in affected_profile_ids {
-                let _ = pg_invalidation::publish(
-                    &self.pool,
-                    &pg_invalidation::InvalidationEvent::Profile { profile_id },
-                )
-                .await;
+                events.push(pg_invalidation::InvalidationEvent::Profile { profile_id });
             }
         }
+        self.emit_invalidation_events_best_effort(events);
 
         Ok(res.rows_affected() > 0)
     }
@@ -1394,14 +1413,10 @@ set url = excluded.url,
 
         tx.commit().await?;
 
-        // Best-effort HA invalidation.
-        let _ = pg_invalidation::publish(
-            &self.pool,
-            &pg_invalidation::InvalidationEvent::Upstream {
-                upstream_id: upstream_id.to_string(),
-            },
-        )
-        .await;
+        let events = vec![pg_invalidation::InvalidationEvent::Upstream {
+            upstream_id: upstream_id.to_string(),
+        }];
+        self.emit_invalidation_events_best_effort(events);
         Ok(())
     }
 
@@ -1527,13 +1542,10 @@ where id = $1
 
         tx.commit().await?;
         if res.rows_affected() > 0 {
-            let _ = pg_invalidation::publish(
-                &self.pool,
-                &pg_invalidation::InvalidationEvent::Profile {
-                    profile_id: profile_id.to_string(),
-                },
-            )
-            .await;
+            let events = vec![pg_invalidation::InvalidationEvent::Profile {
+                profile_id: profile_id.to_string(),
+            }];
+            self.emit_invalidation_events_best_effort(events);
         }
         Ok(res.rows_affected() > 0)
     }
@@ -1598,14 +1610,10 @@ where id = $1
 
         tx.commit().await?;
 
-        // Best-effort HA invalidation.
-        let _ = pg_invalidation::publish(
-            &self.pool,
-            &pg_invalidation::InvalidationEvent::Profile {
-                profile_id: profile_id.to_string(),
-            },
-        )
-        .await;
+        let events = vec![pg_invalidation::InvalidationEvent::Profile {
+            profile_id: profile_id.to_string(),
+        }];
+        self.emit_invalidation_events_best_effort(events);
         Ok(())
     }
 
@@ -1696,15 +1704,11 @@ set kind = excluded.kind,
         .execute(&self.pool)
         .await?;
 
-        // Best-effort HA invalidation.
-        let _ = pg_invalidation::publish(
-            &self.pool,
-            &pg_invalidation::InvalidationEvent::TenantToolSource {
-                tenant_id: tenant_id.to_string(),
-                source_id: source_id.to_string(),
-            },
-        )
-        .await;
+        let events = vec![pg_invalidation::InvalidationEvent::TenantToolSource {
+            tenant_id: tenant_id.to_string(),
+            source_id: source_id.to_string(),
+        }];
+        self.emit_invalidation_events_best_effort(events);
 
         Ok(())
     }
@@ -1765,25 +1769,17 @@ where tenant_id = $1
 
         tx.commit().await?;
 
-        // Best-effort HA invalidation.
+        let mut events = Vec::new();
         if res.rows_affected() > 0 {
-            let _ = pg_invalidation::publish(
-                &self.pool,
-                &pg_invalidation::InvalidationEvent::TenantToolSource {
-                    tenant_id: tenant_id.to_string(),
-                    source_id: source_id.to_string(),
-                },
-            )
-            .await;
-
+            events.push(pg_invalidation::InvalidationEvent::TenantToolSource {
+                tenant_id: tenant_id.to_string(),
+                source_id: source_id.to_string(),
+            });
             for profile_id in affected_profile_ids {
-                let _ = pg_invalidation::publish(
-                    &self.pool,
-                    &pg_invalidation::InvalidationEvent::Profile { profile_id },
-                )
-                .await;
+                events.push(pg_invalidation::InvalidationEvent::Profile { profile_id });
             }
         }
+        self.emit_invalidation_events_best_effort(events);
 
         Ok(res.rows_affected() > 0)
     }
@@ -1842,15 +1838,11 @@ set kid = excluded.kid,
         .execute(&self.pool)
         .await?;
 
-        // Best-effort HA invalidation.
-        let _ = pg_invalidation::publish(
-            &self.pool,
-            &pg_invalidation::InvalidationEvent::TenantSecret {
-                tenant_id: tenant_id.to_string(),
-                name: Some(name.to_string()),
-            },
-        )
-        .await;
+        let events = vec![pg_invalidation::InvalidationEvent::TenantSecret {
+            tenant_id: tenant_id.to_string(),
+            name: Some(name.to_string()),
+        }];
+        self.emit_invalidation_events_best_effort(events);
         Ok(())
     }
 
@@ -1867,16 +1859,12 @@ where tenant_id = $1
         .execute(&self.pool)
         .await?;
 
-        // Best-effort HA invalidation.
         if res.rows_affected() > 0 {
-            let _ = pg_invalidation::publish(
-                &self.pool,
-                &pg_invalidation::InvalidationEvent::TenantSecret {
-                    tenant_id: tenant_id.to_string(),
-                    name: Some(name.to_string()),
-                },
-            )
-            .await;
+            let events = vec![pg_invalidation::InvalidationEvent::TenantSecret {
+                tenant_id: tenant_id.to_string(),
+                name: Some(name.to_string()),
+            }];
+            self.emit_invalidation_events_best_effort(events);
         }
         Ok(res.rows_affected() > 0)
     }
@@ -2242,14 +2230,10 @@ where id = $1
         if res.rows_affected() == 0 {
             anyhow::bail!("tenant not found");
         }
-        // Best-effort HA invalidation for per-tenant audit settings cache.
-        let _ = pg_invalidation::publish(
-            &self.pool,
-            &pg_invalidation::InvalidationEvent::TenantAuditSettings {
-                tenant_id: tenant_id.to_string(),
-            },
-        )
-        .await;
+        let events = vec![pg_invalidation::InvalidationEvent::TenantAuditSettings {
+            tenant_id: tenant_id.to_string(),
+        }];
+        self.emit_invalidation_events_best_effort(events);
         Ok(())
     }
 
