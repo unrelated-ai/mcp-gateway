@@ -80,8 +80,9 @@ migrations:
     tag: "0.10.0"
     pullPolicy: IfNotPresent
   # `gateway-migrator` image uses dbmate as ENTRYPOINT.
-  # Set args (not command) so this renders to `dbmate up`.
+  # Set args (not command) so this renders to `dbmate --wait up`.
   args:
+    - --wait
     - up
   backoffLimit: 3
   ttlSecondsAfterFinished: 3600

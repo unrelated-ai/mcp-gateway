@@ -24,6 +24,8 @@ const FIELD_MANAGER: &str = "unrelated-mcp-gateway-operator";
 const DEFAULT_SERVICE_PORT: i32 = 8080;
 const DEFAULT_ENDPOINT_PATH: &str = "/mcp";
 const DEFAULT_ENDPOINT_SCHEME: &str = "http";
+const DEFAULT_HTTP_PORT: i32 = 80;
+const DEFAULT_HTTPS_PORT: i32 = 443;
 const DEFAULT_CLUSTER_DOMAIN_SUFFIX: &str = "svc.cluster.local";
 const DEFAULT_DRAIN_TIMEOUT_SECS: u64 = 300;
 const DEFAULT_ROLLBACK_TIMEOUT_SECS: u64 = 120;
@@ -929,6 +931,7 @@ async fn reconcile_pending_deployment_requests(
         } else {
             upstream_id
         };
+        let service_port = service_port_from_default_upstream_url(&deployable.default_upstream_url);
         let patch = Patch::Apply(json!({
             "apiVersion": "gateway.unrelated.ai/v1alpha1",
             "kind": "McpServer",
@@ -944,7 +947,7 @@ async fn reconcile_pending_deployment_requests(
             "spec": {
                 "image": deployable.image.clone(),
                 "replicas": 1,
-                "service": { "port": DEFAULT_SERVICE_PORT },
+                "service": { "port": service_port },
                 "gateway": {
                     "upstreamId": upstream_id,
                     "deploymentRequestId": request_id.clone(),
@@ -984,6 +987,20 @@ fn endpoint_path_from_default_upstream_url(url: &str) -> String {
         path.to_string()
     } else {
         format!("/{path}")
+    }
+}
+
+fn service_port_from_default_upstream_url(url: &str) -> i32 {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return DEFAULT_SERVICE_PORT;
+    };
+    if let Some(port) = parsed.port() {
+        return i32::from(port);
+    }
+    match parsed.scheme() {
+        "http" => DEFAULT_HTTP_PORT,
+        "https" => DEFAULT_HTTPS_PORT,
+        _ => DEFAULT_SERVICE_PORT,
     }
 }
 
@@ -1943,6 +1960,26 @@ mod tests {
         assert_eq!(
             desired_upstream_id(&empty_override, "ns"),
             "managed_ns_demo_name"
+        );
+    }
+
+    #[test]
+    fn service_port_from_default_url_prefers_explicit_port_then_scheme_defaults() {
+        assert_eq!(
+            service_port_from_default_upstream_url("http://demo-nginx:18080/mcp"),
+            18_080
+        );
+        assert_eq!(
+            service_port_from_default_upstream_url("http://demo-nginx/mcp"),
+            80
+        );
+        assert_eq!(
+            service_port_from_default_upstream_url("https://demo-nginx/mcp"),
+            443
+        );
+        assert_eq!(
+            service_port_from_default_upstream_url("not-a-valid-url"),
+            DEFAULT_SERVICE_PORT
         );
     }
 }
