@@ -1,5 +1,5 @@
 use anyhow::{Context as _, anyhow};
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 use futures::StreamExt as _;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::coordination::v1::{Lease, LeaseSpec};
@@ -844,7 +844,7 @@ async fn try_acquire_or_renew_lease(
         "spec": {
             "holderIdentity": cfg.holder_identity,
             "leaseDurationSeconds": cfg.lease_duration_secs,
-            "renewTime": now.to_rfc3339(),
+            "renewTime": now.to_rfc3339_opts(SecondsFormat::Micros, false),
         }
     }));
     leases
