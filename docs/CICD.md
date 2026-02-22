@@ -5,6 +5,8 @@ This repo is a monorepo. CI is generic; releases are tag-driven.
 ## Workflows
 
 - **CI**: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (PRs only, no publishing)
+  - Rust checks: `fmt`, `clippy`, `cargo test`
+  - Helm checks: `helm dependency build`, `helm lint`, `helm template` (dev/prod/kind-local value combinations)
 - **Release entrypoint**: [`.github/workflows/release.yml`](../.github/workflows/release.yml) (tag pushes only)
 - **Reusable publisher**: [`.github/workflows/docker-release.yml`](../.github/workflows/docker-release.yml) (called from `release.yml`)
 - **Reusable release assets**: [`.github/workflows/binary-release.yml`](../.github/workflows/binary-release.yml) (called from `release.yml`)

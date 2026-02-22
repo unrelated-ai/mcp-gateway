@@ -30,6 +30,14 @@ Common use cases:
   - Commands: [`docs/gateway-cli/COMMANDS.md`](gateway-cli/COMMANDS.md)
   - Config/auth precedence: [`docs/gateway-cli/CONFIG.md`](gateway-cli/CONFIG.md)
   - `mcp.json` output: [`docs/gateway-cli/MCP_JSON.md`](gateway-cli/MCP_JSON.md)
+- **Gateway operator (scaffold)**: `crates/gateway-operator/README.md`
+  - Helm chart: `deploy/helm/unrelated-mcp-gateway-operator/`
+- **Gateway runtime/admin Helm chart**: `deploy/helm/unrelated-mcp-gateway/`
+- **Gateway UI Helm chart**: `deploy/helm/unrelated-mcp-gateway-ui/`
+- **Optional bundled Postgres chart**: `deploy/helm/unrelated-mcp-postgres/`
+- **Umbrella install chart** (operator + gateway + UI + optional postgres): `deploy/helm/unrelated-mcp-gateway-stack/`
+- **Helm deployment guide**: [`docs/deploy/HELM.md`](deploy/HELM.md)
+- **Kubernetes testing guide** (`kind` + local image workflow): [`docs/deploy/K8S_TESTING.md`](deploy/K8S_TESTING.md)
 - **Web UI (beta)**: [`docs/ui/INDEX.md`](ui/INDEX.md)
   - Build/versioning/releases: [`docs/CICD.md`](CICD.md)
 

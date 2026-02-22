@@ -9,6 +9,7 @@ Current focus:
 - **Admin-operated**: the CLI authenticates with the **admin token** and is intended for cluster operators.
   - For tenant-scoped actions (like managing API keys), the CLI uses the admin token to **issue a tenant token** and then calls tenant APIs.
   - Tenants should not rely on this CLI directly; they should use tenant-facing APIs.
+- Runtime/topology diagnostics are exposed by the Gateway `/status` endpoint (`runtimeMode`, `topology`, `nodeId`).
 
 ## Quickstart
 

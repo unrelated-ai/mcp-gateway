@@ -52,6 +52,24 @@ Notes:
 - matching is **case-insensitive**
 - hosts must match exactly (no wildcards today)
 
+## Class-aware policy for upstream MCP endpoints
+
+Upstream endpoints now carry a network class:
+
+- `external` (default)
+- `cluster-internal-managed`
+
+Policy behavior:
+
+- `external` keeps the strict default posture (private/link-local ranges blocked unless the global override is explicitly enabled).
+- `cluster-internal-managed` is intended for operator-managed in-cluster workloads and allows private-network targets without changing the global default for tenant-managed external sources.
+
+Assignment guards:
+
+- Tenant APIs cannot set `cluster-internal-managed`.
+- Admin API accepts `cluster-internal-managed` only for OIDC machine identities with control-plane write authorization.
+- Static compatibility admin token can still manage normal external upstreams, but cannot assign `cluster-internal-managed`.
+
 ## Redirects and body limits
 
 Gateway defaults are intentionally strict:

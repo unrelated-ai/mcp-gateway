@@ -69,7 +69,7 @@ These configure **OIDC principal bindings** (issuer + subject) that authorize JW
 - `upstreams list`
 - `upstreams get <id>`
 - `upstreams put <id> --endpoint <ep_id>=<url> [--endpoint ...] [--enabled true|false]`
-- `upstreams delete <id>` *(soft-delete: sets enabled=false)*
+- `upstreams delete <id>` *(hard-delete: removes the upstream)*
 
 ## `profiles`
 
@@ -77,7 +77,7 @@ These configure **OIDC principal bindings** (issuer + subject) that authorize JW
 - `profiles get <uuid>`
 - `profiles create --tenant-id <tenant> --name <name> [--description <text>] --upstream <upstream> [--upstream ...] [--source <source_id> ...] [--enabled true|false] [--allow-partial-upstreams true|false] [--tool <source_id:tool_name> ...] [--transforms-json <json> | --transforms-file <path>] [--data-plane-auth-mode <...>] [--accept-x-api-key true|false] [--rate-limit-enabled true|false] [--rate-limit-tool-calls-per-minute <n>] [--quota-enabled true|false] [--quota-tool-calls <n>] [--tool-call-timeout-secs <secs>] [--tool-policies-json <json> | --tool-policies-file <path>] [--mcp-json <json> | --mcp-file <path>]`
 - `profiles put --id <uuid> --tenant-id <tenant> --name <name> [--description <text>] --upstream <upstream> [--upstream ...] [--source <source_id> ...] [--enabled true|false] [--allow-partial-upstreams true|false] [--tool <source_id:tool_name> ...] [--transforms-json <json> | --transforms-file <path>] [--data-plane-auth-mode <...>] [--accept-x-api-key true|false] [--rate-limit-enabled true|false] [--rate-limit-tool-calls-per-minute <n>] [--quota-enabled true|false] [--quota-tool-calls <n>] [--tool-call-timeout-secs <secs>] [--tool-policies-json <json> | --tool-policies-file <path>] [--mcp-json <json> | --mcp-file <path>]`
-- `profiles delete <uuid>` *(soft-delete: sets enabled=false)*
+- `profiles delete <uuid>` *(hard-delete: removes the profile)*
 - `profiles url <uuid>` *(prints `/{profile_id}/mcp` URL using `--data-base`)*
 
 ### Profile `dataPlaneAuth` settings (Mode 3)

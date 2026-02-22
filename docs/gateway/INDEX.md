@@ -27,8 +27,11 @@ The Adapter stays “dumb plumbing” on purpose: it turns systems into MCP and 
   - `GET` stream: opens one SSE stream per upstream and merges events (event ids are prefixed to reduce collisions)
   - Partial upstream availability is supported via per-profile `allow_partial_upstreams`
 - **Control plane (admin API)**: implemented (Mode 3 only)
-  - Requires `UNRELATED_GATEWAY_ADMIN_TOKEN` (static bearer token)
+  - Supports machine auth via either:
+    - static compatibility token (`UNRELATED_GATEWAY_ADMIN_TOKEN`)
+    - control-plane OIDC/JWT (`UNRELATED_GATEWAY_CONTROL_PLANE_OIDC_*`) with required read/write scopes (defaults: `gateway.operator.read` / `gateway.operator.write`)
   - CRUD for tenants, upstreams (with endpoints), and profiles
+- **Status metadata**: `/status` includes `runtimeMode`, `topology`, and `nodeId` for support/debugging
 - **Storage backends**:
   - Mode 1 (config file): implemented for the data plane (read-only); admin API is unavailable
   - Mode 3 (Postgres): implemented (shared state for HA deployments)
