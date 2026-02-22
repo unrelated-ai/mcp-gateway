@@ -232,11 +232,30 @@ enum UpstreamsCommand {
     Delete { id: String },
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum UpstreamNetworkClassArg {
+    External,
+    ClusterInternalManaged,
+}
+
+impl From<UpstreamNetworkClassArg> for api::UpstreamNetworkClass {
+    fn from(value: UpstreamNetworkClassArg) -> Self {
+        match value {
+            UpstreamNetworkClassArg::External => api::UpstreamNetworkClass::External,
+            UpstreamNetworkClassArg::ClusterInternalManaged => {
+                api::UpstreamNetworkClass::ClusterInternalManaged
+            }
+        }
+    }
+}
+
 #[derive(Args, Debug)]
 struct UpstreamPutArgs {
     id: String,
     #[arg(long, default_value_t = true, action = ArgAction::Set)]
     enabled: bool,
+    #[arg(long, value_enum, default_value_t = UpstreamNetworkClassArg::External)]
+    network_class: UpstreamNetworkClassArg,
     /// Upstream endpoint in the form "<id>=<url>" (repeatable).
     #[arg(long = "endpoint")]
     endpoints: Vec<String>,
@@ -1117,14 +1136,25 @@ async fn handle_upstreams(
                     } else {
                         "disabled".red().to_string()
                     };
-                    println!("  {}  {}", u.id, status);
+                    println!(
+                        "  {}  {}  {}",
+                        u.id,
+                        status,
+                        format!("{:?}", u.network_class).dimmed()
+                    );
                     for ep in u.endpoints {
                         let ep_status = if ep.enabled {
                             "enabled".green().to_string()
                         } else {
                             "disabled".red().to_string()
                         };
-                        println!("    - {}  {}  {}", ep.id, ep.url.dimmed(), ep_status);
+                        println!(
+                            "    - {}  {}  {}  {}",
+                            ep.id,
+                            ep.url.dimmed(),
+                            ep_status,
+                            format!("{:?}", ep.lifecycle).dimmed()
+                        );
                     }
                 }
             }
@@ -1137,11 +1167,13 @@ async fn handle_upstreams(
                 println!("{}", "upstream".bold());
                 println!("  id: {}", u.id);
                 println!("  enabled: {}", u.enabled);
+                println!("  networkClass: {:?}", u.network_class);
                 println!("  endpoints:");
                 for ep in u.endpoints {
                     println!("    - id: {}", ep.id);
                     println!("      url: {}", ep.url);
                     println!("      enabled: {}", ep.enabled);
+                    println!("      lifecycle: {:?}", ep.lifecycle);
                 }
             }
         }
@@ -1151,7 +1183,8 @@ async fn handle_upstreams(
                 .into_iter()
                 .map(|s| parse_endpoint_kv(&s))
                 .collect::<anyhow::Result<Vec<_>>>()?;
-            api.put_upstream(&args.id, args.enabled, endpoints).await?;
+            api.put_upstream(&args.id, args.enabled, args.network_class.into(), endpoints)
+                .await?;
             if json {
                 println!("{}", serde_json::json!({"ok": true}));
             } else {
@@ -1523,6 +1556,8 @@ fn parse_endpoint_kv(s: &str) -> anyhow::Result<api::PutEndpoint> {
     Ok(api::PutEndpoint {
         id: id.to_string(),
         url: url.to_string(),
+        enabled: true,
+        lifecycle: api::UpstreamEndpointLifecycle::Active,
     })
 }
 
