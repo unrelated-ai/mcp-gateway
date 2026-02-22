@@ -20,6 +20,7 @@ import {
   DocumentIcon,
   GlobeIconSimple,
   PlusIcon,
+  ServerIconStack,
   ServerIconWireframe,
   SourcesIcon,
   TrashIcon,
@@ -31,6 +32,14 @@ const EMPTY_UPSTREAMS: tenantApi.Upstream[] = [];
 const EMPTY_SOURCES: ToolSourceSummary[] = [];
 
 type CreateKind = "tool_http";
+type GatewayStatusResponse =
+  | {
+      ok: true;
+      status: {
+        topology?: string;
+      };
+    }
+  | { ok: false; error?: string; status?: number };
 
 export default function SourcesPage() {
   const router = useRouter();
@@ -58,6 +67,23 @@ export default function SourcesPage() {
   });
   const sources: ToolSourceSummary[] = (sourcesQuery.data?.sources ??
     EMPTY_SOURCES) as ToolSourceSummary[];
+
+  const gatewayStatusQuery = useQuery({
+    queryKey: qk.gatewayStatus(),
+    queryFn: async () => {
+      const res = await fetch("/api/gateway/status", { cache: "no-store" });
+      return (await res.json()) as GatewayStatusResponse;
+    },
+  });
+  const managedMcpSupported =
+    gatewayStatusQuery.data?.ok && gatewayStatusQuery.data.status.topology === "operator-oss";
+  const managedMcpReason = gatewayStatusQuery.isPending
+    ? "Checking Gateway topology…"
+    : managedMcpSupported
+      ? null
+      : gatewayStatusQuery.data?.ok
+        ? `Requires operator topology (current: ${gatewayStatusQuery.data.status.topology ?? "unknown"}).`
+        : "Gateway status unavailable.";
 
   const profilesQuery = useQuery({
     queryKey: qk.profiles(),
@@ -178,7 +204,7 @@ export default function SourcesPage() {
               Upstreams
             </h2>
             <p className="mt-1 text-xs text-zinc-500">
-              Remote MCP servers (streamable HTTP). Profiles attach upstreams by name.
+              MCP servers registered in Gateway. Profiles attach upstreams by name.
             </p>
           </div>
           <div className="p-5">
@@ -419,8 +445,28 @@ export default function SourcesPage() {
               className="p-4 rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-violet-500/30 hover:bg-violet-500/5 transition-all"
             >
               <ServerIconWireframe className="w-8 h-8 text-violet-400 mx-auto mb-2" />
-              <div className="text-sm font-medium text-zinc-200">MCP Server</div>
-              <div className="text-xs text-zinc-500 mt-1">Streamable HTTP endpoint</div>
+              <div className="text-sm font-medium text-zinc-200">Remote MCP</div>
+              <div className="text-xs text-zinc-500 mt-1">Connect an existing MCP endpoint</div>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (!managedMcpSupported) return;
+                addPicker.onClose();
+                router.push("/sources/new/managed-mcp");
+              }}
+              disabled={!managedMcpSupported}
+              className={`p-4 rounded-xl border border-zinc-800 bg-zinc-950/60 transition-all ${
+                managedMcpSupported
+                  ? "hover:border-indigo-500/30 hover:bg-indigo-500/5"
+                  : "opacity-60 cursor-not-allowed"
+              }`}
+            >
+              <ServerIconStack className="w-8 h-8 text-indigo-400 mx-auto mb-2" />
+              <div className="text-sm font-medium text-zinc-200">Managed MCP</div>
+              <div className="text-xs text-zinc-500 mt-1">
+                {managedMcpReason ?? "Deploy from approved catalog"}
+              </div>
             </button>
             <button
               type="button"
