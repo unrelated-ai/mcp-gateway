@@ -527,6 +527,23 @@ pub enum DataPlaneAuthMode {
     JwtEveryRequest,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum UpstreamEndpointLifecycle {
+    #[default]
+    Active,
+    Draining,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum UpstreamNetworkClass {
+    #[default]
+    External,
+    ClusterInternalManaged,
+}
+
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct Profile {
@@ -567,6 +584,7 @@ pub struct Profile {
 
 #[derive(Debug, Clone)]
 pub struct Upstream {
+    pub network_class: UpstreamNetworkClass,
     pub endpoints: Vec<UpstreamEndpoint>,
 }
 
@@ -574,6 +592,8 @@ pub struct Upstream {
 pub struct UpstreamEndpoint {
     pub id: String,
     pub url: String,
+    pub enabled: bool,
+    pub lifecycle: UpstreamEndpointLifecycle,
     pub auth: Option<AuthConfig>,
 }
 
@@ -588,6 +608,7 @@ pub struct AdminUpstreamEndpoint {
     pub id: String,
     pub url: String,
     pub enabled: bool,
+    pub lifecycle: UpstreamEndpointLifecycle,
     pub auth: Option<AuthConfig>,
 }
 
@@ -595,6 +616,7 @@ pub struct AdminUpstreamEndpoint {
 pub struct AdminUpstream {
     pub id: String,
     pub enabled: bool,
+    pub network_class: UpstreamNetworkClass,
     pub endpoints: Vec<AdminUpstreamEndpoint>,
 }
 
@@ -767,10 +789,68 @@ pub struct ToolCallStatsByApiKey {
     pub max_duration_ms: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpstreamEndpointActivity {
+    pub endpoint_id: String,
+    pub active_sessions: i64,
+    pub last_seen_unix: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionActivityBinding {
+    pub upstream_id: String,
+    pub endpoint_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedMcpDeployable {
+    pub id: String,
+    pub display_name: String,
+    pub description: Option<String>,
+    pub image: String,
+    pub default_upstream_url: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ManagedMcpDeploymentStatus {
+    Pending,
+    Reconciling,
+    Ready,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedMcpDeploymentRequest {
+    pub id: String,
+    pub tenant_id: String,
+    pub deployable_id: String,
+    pub status: ManagedMcpDeploymentStatus,
+    pub upstream_id: Option<String>,
+    pub message: Option<String>,
+    pub created_at_unix: i64,
+    pub updated_at_unix: i64,
+}
+
 #[async_trait]
 pub trait Store: Send + Sync {
     async fn get_profile(&self, profile_id: &str) -> anyhow::Result<Option<Profile>>;
     async fn get_upstream(&self, upstream_id: &str) -> anyhow::Result<Option<Upstream>>;
+
+    /// Best-effort in-session activity touch for upstream endpoint drain visibility.
+    async fn record_session_activity(
+        &self,
+        _tenant_id: &str,
+        _profile_id: &str,
+        _session_hash: &str,
+        _bindings: &[SessionActivityBinding],
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
 
     /// Load a tenant-owned tool source (Mode 3 overlay).
     async fn get_tenant_tool_source(
@@ -858,8 +938,32 @@ pub trait AdminStore: Send + Sync {
         &self,
         upstream_id: &str,
         enabled: bool,
+        network_class: UpstreamNetworkClass,
         endpoints: &[UpstreamEndpoint],
     ) -> anyhow::Result<()>;
+    async fn patch_upstream_endpoint(
+        &self,
+        _upstream_id: &str,
+        _endpoint_id: &str,
+        _enabled: Option<bool>,
+        _lifecycle: Option<UpstreamEndpointLifecycle>,
+    ) -> anyhow::Result<bool> {
+        anyhow::bail!("endpoint patch is not supported by this store")
+    }
+    async fn delete_upstream_endpoint(
+        &self,
+        _upstream_id: &str,
+        _endpoint_id: &str,
+    ) -> anyhow::Result<bool> {
+        anyhow::bail!("endpoint delete is not supported by this store")
+    }
+    async fn list_upstream_endpoint_activity(
+        &self,
+        _upstream_id: &str,
+        _ttl_secs: u64,
+    ) -> anyhow::Result<Vec<UpstreamEndpointActivity>> {
+        Ok(Vec::new())
+    }
 
     async fn list_profiles(&self) -> anyhow::Result<Vec<AdminProfile>>;
     async fn get_profile(&self, profile_id: &str) -> anyhow::Result<Option<AdminProfile>>;
@@ -981,6 +1085,62 @@ pub trait AdminStore: Send + Sync {
     ///
     /// Returns the number of rows deleted.
     async fn cleanup_audit_events_for_tenant(&self, tenant_id: &str) -> anyhow::Result<u64>;
+
+    // ---------------------------------------------------------------------
+    // Managed MCP catalog + deployment requests (OSS operator contract)
+    // ---------------------------------------------------------------------
+
+    async fn list_managed_mcp_deployables(&self) -> anyhow::Result<Vec<ManagedMcpDeployable>> {
+        Ok(Vec::new())
+    }
+
+    async fn upsert_managed_mcp_deployable(
+        &self,
+        _deployable: &ManagedMcpDeployable,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("managed MCP deployables are not supported by this store")
+    }
+
+    async fn create_managed_mcp_deployment_request(
+        &self,
+        _tenant_id: &str,
+        _deployable_id: &str,
+    ) -> anyhow::Result<ManagedMcpDeploymentRequest> {
+        anyhow::bail!("managed MCP deployment requests are not supported by this store")
+    }
+
+    async fn get_managed_mcp_deployment_request(
+        &self,
+        _request_id: &str,
+    ) -> anyhow::Result<Option<ManagedMcpDeploymentRequest>> {
+        Ok(None)
+    }
+
+    async fn get_managed_mcp_deployment_request_for_tenant(
+        &self,
+        _tenant_id: &str,
+        _request_id: &str,
+    ) -> anyhow::Result<Option<ManagedMcpDeploymentRequest>> {
+        Ok(None)
+    }
+
+    async fn list_managed_mcp_deployment_requests(
+        &self,
+        _statuses: &[ManagedMcpDeploymentStatus],
+        _limit: u32,
+    ) -> anyhow::Result<Vec<ManagedMcpDeploymentRequest>> {
+        Ok(Vec::new())
+    }
+
+    async fn mark_managed_mcp_deployment_status(
+        &self,
+        _request_id: &str,
+        _status: ManagedMcpDeploymentStatus,
+        _upstream_id: Option<&str>,
+        _message: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        anyhow::bail!("managed MCP deployment status updates are not supported by this store")
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1058,12 +1218,15 @@ impl ConfigStore {
 
     fn upstream_from_config(_upstream_id: &str, cfg: &UpstreamConfig) -> Upstream {
         Upstream {
+            network_class: UpstreamNetworkClass::External,
             endpoints: cfg
                 .endpoints
                 .iter()
                 .map(|e| UpstreamEndpoint {
                     id: e.id.clone(),
                     url: e.url.clone(),
+                    enabled: true,
+                    lifecycle: UpstreamEndpointLifecycle::Active,
                     auth: None,
                 })
                 .collect(),

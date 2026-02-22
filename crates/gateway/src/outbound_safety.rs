@@ -1,3 +1,4 @@
+use crate::store::UpstreamNetworkClass;
 use unrelated_http_tools::safety::OutboundHttpSafety;
 
 /// Outbound HTTP safety policy for the Gateway.
@@ -27,6 +28,21 @@ pub fn gateway_outbound_http_safety() -> OutboundHttpSafety {
         safety.allowed_hosts = Some(set);
     }
 
+    safety
+}
+
+/// Resolve outbound safety by upstream network class.
+///
+/// `cluster-internal-managed` is reserved for operator-managed cluster workloads and allows private
+/// network targets without relaxing the global default for regular external upstreams.
+#[must_use]
+pub fn gateway_outbound_http_safety_for_class(
+    network_class: UpstreamNetworkClass,
+) -> OutboundHttpSafety {
+    let mut safety = gateway_outbound_http_safety();
+    if matches!(network_class, UpstreamNetworkClass::ClusterInternalManaged) {
+        safety.allow_private_networks = true;
+    }
     safety
 }
 

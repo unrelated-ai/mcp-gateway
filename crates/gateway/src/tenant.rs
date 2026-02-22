@@ -6,16 +6,18 @@ use crate::profile_http::{
 };
 use crate::serde_helpers::default_true;
 use crate::store::{
-    AdminProfile, AdminStore, AdminUpstream, ApiKeyMetadata, DataPlaneAuthMode, McpProfileSettings,
-    PutProfileDataPlaneAuth, PutProfileFlags, PutProfileInput, PutProfileLimits,
-    TenantSecretMetadata, ToolSourceKind, TransportLimitsSettings, UpstreamEndpoint,
+    AdminProfile, AdminStore, AdminUpstream, ApiKeyMetadata, DataPlaneAuthMode,
+    ManagedMcpDeployable, ManagedMcpDeploymentRequest, McpProfileSettings, PutProfileDataPlaneAuth,
+    PutProfileFlags, PutProfileInput, PutProfileLimits, TenantSecretMetadata, ToolSourceKind,
+    TransportLimitsSettings, UpstreamEndpoint, UpstreamEndpointActivity, UpstreamEndpointLifecycle,
+    UpstreamNetworkClass,
 };
 use crate::tenant_token::TenantSigner;
 use crate::tool_policy::ToolPolicy;
-use axum::extract::Path;
+use axum::extract::{Path, Query};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get};
+use axum::routing::{delete, get, patch};
 use axum::{Json, Router};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rmcp::model::Tool;
@@ -54,8 +56,28 @@ pub fn router(state: Arc<TenantState>) -> Router {
             get(get_upstream).put(put_upstream).delete(delete_upstream),
         )
         .route(
+            "/tenant/v1/upstreams/{upstream_id}/endpoints/{endpoint_id}",
+            patch(patch_upstream_endpoint).delete(delete_upstream_endpoint),
+        )
+        .route(
             "/tenant/v1/upstreams/{upstream_id}/surface",
             get(get_upstream_surface),
+        )
+        .route(
+            "/tenant/v1/upstreams/{upstream_id}/session-activity",
+            get(get_upstream_session_activity),
+        )
+        .route(
+            "/tenant/v1/managed-mcp/deployables",
+            get(list_managed_mcp_deployables),
+        )
+        .route(
+            "/tenant/v1/managed-mcp/deployments",
+            axum::routing::post(create_managed_mcp_deployment_request),
+        )
+        .route(
+            "/tenant/v1/managed-mcp/deployments/{request_id}",
+            get(get_managed_mcp_deployment_request),
         )
         .route(
             "/tenant/v1/profiles",
@@ -276,6 +298,7 @@ fn upstream_to_response(tenant_id: &str, u: AdminUpstream) -> Option<UpstreamRes
             id: local_id,
             owner: "tenant".to_string(),
             enabled: u.enabled,
+            network_class: u.network_class,
             endpoints: u
                 .endpoints
                 .into_iter()
@@ -283,6 +306,7 @@ fn upstream_to_response(tenant_id: &str, u: AdminUpstream) -> Option<UpstreamRes
                     id: e.id,
                     url: e.url,
                     enabled: e.enabled,
+                    lifecycle: e.lifecycle,
                     auth: e.auth,
                 })
                 .collect(),
@@ -294,6 +318,7 @@ fn upstream_to_response(tenant_id: &str, u: AdminUpstream) -> Option<UpstreamRes
         id: u.id,
         owner: "global".to_string(),
         enabled: u.enabled,
+        network_class: u.network_class,
         endpoints: u
             .endpoints
             .into_iter()
@@ -301,6 +326,7 @@ fn upstream_to_response(tenant_id: &str, u: AdminUpstream) -> Option<UpstreamRes
                 id: e.id,
                 url: e.url,
                 enabled: e.enabled,
+                lifecycle: e.lifecycle,
                 auth: e.auth,
             })
             .collect(),
@@ -371,6 +397,143 @@ async fn get_upstream(
     Json(resp).into_response()
 }
 
+async fn get_upstream_session_activity(
+    axum::Extension(state): axum::Extension<Arc<TenantState>>,
+    headers: HeaderMap,
+    Path(upstream_id): Path<String>,
+    Query(q): Query<UpstreamSessionActivityQuery>,
+) -> impl IntoResponse {
+    let tenant_id = match authn(&headers, &state.signer) {
+        Ok(t) => t,
+        Err(resp) => return resp.into_response(),
+    };
+    let Some(store) = &state.store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+    };
+
+    // Resolve tenant-owned upstream first, then global visible upstream.
+    let internal_id = tenant_upstream_internal_id(&tenant_id, &upstream_id);
+    let canonical_upstream_id = match store.get_upstream(&internal_id).await {
+        Ok(Some(_)) => internal_id,
+        Ok(None) => match store.get_upstream(&upstream_id).await {
+            Ok(Some(u)) => {
+                if upstream_to_response(&tenant_id, u).is_some() {
+                    upstream_id.clone()
+                } else {
+                    return (StatusCode::NOT_FOUND, "upstream not found").into_response();
+                }
+            }
+            Ok(None) => return (StatusCode::NOT_FOUND, "upstream not found").into_response(),
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        },
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    let ttl_secs = crate::pg_store::resolve_upstream_session_activity_ttl_secs(q.ttl_secs);
+    match store
+        .list_upstream_endpoint_activity(&canonical_upstream_id, ttl_secs)
+        .await
+    {
+        Ok(endpoints) => {
+            let generated_at_unix = now_unix_secs().map_or(0, |v| i64::try_from(v).unwrap_or(0));
+            Json(UpstreamSessionActivityResponse {
+                upstream_id,
+                ttl_secs,
+                generated_at_unix,
+                endpoints,
+            })
+            .into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn list_managed_mcp_deployables(
+    axum::Extension(state): axum::Extension<Arc<TenantState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let tenant_id = match authn(&headers, &state.signer) {
+        Ok(t) => t,
+        Err(resp) => return resp.into_response(),
+    };
+    let Some(store) = &state.store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+    };
+    match store.get_tenant(&tenant_id).await {
+        Ok(Some(t)) if t.enabled => {}
+        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+    match store.list_managed_mcp_deployables().await {
+        Ok(mut deployables) => {
+            deployables.retain(|d| d.enabled);
+            Json(ManagedMcpDeployablesResponse { deployables }).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn create_managed_mcp_deployment_request(
+    axum::Extension(state): axum::Extension<Arc<TenantState>>,
+    headers: HeaderMap,
+    Json(req): Json<CreateManagedMcpDeploymentRequestBody>,
+) -> impl IntoResponse {
+    let tenant_id = match authn(&headers, &state.signer) {
+        Ok(t) => t,
+        Err(resp) => return resp.into_response(),
+    };
+    let Some(store) = &state.store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+    };
+    match store.get_tenant(&tenant_id).await {
+        Ok(Some(t)) if t.enabled => {}
+        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+    if req.deployable_id.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "deployableId is required").into_response();
+    }
+    match store
+        .create_managed_mcp_deployment_request(&tenant_id, &req.deployable_id)
+        .await
+    {
+        Ok(request) => (
+            StatusCode::CREATED,
+            Json(ManagedMcpDeploymentResponse { request }),
+        )
+            .into_response(),
+        Err(e) => {
+            let message = e.to_string();
+            if message.contains("not found") || message.contains("disabled") {
+                return (StatusCode::BAD_REQUEST, message).into_response();
+            }
+            (StatusCode::INTERNAL_SERVER_ERROR, message).into_response()
+        }
+    }
+}
+
+async fn get_managed_mcp_deployment_request(
+    axum::Extension(state): axum::Extension<Arc<TenantState>>,
+    headers: HeaderMap,
+    Path(request_id): Path<String>,
+) -> impl IntoResponse {
+    let tenant_id = match authn(&headers, &state.signer) {
+        Ok(t) => t,
+        Err(resp) => return resp.into_response(),
+    };
+    let Some(store) = &state.store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+    };
+    match store
+        .get_managed_mcp_deployment_request_for_tenant(&tenant_id, &request_id)
+        .await
+    {
+        Ok(Some(request)) => Json(ManagedMcpDeploymentResponse { request }).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "deployment request not found").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 async fn put_upstream(
     axum::Extension(state): axum::Extension<Arc<TenantState>>,
     headers: HeaderMap,
@@ -404,12 +567,16 @@ async fn put_upstream(
         .map(|e| UpstreamEndpoint {
             id: e.id,
             url: e.url,
+            enabled: e.enabled,
+            lifecycle: e.lifecycle,
             auth: e.auth,
         })
         .collect();
 
     // Outbound safety (SSRF hardening): validate upstream endpoints before storing them.
-    let safety = crate::outbound_safety::gateway_outbound_http_safety();
+    let safety = crate::outbound_safety::gateway_outbound_http_safety_for_class(
+        UpstreamNetworkClass::External,
+    );
     for ep in &endpoints {
         // Upstream endpoint scheme policy: prefer HTTPS by default (dev override supported).
         if let Err(e) = crate::outbound_safety::check_upstream_https_policy(&ep.url) {
@@ -436,12 +603,17 @@ async fn put_upstream(
 
     let internal_id = tenant_upstream_internal_id(&tenant_id, &upstream_id);
     if let Err(e) = store
-        .put_upstream(&internal_id, req.enabled, &endpoints)
+        .put_upstream(
+            &internal_id,
+            req.enabled,
+            UpstreamNetworkClass::External,
+            &endpoints,
+        )
         .await
     {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
-    (StatusCode::CREATED, Json(serde_json::json!({"ok": true}))).into_response()
+    (StatusCode::CREATED, Json(OkResponse { ok: true })).into_response()
 }
 
 async fn delete_upstream(
@@ -459,8 +631,62 @@ async fn delete_upstream(
 
     let internal_id = tenant_upstream_internal_id(&tenant_id, &upstream_id);
     match store.delete_upstream(&internal_id).await {
-        Ok(true) => Json(serde_json::json!({"ok": true})).into_response(),
+        Ok(true) => Json(OkResponse { ok: true }).into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, "upstream not found").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn patch_upstream_endpoint(
+    axum::Extension(state): axum::Extension<Arc<TenantState>>,
+    headers: HeaderMap,
+    Path((upstream_id, endpoint_id)): Path<(String, String)>,
+    Json(req): Json<PatchUpstreamEndpointRequest>,
+) -> impl IntoResponse {
+    let tenant_id = match authn(&headers, &state.signer) {
+        Ok(t) => t,
+        Err(resp) => return resp.into_response(),
+    };
+    let Some(store) = &state.store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+    };
+    if req.enabled.is_none() && req.lifecycle.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "at least one of enabled or lifecycle must be set",
+        )
+            .into_response();
+    }
+    let internal_id = tenant_upstream_internal_id(&tenant_id, &upstream_id);
+    match store
+        .patch_upstream_endpoint(&internal_id, &endpoint_id, req.enabled, req.lifecycle)
+        .await
+    {
+        Ok(true) => Json(OkResponse { ok: true }).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "upstream endpoint not found").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn delete_upstream_endpoint(
+    axum::Extension(state): axum::Extension<Arc<TenantState>>,
+    headers: HeaderMap,
+    Path((upstream_id, endpoint_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let tenant_id = match authn(&headers, &state.signer) {
+        Ok(t) => t,
+        Err(resp) => return resp.into_response(),
+    };
+    let Some(store) = &state.store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+    };
+    let internal_id = tenant_upstream_internal_id(&tenant_id, &upstream_id);
+    match store
+        .delete_upstream_endpoint(&internal_id, &endpoint_id)
+        .await
+    {
+        Ok(true) => Json(OkResponse { ok: true }).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "upstream endpoint not found").into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -565,8 +791,25 @@ struct PutUpstreamRequest {
 struct PutEndpoint {
     id: String,
     url: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default = "default_upstream_endpoint_lifecycle")]
+    lifecycle: UpstreamEndpointLifecycle,
     #[serde(default)]
     auth: Option<AuthConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PatchUpstreamEndpointRequest {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    lifecycle: Option<UpstreamEndpointLifecycle>,
+}
+
+const fn default_upstream_endpoint_lifecycle() -> UpstreamEndpointLifecycle {
+    UpstreamEndpointLifecycle::Active
 }
 
 #[derive(Debug, Serialize)]
@@ -575,6 +818,7 @@ struct UpstreamEndpointResponse {
     id: String,
     url: String,
     enabled: bool,
+    lifecycle: UpstreamEndpointLifecycle,
     #[serde(skip_serializing_if = "Option::is_none")]
     auth: Option<AuthConfig>,
 }
@@ -586,6 +830,7 @@ struct UpstreamResponse {
     /// "tenant" for tenant-owned upstreams, "global" for admin-provisioned upstreams.
     owner: String,
     enabled: bool,
+    network_class: UpstreamNetworkClass,
     endpoints: Vec<UpstreamEndpointResponse>,
 }
 
@@ -593,6 +838,40 @@ struct UpstreamResponse {
 #[serde(rename_all = "camelCase")]
 struct UpstreamsResponse {
     upstreams: Vec<UpstreamResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpstreamSessionActivityQuery {
+    #[serde(default)]
+    ttl_secs: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpstreamSessionActivityResponse {
+    upstream_id: String,
+    ttl_secs: u64,
+    generated_at_unix: i64,
+    endpoints: Vec<UpstreamEndpointActivity>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagedMcpDeployablesResponse {
+    deployables: Vec<ManagedMcpDeployable>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagedMcpDeploymentResponse {
+    request: ManagedMcpDeploymentRequest,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateManagedMcpDeploymentRequestBody {
+    deployable_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -3377,4 +3656,19 @@ pub fn now_unix_secs() -> anyhow::Result<u64> {
         .duration_since(UNIX_EPOCH)
         .map_err(|_| anyhow::anyhow!("system clock is before UNIX_EPOCH"))?
         .as_secs())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn upstream_activity_ttl_uses_request_override_and_clamps_to_minimum() {
+        assert_eq!(
+            crate::pg_store::resolve_upstream_session_activity_ttl_secs(Some(300)),
+            300
+        );
+        assert_eq!(
+            crate::pg_store::resolve_upstream_session_activity_ttl_secs(Some(0)),
+            1
+        );
+    }
 }

@@ -21,6 +21,7 @@ pub(super) async fn upstream_initialize(
     mcp_url: &str,
     init_message: &ClientJsonRpcMessage,
     headers: &reqwest::header::HeaderMap,
+    network_class: crate::store::UpstreamNetworkClass,
 ) -> anyhow::Result<String> {
     // Upstream endpoint scheme policy: prefer HTTPS by default (dev override supported).
     if let Err(err) = crate::outbound_safety::check_upstream_https_policy(mcp_url) {
@@ -28,7 +29,7 @@ pub(super) async fn upstream_initialize(
     }
 
     // Outbound safety (SSRF hardening): validate the upstream endpoint before connecting.
-    let safety = crate::outbound_safety::gateway_outbound_http_safety();
+    let safety = crate::outbound_safety::gateway_outbound_http_safety_for_class(network_class);
     if let Err(err) = crate::outbound_safety::check_url_allowed(&safety, mcp_url).await {
         anyhow::bail!("upstream endpoint blocked by outbound safety policy: {err}");
     }
@@ -266,7 +267,8 @@ pub(super) async fn resolve_endpoint_url(
     };
 
     let mut endpoints: HashMap<String, crate::endpoint_cache::UpstreamEndpoint> = HashMap::new();
-    let safety = crate::outbound_safety::gateway_outbound_http_safety();
+    let safety =
+        crate::outbound_safety::gateway_outbound_http_safety_for_class(upstream.network_class);
     for e in upstream.endpoints {
         if let Err(err) = crate::outbound_safety::check_upstream_https_policy(&e.url) {
             tracing::warn!(

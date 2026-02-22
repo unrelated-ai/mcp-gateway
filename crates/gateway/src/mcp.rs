@@ -7,8 +7,8 @@ use crate::session_token::{
     TokenPayloadV1, UpstreamSessionBinding,
 };
 use crate::store::{
-    DataPlaneAuthMode, EffectiveMcpCapabilities, RequestIdNamespacing, SseEventIdNamespacing,
-    Store, ToolCallLimitRejection,
+    DataPlaneAuthMode, EffectiveMcpCapabilities, RequestIdNamespacing, SessionActivityBinding,
+    SseEventIdNamespacing, Store, ToolCallLimitRejection,
 };
 use crate::tenant_catalog::TenantCatalog;
 use crate::{
@@ -36,6 +36,7 @@ use rmcp::{
     },
 };
 use serde::Serialize;
+use sha2::Digest as _;
 use std::{collections::HashMap, convert::Infallible, sync::Arc};
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument as _;
@@ -627,8 +628,8 @@ async fn handle_initialize(
     };
 
     let token_payload = TokenPayloadV1 {
-        profile_id: profile.id,
-        bindings,
+        profile_id: profile.id.clone(),
+        bindings: bindings.clone(),
         auth,
         oidc,
         iat: None,
@@ -639,6 +640,10 @@ async fn handle_initialize(
         .signer
         .sign(token_payload)
         .map_err(internal_error_response("sign session token"))?;
+
+    // Mark freshly initialized upstream bindings as active.
+    record_upstream_bindings_activity_best_effort(state, &profile, &token, &bindings, "initialize")
+        .await;
 
     Ok(sse_single_message_with_session_id(
         &response_message,
@@ -720,21 +725,45 @@ async fn initialize_profile_sources(
             continue;
         }
 
+        let active_endpoints: Vec<&crate::store::UpstreamEndpoint> = upstream
+            .endpoints
+            .iter()
+            .filter(|ep| {
+                ep.enabled
+                    && matches!(
+                        ep.lifecycle,
+                        crate::store::UpstreamEndpointLifecycle::Active
+                    )
+            })
+            .collect();
+        if active_endpoints.is_empty() {
+            warnings.push(format!(
+                "Upstream '{upstream_id}' has no active endpoints (all are draining/disabled)"
+            ));
+            continue;
+        }
+
         let upstream_policy = profile.mcp.security.effective_upstream_policy(upstream_id);
         let upstream_init_message =
             upstream::rewrite_upstream_initialize_message(init_message, &upstream_policy);
 
         // Pick a starting endpoint index randomly and then try all endpoints (failover on init).
-        let start = upstream::random_start_index(upstream.endpoints.len());
+        let start = upstream::random_start_index(active_endpoints.len());
 
         let mut last_err: Option<anyhow::Error> = None;
         let mut initialized: Option<(String, String)> = None; // (endpoint_id, session_id)
-        for i in 0..upstream.endpoints.len() {
-            let ep = &upstream.endpoints[(start + i) % upstream.endpoints.len()];
+        for i in 0..active_endpoints.len() {
+            let ep = active_endpoints[(start + i) % active_endpoints.len()];
             let headers = upstream::build_upstream_headers(ep.auth.as_ref(), hop + 1);
             let endpoint_url = upstream::apply_query_auth(&ep.url, ep.auth.as_ref());
-            match upstream_initialize(&state.http, &endpoint_url, &upstream_init_message, &headers)
-                .await
+            match upstream_initialize(
+                &state.http,
+                &endpoint_url,
+                &upstream_init_message,
+                &headers,
+                upstream.network_class,
+            )
+            .await
             {
                 Ok(session_id) => {
                     initialized = Some((ep.id.clone(), session_id));
@@ -881,6 +910,39 @@ fn parse_hop(headers: &HeaderMap) -> u32 {
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(0)
+}
+
+async fn record_upstream_bindings_activity_best_effort(
+    state: &McpState,
+    profile: &crate::store::Profile,
+    session_token: &str,
+    bindings: &[UpstreamSessionBinding],
+    reason: &'static str,
+) {
+    if bindings.is_empty() {
+        return;
+    }
+    let session_hash = hex::encode(sha2::Sha256::digest(session_token.as_bytes()));
+    let rows: Vec<SessionActivityBinding> = bindings
+        .iter()
+        .map(|binding| SessionActivityBinding {
+            upstream_id: binding.upstream.clone(),
+            endpoint_id: binding.endpoint.clone(),
+        })
+        .collect();
+    if let Err(e) = state
+        .store
+        .record_session_activity(&profile.tenant_id, &profile.id, &session_hash, &rows)
+        .await
+    {
+        tracing::debug!(
+            error = %e,
+            tenant_id = %profile.tenant_id,
+            profile_id = %profile.id,
+            reason,
+            "failed to record upstream session activity"
+        );
+    }
 }
 
 async fn forward_proxied_response_if_any(
@@ -1354,6 +1416,16 @@ async fn handle_post_in_session(
     )
     .await?;
 
+    // Any in-session request extends liveness for bound upstream sessions.
+    record_upstream_bindings_activity_best_effort(
+        state,
+        &profile,
+        &token,
+        &payload.bindings,
+        "post_in_session",
+    )
+    .await;
+
     if let Some(resp) =
         forward_proxied_response_if_any(state, profile_id, &payload, &mut message, hop).await?
     {
@@ -1388,13 +1460,7 @@ async fn handle_get_stream(
     let send_priming = last_event_id.is_none();
     let payload = verify_session_token(&state.signer, &token, profile_id)
         .map_err(|(s, m)| (s, m).into_response())?;
-
-    let profile = state
-        .store
-        .get_profile(profile_id)
-        .await
-        .map_err(internal_error_response("load profile"))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "profile not found").into_response())?;
+    let profile = load_stream_profile(state, profile_id).await?;
 
     enforce_data_plane_auth(
         state,
@@ -1405,22 +1471,17 @@ async fn handle_get_stream(
     )
     .await?;
 
-    let tenant_limits = match state
-        .store
-        .get_tenant_transport_limits(&profile.tenant_id)
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(error = %e, tenant_id = %profile.tenant_id, "load tenant transport limits failed; using defaults");
-            None
-        }
-    };
-    let limits = crate::transport_limits::EffectiveTransportLimits::from_profile_and_tenant(
-        &profile.mcp.security.transport_limits,
-        tenant_limits.as_ref(),
-    );
-    let limits_shutdown = CancellationToken::new();
+    // Opening/refreshing the downstream stream marks all upstream bindings as active.
+    record_upstream_bindings_activity_best_effort(
+        state,
+        &profile,
+        &token,
+        &payload.bindings,
+        "get_stream",
+    )
+    .await;
+
+    let (limits, limits_shutdown) = resolve_stream_limits(state, &profile).await;
 
     // Parse Last-Event-ID:
     // - If it looks like an upstream-prefixed id (`<upstream>/<id...>`), resume only that upstream.
@@ -1430,19 +1491,8 @@ async fn handle_get_stream(
         last_event_id.as_deref(),
     );
 
-    // Stored behind an `RwLock` so we can refresh collision counts later without rewiring the
-    // upstream SSE stream closures (counts can change when resources are added/removed upstream).
-    let collision_counts = Arc::new(parking_lot::RwLock::new(
-        match compute_resource_collision_counts(state, profile_id, &payload, parse_hop(headers))
-            .await
-        {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to compute resource collision counts");
-                HashMap::new()
-            }
-        },
-    ));
+    let collision_counts =
+        load_collision_counts_for_stream(state, profile_id, &payload, parse_hop(headers)).await;
 
     let mut streams: Vec<
         futures::stream::BoxStream<'static, Result<axum::response::sse::Event, Infallible>>,
@@ -1494,6 +1544,65 @@ async fn handle_get_stream(
         HeaderValue::from_static(EVENT_STREAM_MIME_TYPE),
     );
     Ok(resp)
+}
+
+async fn load_stream_profile(
+    state: &McpState,
+    profile_id: &str,
+) -> Result<crate::store::Profile, Response> {
+    state
+        .store
+        .get_profile(profile_id)
+        .await
+        .map_err(internal_error_response("load profile"))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "profile not found").into_response())
+}
+
+async fn resolve_stream_limits(
+    state: &McpState,
+    profile: &crate::store::Profile,
+) -> (
+    crate::transport_limits::EffectiveTransportLimits,
+    CancellationToken,
+) {
+    let tenant_limits = match state
+        .store
+        .get_tenant_transport_limits(&profile.tenant_id)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                tenant_id = %profile.tenant_id,
+                "load tenant transport limits failed; using defaults"
+            );
+            None
+        }
+    };
+    let limits = crate::transport_limits::EffectiveTransportLimits::from_profile_and_tenant(
+        &profile.mcp.security.transport_limits,
+        tenant_limits.as_ref(),
+    );
+    (limits, CancellationToken::new())
+}
+
+async fn load_collision_counts_for_stream(
+    state: &McpState,
+    profile_id: &str,
+    payload: &TokenPayloadV1,
+    hop: u32,
+) -> Arc<parking_lot::RwLock<HashMap<String, usize>>> {
+    // Stored behind an `RwLock` so we can refresh collision counts later without rewiring the
+    // upstream SSE stream closures (counts can change when resources are added/removed upstream).
+    let counts = match compute_resource_collision_counts(state, profile_id, payload, hop).await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to compute resource collision counts");
+            HashMap::new()
+        }
+    };
+    Arc::new(parking_lot::RwLock::new(counts))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -3479,15 +3588,20 @@ mod tests {
             upstreams: HashMap::from([(
                 "u1".to_string(),
                 crate::store::Upstream {
+                    network_class: crate::store::UpstreamNetworkClass::External,
                     endpoints: vec![
                         crate::store::UpstreamEndpoint {
                             id: "a".to_string(),
                             url: bad_url,
+                            enabled: true,
+                            lifecycle: crate::store::UpstreamEndpointLifecycle::Active,
                             auth: None,
                         },
                         crate::store::UpstreamEndpoint {
                             id: "b".to_string(),
                             url: good_url,
+                            enabled: true,
+                            lifecycle: crate::store::UpstreamEndpointLifecycle::Active,
                             auth: None,
                         },
                     ],
@@ -3598,9 +3712,12 @@ mod tests {
             upstreams: HashMap::from([(
                 "u1".to_string(),
                 crate::store::Upstream {
+                    network_class: crate::store::UpstreamNetworkClass::External,
                     endpoints: vec![crate::store::UpstreamEndpoint {
                         id: "e1".to_string(),
                         url: up_url,
+                        enabled: true,
+                        lifecycle: crate::store::UpstreamEndpointLifecycle::Active,
                         auth: None,
                     }],
                 },
@@ -3852,9 +3969,12 @@ sharedSources:
             upstreams: HashMap::from([(
                 "u1".to_string(),
                 crate::store::Upstream {
+                    network_class: crate::store::UpstreamNetworkClass::External,
                     endpoints: vec![crate::store::UpstreamEndpoint {
                         id: "e1".to_string(),
                         url: "http://127.0.0.1:1/mcp".to_string(),
+                        enabled: true,
+                        lifecycle: crate::store::UpstreamEndpointLifecycle::Active,
                         auth: None,
                     }],
                 },
@@ -4165,9 +4285,12 @@ sharedSources:
             upstreams: HashMap::from([(
                 "u1".to_string(),
                 crate::store::Upstream {
+                    network_class: crate::store::UpstreamNetworkClass::External,
                     endpoints: vec![crate::store::UpstreamEndpoint {
                         id: "e1".to_string(),
                         url,
+                        enabled: true,
+                        lifecycle: crate::store::UpstreamEndpointLifecycle::Active,
                         auth: None,
                     }],
                 },

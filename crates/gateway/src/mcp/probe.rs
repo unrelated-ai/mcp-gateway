@@ -72,7 +72,13 @@ async fn initialize_upstream_probe_session(
         let ep = &upstream.endpoints[(start + i) % upstream.endpoints.len()];
         let endpoint_url = upstream::apply_query_auth(&ep.url, ep.auth.as_ref());
         let headers = upstream::build_upstream_headers(ep.auth.as_ref(), PROBE_HEADERS_HOP);
-        let fut = upstream::upstream_initialize(&state.http, &endpoint_url, init_msg, &headers);
+        let fut = upstream::upstream_initialize(
+            &state.http,
+            &endpoint_url,
+            init_msg,
+            &headers,
+            upstream.network_class,
+        );
         match tokio::time::timeout(PROBE_TIMEOUT, fut).await {
             Ok(Ok(session_id)) => {
                 return Ok(UpstreamCtx {

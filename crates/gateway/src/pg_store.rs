@@ -2,9 +2,11 @@ use crate::pg_invalidation;
 use crate::store::{
     AdminProfile, AdminStore, AdminTenant, AdminUpstream, AdminUpstreamEndpoint, ApiKeyAuth,
     ApiKeyMetadata, AuditEventFilter, AuditEventRow, AuditStatsFilter, DataPlaneAuthMode,
-    OidcPrincipalBinding, Profile, Store, TenantAuditSettings, TenantSecretMetadata,
-    TenantToolSource, ToolCallLimitRejection, ToolCallStatsByApiKey, ToolCallStatsByTool,
-    ToolSourceKind, ToolSourceSpec, Upstream, UpstreamEndpoint,
+    ManagedMcpDeployable, ManagedMcpDeploymentRequest, ManagedMcpDeploymentStatus,
+    OidcPrincipalBinding, Profile, SessionActivityBinding, Store, TenantAuditSettings,
+    TenantSecretMetadata, TenantToolSource, ToolCallLimitRejection, ToolCallStatsByApiKey,
+    ToolCallStatsByTool, ToolSourceKind, ToolSourceSpec, Upstream, UpstreamEndpoint,
+    UpstreamEndpointActivity, UpstreamEndpointLifecycle, UpstreamNetworkClass,
 };
 use crate::tool_policy::ToolPolicy;
 use async_trait::async_trait;
@@ -12,12 +14,18 @@ use parking_lot::RwLock;
 use rand_core::{OsRng, TryRngCore as _};
 use serde_json::Value;
 use sqlx::postgres::PgRow;
-use sqlx::{PgPool, Postgres, Row as _, Transaction};
-use std::sync::Arc;
+use sqlx::{PgPool, Postgres, QueryBuilder, Row as _, Transaction};
+use std::{sync::Arc, time::Duration};
+use tokio_util::sync::CancellationToken;
 use unrelated_tool_transforms::TransformPipeline;
 use uuid::Uuid;
 
 use sha2::Digest as _;
+
+const UPSTREAM_SESSION_ACTIVITY_TTL_ENV: &str =
+    "UNRELATED_GATEWAY_UPSTREAM_SESSION_ACTIVITY_TTL_SECS";
+const DEFAULT_UPSTREAM_SESSION_ACTIVITY_TTL_SECS: u64 = 300;
+const UPSTREAM_SESSION_ACTIVITY_CLEANUP_INTERVAL_SECS: u64 = 30;
 
 fn decode_json_opt<T: serde::de::DeserializeOwned>(
     v: Option<Value>,
@@ -721,6 +729,59 @@ where api_key_id = $1
             retry_after_secs: self.rate_limit_retry_after_secs().await?,
         }))
     }
+
+    pub async fn cleanup_expired_upstream_session_activity(
+        &self,
+        ttl_secs: u64,
+    ) -> anyhow::Result<u64> {
+        let ttl_secs = i64::try_from(ttl_secs).unwrap_or(i64::MAX);
+        let res = sqlx::query(
+            r"
+delete from upstream_session_activity
+where last_seen_at < now() - make_interval(secs => $1)
+",
+        )
+        .bind(ttl_secs)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+}
+
+pub fn upstream_session_activity_ttl_secs_from_env() -> u64 {
+    std::env::var(UPSTREAM_SESSION_ACTIVITY_TTL_ENV)
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_UPSTREAM_SESSION_ACTIVITY_TTL_SECS)
+        .max(1)
+}
+
+pub fn resolve_upstream_session_activity_ttl_secs(request_ttl: Option<u64>) -> u64 {
+    request_ttl
+        .unwrap_or_else(upstream_session_activity_ttl_secs_from_env)
+        .max(1)
+}
+
+pub fn spawn_upstream_session_activity_cleanup_task(
+    store: Arc<PostgresStore>,
+    shutdown: CancellationToken,
+    ttl_secs: u64,
+) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(
+            UPSTREAM_SESSION_ACTIVITY_CLEANUP_INTERVAL_SECS,
+        ));
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => break,
+                _ = interval.tick() => {
+                    if let Err(err) = store.cleanup_expired_upstream_session_activity(ttl_secs).await {
+                        tracing::warn!(error = %err, "upstream session activity cleanup failed");
+                    }
+                }
+            }
+        }
+    });
 }
 
 #[async_trait]
@@ -757,9 +818,9 @@ impl Store for PostgresStore {
     }
 
     async fn get_upstream(&self, upstream_id: &str) -> anyhow::Result<Option<Upstream>> {
-        let exists = sqlx::query(
+        let upstream_row = sqlx::query(
             r"
-select 1
+select network_class
 from upstreams
 where id = $1
   and enabled = true
@@ -767,19 +828,21 @@ where id = $1
         )
         .bind(upstream_id)
         .fetch_optional(&self.pool)
-        .await?
-        .is_some();
+        .await?;
 
-        if !exists {
+        let Some(upstream_row) = upstream_row else {
             return Ok(None);
-        }
+        };
+        let network_class: String = upstream_row.try_get("network_class")?;
+        let network_class = parse_upstream_network_class(&network_class)?;
 
         let rows = sqlx::query(
             r"
-select id, url, auth
+select id, url, auth, enabled, lifecycle
 from upstream_endpoints
 where upstream_id = $1
   and enabled = true
+  and lifecycle != 'disabled'
 order by id asc
 ",
         )
@@ -790,15 +853,60 @@ order by id asc
         let endpoints = rows
             .into_iter()
             .map(|r| {
+                let lifecycle_raw: String = r.try_get("lifecycle")?;
                 Ok(UpstreamEndpoint {
                     id: r.try_get("id")?,
                     url: r.try_get("url")?,
+                    enabled: r.try_get("enabled")?,
+                    lifecycle: parse_upstream_endpoint_lifecycle(&lifecycle_raw)
+                        .map_err(|e| sqlx::Error::Protocol(e.to_string()))?,
                     auth: decode_json_opt(r.try_get::<Option<Value>, _>("auth")?)?,
                 })
             })
             .collect::<Result<Vec<_>, sqlx::Error>>()?;
 
-        Ok(Some(Upstream { endpoints }))
+        Ok(Some(Upstream {
+            network_class,
+            endpoints,
+        }))
+    }
+
+    async fn record_session_activity(
+        &self,
+        tenant_id: &str,
+        profile_id: &str,
+        session_hash: &str,
+        bindings: &[SessionActivityBinding],
+    ) -> anyhow::Result<()> {
+        let profile_id = Uuid::parse_str(profile_id)
+            .map_err(|_| anyhow::anyhow!("invalid profile id (expected UUID)"))?;
+        let mut tx: Transaction<'_, Postgres> = self.pool.begin().await?;
+        for b in bindings {
+            sqlx::query(
+                r"
+insert into upstream_session_activity (
+  tenant_id,
+  profile_id,
+  upstream_id,
+  endpoint_id,
+  session_hash,
+  last_seen_at
+)
+values ($1, $2, $3, $4, $5, now())
+on conflict (profile_id, upstream_id, endpoint_id, session_hash) do update
+set last_seen_at = excluded.last_seen_at
+",
+            )
+            .bind(tenant_id)
+            .bind(profile_id)
+            .bind(&b.upstream_id)
+            .bind(&b.endpoint_id)
+            .bind(session_hash)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
     async fn get_tenant_tool_source(
@@ -1219,7 +1327,7 @@ set enabled = excluded.enabled,
     async fn list_upstreams(&self) -> anyhow::Result<Vec<AdminUpstream>> {
         let rows = sqlx::query(
             r"
-select id, enabled
+select id, enabled, network_class
 from upstreams
 order by id asc
 ",
@@ -1231,10 +1339,12 @@ order by id asc
         for row in rows {
             let id: String = row.try_get("id")?;
             let enabled: bool = row.try_get("enabled")?;
+            let network_class_raw: String = row.try_get("network_class")?;
+            let network_class = parse_upstream_network_class(&network_class_raw)?;
 
             let endpoint_rows = sqlx::query(
                 r"
-select id, url, auth, enabled
+select id, url, auth, enabled, lifecycle
 from upstream_endpoints
 where upstream_id = $1
 order by id asc
@@ -1247,10 +1357,13 @@ order by id asc
             let endpoints = endpoint_rows
                 .into_iter()
                 .map(|r| {
+                    let lifecycle_raw: String = r.try_get("lifecycle")?;
                     Ok(AdminUpstreamEndpoint {
                         id: r.try_get("id")?,
                         url: r.try_get("url")?,
                         enabled: r.try_get("enabled")?,
+                        lifecycle: parse_upstream_endpoint_lifecycle(&lifecycle_raw)
+                            .map_err(|e| sqlx::Error::Protocol(e.to_string()))?,
                         auth: decode_json_opt(r.try_get::<Option<Value>, _>("auth")?)?,
                     })
                 })
@@ -1259,6 +1372,7 @@ order by id asc
             out.push(AdminUpstream {
                 id,
                 enabled,
+                network_class,
                 endpoints,
             });
         }
@@ -1269,7 +1383,7 @@ order by id asc
     async fn get_upstream(&self, upstream_id: &str) -> anyhow::Result<Option<AdminUpstream>> {
         let row = sqlx::query(
             r"
-select id, enabled
+select id, enabled, network_class
 from upstreams
 where id = $1
 ",
@@ -1284,10 +1398,12 @@ where id = $1
 
         let id: String = row.try_get("id")?;
         let enabled: bool = row.try_get("enabled")?;
+        let network_class_raw: String = row.try_get("network_class")?;
+        let network_class = parse_upstream_network_class(&network_class_raw)?;
 
         let endpoint_rows = sqlx::query(
             r"
-select id, url, auth, enabled
+select id, url, auth, enabled, lifecycle
 from upstream_endpoints
 where upstream_id = $1
 order by id asc
@@ -1300,10 +1416,13 @@ order by id asc
         let endpoints = endpoint_rows
             .into_iter()
             .map(|r| {
+                let lifecycle_raw: String = r.try_get("lifecycle")?;
                 Ok(AdminUpstreamEndpoint {
                     id: r.try_get("id")?,
                     url: r.try_get("url")?,
                     enabled: r.try_get("enabled")?,
+                    lifecycle: parse_upstream_endpoint_lifecycle(&lifecycle_raw)
+                        .map_err(|e| sqlx::Error::Protocol(e.to_string()))?,
                     auth: decode_json_opt(r.try_get::<Option<Value>, _>("auth")?)?,
                 })
             })
@@ -1312,6 +1431,7 @@ order by id asc
         Ok(Some(AdminUpstream {
             id,
             enabled,
+            network_class,
             endpoints,
         }))
     }
@@ -1367,39 +1487,37 @@ where id = $1
         &self,
         upstream_id: &str,
         enabled: bool,
+        network_class: UpstreamNetworkClass,
         endpoints: &[UpstreamEndpoint],
     ) -> anyhow::Result<()> {
         let mut tx: Transaction<'_, Postgres> = self.pool.begin().await?;
 
         sqlx::query(
             r"
-insert into upstreams (id, enabled)
-values ($1, $2)
+insert into upstreams (id, enabled, network_class)
+values ($1, $2, $3)
 on conflict (id) do update
 set enabled = excluded.enabled,
+    network_class = excluded.network_class,
     updated_at = now()
 ",
         )
         .bind(upstream_id)
         .bind(enabled)
+        .bind(upstream_network_class_to_db(network_class))
         .execute(&mut *tx)
         .await?;
-
-        // Replace endpoints (current semantics).
-        sqlx::query(r"delete from upstream_endpoints where upstream_id = $1")
-            .bind(upstream_id)
-            .execute(&mut *tx)
-            .await?;
 
         for ep in endpoints {
             sqlx::query(
                 r"
-insert into upstream_endpoints (upstream_id, id, url, auth, enabled)
-values ($1, $2, $3, $4, true)
+insert into upstream_endpoints (upstream_id, id, url, auth, enabled, lifecycle)
+values ($1, $2, $3, $4, $5, $6)
 on conflict (upstream_id, id) do update
 set url = excluded.url,
     auth = excluded.auth,
     enabled = excluded.enabled,
+    lifecycle = excluded.lifecycle,
     updated_at = now()
 ",
             )
@@ -1407,6 +1525,8 @@ set url = excluded.url,
             .bind(&ep.id)
             .bind(&ep.url)
             .bind(ep.auth.as_ref().map(serde_json::to_value).transpose()?)
+            .bind(ep.enabled)
+            .bind(upstream_endpoint_lifecycle_to_db(ep.lifecycle))
             .execute(&mut *tx)
             .await?;
         }
@@ -1418,6 +1538,104 @@ set url = excluded.url,
         }];
         self.emit_invalidation_events_best_effort(events);
         Ok(())
+    }
+
+    async fn patch_upstream_endpoint(
+        &self,
+        upstream_id: &str,
+        endpoint_id: &str,
+        enabled: Option<bool>,
+        lifecycle: Option<UpstreamEndpointLifecycle>,
+    ) -> anyhow::Result<bool> {
+        let lifecycle = lifecycle.map(upstream_endpoint_lifecycle_to_db);
+        let res = sqlx::query(
+            r"
+update upstream_endpoints
+set
+  enabled = coalesce($3, enabled),
+  lifecycle = coalesce($4, lifecycle),
+  updated_at = now()
+where upstream_id = $1
+  and id = $2
+",
+        )
+        .bind(upstream_id)
+        .bind(endpoint_id)
+        .bind(enabled)
+        .bind(lifecycle)
+        .execute(&self.pool)
+        .await?;
+
+        if res.rows_affected() > 0 {
+            let events = vec![pg_invalidation::InvalidationEvent::Upstream {
+                upstream_id: upstream_id.to_string(),
+            }];
+            self.emit_invalidation_events_best_effort(events);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    async fn delete_upstream_endpoint(
+        &self,
+        upstream_id: &str,
+        endpoint_id: &str,
+    ) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            r"
+delete from upstream_endpoints
+where upstream_id = $1
+  and id = $2
+",
+        )
+        .bind(upstream_id)
+        .bind(endpoint_id)
+        .execute(&self.pool)
+        .await?;
+
+        if res.rows_affected() > 0 {
+            let events = vec![pg_invalidation::InvalidationEvent::Upstream {
+                upstream_id: upstream_id.to_string(),
+            }];
+            self.emit_invalidation_events_best_effort(events);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    async fn list_upstream_endpoint_activity(
+        &self,
+        upstream_id: &str,
+        ttl_secs: u64,
+    ) -> anyhow::Result<Vec<UpstreamEndpointActivity>> {
+        let ttl_secs = i64::try_from(ttl_secs).unwrap_or(i64::MAX);
+        let rows = sqlx::query(
+            r"
+select
+  endpoint_id,
+  count(distinct session_hash)::bigint as active_sessions,
+  extract(epoch from max(last_seen_at))::bigint as last_seen_unix
+from upstream_session_activity
+where upstream_id = $1
+  and last_seen_at >= now() - make_interval(secs => $2)
+group by endpoint_id
+order by endpoint_id asc
+",
+        )
+        .bind(upstream_id)
+        .bind(ttl_secs)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            out.push(UpstreamEndpointActivity {
+                endpoint_id: row.try_get("endpoint_id")?,
+                active_sessions: row.try_get("active_sessions")?,
+                last_seen_unix: row.try_get("last_seen_unix")?,
+            });
+        }
+        Ok(out)
     }
 
     async fn list_profiles(&self) -> anyhow::Result<Vec<AdminProfile>> {
@@ -2518,6 +2736,239 @@ where tenant_id =
         Ok(out)
     }
 
+    async fn list_managed_mcp_deployables(&self) -> anyhow::Result<Vec<ManagedMcpDeployable>> {
+        let rows = sqlx::query(
+            r"
+select id, display_name, description, image, default_upstream_url, enabled
+from managed_mcp_deployables
+order by id asc
+",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            out.push(ManagedMcpDeployable {
+                id: row.try_get("id")?,
+                display_name: row.try_get("display_name")?,
+                description: row.try_get("description")?,
+                image: row.try_get("image")?,
+                default_upstream_url: row.try_get("default_upstream_url")?,
+                enabled: row.try_get("enabled")?,
+            });
+        }
+        Ok(out)
+    }
+
+    async fn upsert_managed_mcp_deployable(
+        &self,
+        deployable: &ManagedMcpDeployable,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            r"
+insert into managed_mcp_deployables (
+  id,
+  display_name,
+  description,
+  image,
+  default_upstream_url,
+  enabled
+)
+values ($1, $2, $3, $4, $5, $6)
+on conflict (id) do update set
+  display_name = excluded.display_name,
+  description = excluded.description,
+  image = excluded.image,
+  default_upstream_url = excluded.default_upstream_url,
+  enabled = excluded.enabled,
+  updated_at = now()
+",
+        )
+        .bind(&deployable.id)
+        .bind(&deployable.display_name)
+        .bind(&deployable.description)
+        .bind(&deployable.image)
+        .bind(&deployable.default_upstream_url)
+        .bind(deployable.enabled)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn create_managed_mcp_deployment_request(
+        &self,
+        tenant_id: &str,
+        deployable_id: &str,
+    ) -> anyhow::Result<ManagedMcpDeploymentRequest> {
+        let exists = sqlx::query(
+            r"
+select 1
+from managed_mcp_deployables
+where id = $1
+  and enabled = true
+",
+        )
+        .bind(deployable_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        if exists.is_none() {
+            anyhow::bail!("deployable not found or disabled");
+        }
+
+        let request_id = Uuid::new_v4().to_string();
+        let row = sqlx::query(
+            r"
+insert into managed_mcp_deployment_requests (
+  id,
+  tenant_id,
+  deployable_id,
+  status
+)
+values ($1, $2, $3, 'pending')
+returning
+  id,
+  tenant_id,
+  deployable_id,
+  status,
+  upstream_id,
+  message,
+  extract(epoch from created_at)::bigint as created_at_unix,
+  extract(epoch from updated_at)::bigint as updated_at_unix
+",
+        )
+        .bind(&request_id)
+        .bind(tenant_id)
+        .bind(deployable_id)
+        .fetch_one(&self.pool)
+        .await?;
+        parse_managed_mcp_deployment_request_row(&row)
+    }
+
+    async fn get_managed_mcp_deployment_request(
+        &self,
+        request_id: &str,
+    ) -> anyhow::Result<Option<ManagedMcpDeploymentRequest>> {
+        let row = sqlx::query(
+            r"
+select
+  id,
+  tenant_id,
+  deployable_id,
+  status,
+  upstream_id,
+  message,
+  extract(epoch from created_at)::bigint as created_at_unix,
+  extract(epoch from updated_at)::bigint as updated_at_unix
+from managed_mcp_deployment_requests
+where id = $1
+",
+        )
+        .bind(request_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        match row {
+            Some(row) => Ok(Some(parse_managed_mcp_deployment_request_row(&row)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_managed_mcp_deployment_request_for_tenant(
+        &self,
+        tenant_id: &str,
+        request_id: &str,
+    ) -> anyhow::Result<Option<ManagedMcpDeploymentRequest>> {
+        let row = sqlx::query(
+            r"
+select
+  id,
+  tenant_id,
+  deployable_id,
+  status,
+  upstream_id,
+  message,
+  extract(epoch from created_at)::bigint as created_at_unix,
+  extract(epoch from updated_at)::bigint as updated_at_unix
+from managed_mcp_deployment_requests
+where tenant_id = $1
+  and id = $2
+",
+        )
+        .bind(tenant_id)
+        .bind(request_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        match row {
+            Some(row) => Ok(Some(parse_managed_mcp_deployment_request_row(&row)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn list_managed_mcp_deployment_requests(
+        &self,
+        statuses: &[ManagedMcpDeploymentStatus],
+        limit: u32,
+    ) -> anyhow::Result<Vec<ManagedMcpDeploymentRequest>> {
+        let mut qb = QueryBuilder::<Postgres>::new(
+            r"
+select
+  id,
+  tenant_id,
+  deployable_id,
+  status,
+  upstream_id,
+  message,
+  extract(epoch from created_at)::bigint as created_at_unix,
+  extract(epoch from updated_at)::bigint as updated_at_unix
+from managed_mcp_deployment_requests
+",
+        );
+        if !statuses.is_empty() {
+            qb.push("where status in (");
+            {
+                let mut separated = qb.separated(", ");
+                for status in statuses {
+                    separated.push_bind(managed_mcp_deployment_status_to_db(*status));
+                }
+            }
+            qb.push(") ");
+        }
+        qb.push("order by created_at asc limit ");
+        qb.push_bind(i64::from(limit.max(1)));
+
+        let rows = qb.build().fetch_all(&self.pool).await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            out.push(parse_managed_mcp_deployment_request_row(&row)?);
+        }
+        Ok(out)
+    }
+
+    async fn mark_managed_mcp_deployment_status(
+        &self,
+        request_id: &str,
+        status: ManagedMcpDeploymentStatus,
+        upstream_id: Option<&str>,
+        message: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            r"
+update managed_mcp_deployment_requests
+set status = $2,
+    upstream_id = $3,
+    message = $4,
+    updated_at = now()
+where id = $1
+",
+        )
+        .bind(request_id)
+        .bind(managed_mcp_deployment_status_to_db(status))
+        .bind(upstream_id)
+        .bind(message)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     async fn cleanup_audit_events_for_tenant(&self, tenant_id: &str) -> anyhow::Result<u64> {
         let row = sqlx::query(
             r"
@@ -2568,6 +3019,77 @@ const fn data_plane_auth_mode_to_db(mode: DataPlaneAuthMode) -> &'static str {
         DataPlaneAuthMode::ApiKeyEveryRequest => "api_key_every_request",
         DataPlaneAuthMode::JwtEveryRequest => "jwt_every_request",
     }
+}
+
+fn parse_upstream_endpoint_lifecycle(value: &str) -> anyhow::Result<UpstreamEndpointLifecycle> {
+    match value {
+        "active" => Ok(UpstreamEndpointLifecycle::Active),
+        "draining" => Ok(UpstreamEndpointLifecycle::Draining),
+        "disabled" => Ok(UpstreamEndpointLifecycle::Disabled),
+        other => Err(anyhow::anyhow!(
+            "unknown upstream endpoint lifecycle '{other}'"
+        )),
+    }
+}
+
+const fn upstream_endpoint_lifecycle_to_db(value: UpstreamEndpointLifecycle) -> &'static str {
+    match value {
+        UpstreamEndpointLifecycle::Active => "active",
+        UpstreamEndpointLifecycle::Draining => "draining",
+        UpstreamEndpointLifecycle::Disabled => "disabled",
+    }
+}
+
+fn parse_upstream_network_class(value: &str) -> anyhow::Result<UpstreamNetworkClass> {
+    match value {
+        "external" => Ok(UpstreamNetworkClass::External),
+        "cluster-internal-managed" => Ok(UpstreamNetworkClass::ClusterInternalManaged),
+        other => Err(anyhow::anyhow!("unknown upstream network class '{other}'")),
+    }
+}
+
+const fn upstream_network_class_to_db(value: UpstreamNetworkClass) -> &'static str {
+    match value {
+        UpstreamNetworkClass::External => "external",
+        UpstreamNetworkClass::ClusterInternalManaged => "cluster-internal-managed",
+    }
+}
+
+fn parse_managed_mcp_deployment_status(value: &str) -> anyhow::Result<ManagedMcpDeploymentStatus> {
+    match value {
+        "pending" => Ok(ManagedMcpDeploymentStatus::Pending),
+        "reconciling" => Ok(ManagedMcpDeploymentStatus::Reconciling),
+        "ready" => Ok(ManagedMcpDeploymentStatus::Ready),
+        "failed" => Ok(ManagedMcpDeploymentStatus::Failed),
+        other => Err(anyhow::anyhow!(
+            "unknown managed MCP deployment status '{other}'"
+        )),
+    }
+}
+
+const fn managed_mcp_deployment_status_to_db(value: ManagedMcpDeploymentStatus) -> &'static str {
+    match value {
+        ManagedMcpDeploymentStatus::Pending => "pending",
+        ManagedMcpDeploymentStatus::Reconciling => "reconciling",
+        ManagedMcpDeploymentStatus::Ready => "ready",
+        ManagedMcpDeploymentStatus::Failed => "failed",
+    }
+}
+
+fn parse_managed_mcp_deployment_request_row(
+    row: &PgRow,
+) -> anyhow::Result<ManagedMcpDeploymentRequest> {
+    let status_raw: String = row.try_get("status")?;
+    Ok(ManagedMcpDeploymentRequest {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        deployable_id: row.try_get("deployable_id")?,
+        status: parse_managed_mcp_deployment_status(&status_raw)?,
+        upstream_id: row.try_get("upstream_id")?,
+        message: row.try_get("message")?,
+        created_at_unix: row.try_get("created_at_unix")?,
+        updated_at_unix: row.try_get("updated_at_unix")?,
+    })
 }
 
 fn hash_api_key_secret(secret: &str) -> String {

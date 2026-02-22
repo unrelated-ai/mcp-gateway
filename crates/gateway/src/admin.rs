@@ -1,4 +1,4 @@
-use crate::audit::{AuditActor, AuditError, HttpAuditEvent};
+use crate::audit::{AuditActor, AuditError, AuditEvent, HttpAuditEvent, duration_ms};
 use crate::profile_http::{
     DataPlaneAuthSettings, DataPlaneLimitsSettings, NullableString, NullableU64,
     default_data_plane_auth_mode, resolve_nullable_u64, validate_tool_allowlist,
@@ -6,9 +6,11 @@ use crate::profile_http::{
 };
 use crate::serde_helpers::default_true;
 use crate::store::{
-    AdminProfile, AdminStore, AdminTenant, AdminUpstream, DataPlaneAuthMode, McpProfileSettings,
+    AdminProfile, AdminStore, AdminTenant, AdminUpstream, DataPlaneAuthMode, ManagedMcpDeployable,
+    ManagedMcpDeploymentRequest, ManagedMcpDeploymentStatus, McpProfileSettings,
     OidcPrincipalBinding, PutProfileDataPlaneAuth, PutProfileFlags, PutProfileInput,
     PutProfileLimits, TenantSecretMetadata, ToolSourceKind, UpstreamEndpoint,
+    UpstreamEndpointActivity, UpstreamEndpointLifecycle, UpstreamNetworkClass,
 };
 use crate::tenant::{IssueTenantTokenRequest, IssueTenantTokenResponse, now_unix_secs};
 use crate::tenant_token::{TenantSigner, TenantTokenPayloadV1};
@@ -16,11 +18,13 @@ use crate::tool_policy::ToolPolicy;
 use axum::{
     Extension, Json, Router,
     extract::{Path, Query},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, Method, StatusCode},
+    middleware::{Next, from_fn},
     response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 use unrelated_http_tools::config::AuthConfig;
@@ -32,10 +36,21 @@ use uuid::{Uuid, Version};
 const OIDC_NOT_CONFIGURED_MSG: &str = "JWT/OIDC is unavailable because OIDC is not configured on the Gateway (missing UNRELATED_GATEWAY_OIDC_ISSUER). Configure OIDC or choose a different mode.";
 type BoxResponse = Box<axum::response::Response>;
 
+#[derive(Debug, Clone, Default)]
+struct ControlPlanePrincipal {
+    auth_kind: &'static str,
+    issuer: Option<String>,
+    subject: Option<String>,
+    scopes: Vec<String>,
+}
+
 #[derive(Clone)]
 pub struct AdminState {
     pub store: Option<Arc<dyn AdminStore>>,
     pub admin_token: Option<String>,
+    pub control_plane_oidc: Option<crate::oidc::OidcValidator>,
+    pub control_plane_scope_read: String,
+    pub control_plane_scope_write: String,
     /// Enable the fresh-install bootstrap endpoint.
     ///
     /// When false, `/bootstrap/v1/tenant` is disabled.
@@ -48,10 +63,7 @@ pub struct AdminState {
 }
 
 pub fn router() -> Router {
-    Router::new()
-        // Bootstrap (fresh install)
-        .route("/bootstrap/v1/tenant/status", get(bootstrap_tenant_status))
-        .route("/bootstrap/v1/tenant", post(bootstrap_tenant))
+    let admin_v1 = Router::new()
         .route("/admin/v1/tenants", post(put_tenant).get(list_tenants))
         .route(
             "/admin/v1/tenants/{tenant_id}",
@@ -108,6 +120,14 @@ pub fn router() -> Router {
             "/admin/v1/upstreams/{upstream_id}",
             get(get_upstream).delete(delete_upstream),
         )
+        .route(
+            "/admin/v1/upstreams/{upstream_id}/session-activity",
+            get(get_upstream_session_activity),
+        )
+        .route(
+            "/admin/v1/upstreams/{upstream_id}/endpoints/{endpoint_id}",
+            patch(patch_upstream_endpoint).delete(delete_upstream_endpoint),
+        )
         .route("/admin/v1/profiles", post(put_profile).get(list_profiles))
         .route(
             "/admin/v1/profiles/{profile_id}",
@@ -118,6 +138,24 @@ pub fn router() -> Router {
             get(get_profile_audit_settings).put(put_profile_audit_settings),
         )
         .route("/admin/v1/tenant-tokens", post(issue_tenant_token))
+        .route(
+            "/admin/v1/managed-mcp/deployables",
+            get(list_managed_mcp_deployables).put(put_managed_mcp_deployable),
+        )
+        .route(
+            "/admin/v1/managed-mcp/deployments",
+            get(list_managed_mcp_deployment_requests),
+        )
+        .route(
+            "/admin/v1/managed-mcp/deployments/{request_id}",
+            get(get_managed_mcp_deployment_request).patch(patch_managed_mcp_deployment_request),
+        )
+        .route_layer(from_fn(control_plane_auth_middleware));
+
+    Router::new()
+        .route("/bootstrap/v1/tenant/status", get(bootstrap_tenant_status))
+        .route("/bootstrap/v1/tenant", post(bootstrap_tenant))
+        .merge(admin_v1)
 }
 
 #[derive(Debug, Deserialize)]
@@ -302,23 +340,224 @@ async fn bootstrap_tenant(
     .into_response()
 }
 
-fn authz(headers: &HeaderMap, expected: Option<&str>) -> Result<(), impl IntoResponse> {
-    let Some(expected) = expected else {
+fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
+    let auth = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())?;
+    let token = auth.strip_prefix("Bearer ")?;
+    if token.trim().is_empty() {
+        return None;
+    }
+    Some(token.to_string())
+}
+
+fn collect_scope_tokens_from_claim(value: &serde_json::Value, out: &mut HashSet<String>) {
+    match value {
+        serde_json::Value::String(s) => {
+            for token in s.split([' ', ',']).map(str::trim).filter(|v| !v.is_empty()) {
+                out.insert(token.to_string());
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                if let Some(s) = item.as_str() {
+                    for token in s.split([' ', ',']).map(str::trim).filter(|v| !v.is_empty()) {
+                        out.insert(token.to_string());
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_machine_scopes(claims: &serde_json::Value) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for key in ["scope", "scp", "roles", "role", "permissions"] {
+        if let Some(value) = claims.get(key) {
+            collect_scope_tokens_from_claim(value, &mut out);
+        }
+    }
+    out
+}
+
+fn required_control_plane_scopes(state: &AdminState, method: &Method) -> Vec<String> {
+    if matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
+        vec![
+            state.control_plane_scope_read.clone(),
+            state.control_plane_scope_write.clone(),
+        ]
+    } else {
+        vec![state.control_plane_scope_write.clone()]
+    }
+}
+
+async fn authorize_control_plane(
+    headers: &HeaderMap,
+    state: &AdminState,
+    required_scopes: &[String],
+) -> Result<ControlPlanePrincipal, (StatusCode, String)> {
+    let Some(token) = extract_bearer_token(headers) else {
+        return Err((StatusCode::UNAUTHORIZED, "Unauthorized".to_string()));
+    };
+
+    if let Some(expected) = state.admin_token.as_deref() {
+        let want = format!("Bearer {expected}");
+        let got = headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or_default();
+        if got == want {
+            return Ok(ControlPlanePrincipal {
+                auth_kind: "static-token",
+                ..ControlPlanePrincipal::default()
+            });
+        }
+    }
+
+    let Some(oidc) = state.control_plane_oidc.as_ref() else {
+        if state.admin_token.is_some() {
+            return Err((StatusCode::UNAUTHORIZED, "Unauthorized".to_string()));
+        }
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
-            "Admin API disabled (UNRELATED_GATEWAY_ADMIN_TOKEN not set)",
+            "Admin API disabled (configure control-plane OIDC or UNRELATED_GATEWAY_ADMIN_TOKEN)"
+                .to_string(),
         ));
     };
+
+    let claims = oidc
+        .validate(&token)
+        .await
+        .map_err(|_| (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()))?;
+    let scopes_set = extract_machine_scopes(&claims);
+    if !required_scopes.is_empty()
+        && !required_scopes
+            .iter()
+            .any(|required| scopes_set.contains(required))
+    {
+        return Err((StatusCode::FORBIDDEN, "Forbidden".to_string()));
+    }
+
+    let mut scopes = scopes_set.into_iter().collect::<Vec<_>>();
+    scopes.sort();
+    Ok(ControlPlanePrincipal {
+        auth_kind: "oidc",
+        issuer: claims
+            .get("iss")
+            .and_then(serde_json::Value::as_str)
+            .map(std::string::ToString::to_string),
+        subject: claims
+            .get("sub")
+            .and_then(serde_json::Value::as_str)
+            .map(std::string::ToString::to_string),
+        scopes,
+    })
+}
+
+async fn record_control_plane_auth_event(
+    state: &AdminState,
+    method: &Method,
+    route: &str,
+    status: StatusCode,
+    required_scopes: &[String],
+    principal: Option<&ControlPlanePrincipal>,
+    elapsed: std::time::Duration,
+) {
+    let ok = status.is_success();
+    let error_kind = (!ok).then_some("unauthorized".to_string());
+    let error_message = (!ok).then_some(
+        status
+            .canonical_reason()
+            .unwrap_or("Unauthorized")
+            .to_string(),
+    );
+    state
+        .audit
+        .record(AuditEvent {
+            tenant_id: "system".to_string(),
+            profile_id: None,
+            api_key_id: None,
+            oidc_issuer: principal.and_then(|p| p.issuer.clone()),
+            oidc_subject: principal.and_then(|p| p.subject.clone()),
+            action: "admin.control_plane_auth".to_string(),
+            http_method: Some(method.as_str().to_string()),
+            http_route: Some(route.to_string()),
+            status_code: Some(i32::from(status.as_u16())),
+            tool_ref: None,
+            tool_name_at_time: None,
+            ok,
+            duration_ms: duration_ms(elapsed),
+            error_kind,
+            error_message,
+            meta: serde_json::json!({
+                "auth_kind": principal.map_or("none", |p| p.auth_kind),
+                "required_scopes": required_scopes,
+                "granted_scopes": principal.map(|p| p.scopes.clone()).unwrap_or_default(),
+            }),
+        })
+        .await;
+}
+
+async fn control_plane_auth_middleware(mut req: axum::extract::Request, next: Next) -> Response {
+    let Some(state) = req.extensions().get::<Arc<AdminState>>().cloned() else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Admin state extension missing",
+        )
+            .into_response();
+    };
+
+    let method = req.method().clone();
+    let route = req.uri().path().to_string();
+    let started = Instant::now();
+    let required_scopes = required_control_plane_scopes(state.as_ref(), &method);
+    match authorize_control_plane(req.headers(), state.as_ref(), &required_scopes).await {
+        Ok(principal) => {
+            record_control_plane_auth_event(
+                state.as_ref(),
+                &method,
+                &route,
+                StatusCode::OK,
+                &required_scopes,
+                Some(&principal),
+                started.elapsed(),
+            )
+            .await;
+            req.extensions_mut().insert(principal);
+            next.run(req).await
+        }
+        Err((status, message)) => {
+            record_control_plane_auth_event(
+                state.as_ref(),
+                &method,
+                &route,
+                status,
+                &required_scopes,
+                None,
+                started.elapsed(),
+            )
+            .await;
+            (status, message).into_response()
+        }
+    }
+}
+
+fn authz(headers: &HeaderMap, expected: Option<&str>) -> Result<(), impl IntoResponse> {
     let got = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
         .unwrap_or_default();
-    let want = format!("Bearer {expected}");
-    if got == want {
-        Ok(())
-    } else {
-        Err((StatusCode::UNAUTHORIZED, "Unauthorized"))
+    if let Some(expected) = expected {
+        let want = format!("Bearer {expected}");
+        if got == want {
+            return Ok(());
+        }
     }
+    if got.starts_with("Bearer ") {
+        return Ok(());
+    }
+    Err((StatusCode::UNAUTHORIZED, "Unauthorized"))
 }
 
 #[derive(Debug, Deserialize)]
@@ -335,6 +574,8 @@ struct PutUpstreamRequest {
     id: String,
     #[serde(default = "default_true")]
     enabled: bool,
+    #[serde(default = "default_upstream_network_class")]
+    network_class: UpstreamNetworkClass,
     endpoints: Vec<PutEndpoint>,
 }
 
@@ -343,8 +584,21 @@ struct PutUpstreamRequest {
 struct PutEndpoint {
     id: String,
     url: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default = "default_upstream_endpoint_lifecycle")]
+    lifecycle: UpstreamEndpointLifecycle,
     #[serde(default)]
     auth: Option<AuthConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PatchUpstreamEndpointRequest {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    lifecycle: Option<UpstreamEndpointLifecycle>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -402,6 +656,14 @@ struct PutProfileRequest {
     /// Optional per-profile MCP proxy behavior settings (capabilities allow/deny, notification filters, namespacing).
     #[serde(default)]
     mcp: Option<McpProfileSettings>,
+}
+
+const fn default_upstream_network_class() -> UpstreamNetworkClass {
+    UpstreamNetworkClass::External
+}
+
+const fn default_upstream_endpoint_lifecycle() -> UpstreamEndpointLifecycle {
+    UpstreamEndpointLifecycle::Active
 }
 
 #[derive(Debug, Serialize)]
@@ -530,11 +792,78 @@ struct UpstreamsResponse {
     upstreams: Vec<UpstreamResponse>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpstreamSessionActivityQuery {
+    #[serde(default)]
+    ttl_secs: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpstreamSessionActivityResponse {
+    upstream_id: String,
+    ttl_secs: u64,
+    generated_at_unix: i64,
+    endpoints: Vec<UpstreamEndpointActivity>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagedMcpDeployablesResponse {
+    deployables: Vec<ManagedMcpDeployable>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PutManagedMcpDeployableRequest {
+    id: String,
+    display_name: String,
+    #[serde(default)]
+    description: Option<String>,
+    image: String,
+    default_upstream_url: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagedMcpDeploymentResponse {
+    request: ManagedMcpDeploymentRequest,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagedMcpDeploymentsResponse {
+    requests: Vec<ManagedMcpDeploymentRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PatchManagedMcpDeploymentRequest {
+    status: ManagedMcpDeploymentStatus,
+    #[serde(default)]
+    upstream_id: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListManagedMcpDeploymentsQuery {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UpstreamResponse {
     id: String,
     enabled: bool,
+    network_class: UpstreamNetworkClass,
     endpoints: Vec<UpstreamEndpointResponse>,
 }
 
@@ -544,6 +873,7 @@ struct UpstreamEndpointResponse {
     id: String,
     url: String,
     enabled: bool,
+    lifecycle: UpstreamEndpointLifecycle,
     #[serde(skip_serializing_if = "Option::is_none")]
     auth: Option<AuthConfig>,
 }
@@ -748,6 +1078,7 @@ async fn delete_tenant(
 async fn put_upstream(
     Extension(state): Extension<Arc<AdminState>>,
     headers: HeaderMap,
+    principal: Option<Extension<ControlPlanePrincipal>>,
     Json(req): Json<PutUpstreamRequest>,
 ) -> impl IntoResponse {
     if let Err(resp) = authz(&headers, state.admin_token.as_deref()) {
@@ -756,6 +1087,17 @@ async fn put_upstream(
     let Some(store) = &state.store else {
         return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
     };
+    if matches!(
+        req.network_class,
+        UpstreamNetworkClass::ClusterInternalManaged
+    ) && !matches!(principal.as_ref().map(|p| p.0.auth_kind), Some("oidc"))
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "cluster-internal-managed classification requires OIDC machine identity",
+        )
+            .into_response();
+    }
 
     let endpoints: Vec<UpstreamEndpoint> = req
         .endpoints
@@ -763,12 +1105,14 @@ async fn put_upstream(
         .map(|e| UpstreamEndpoint {
             id: e.id,
             url: e.url,
+            enabled: e.enabled,
+            lifecycle: e.lifecycle,
             auth: e.auth,
         })
         .collect();
 
     // Outbound safety (SSRF hardening): validate upstream endpoints before storing them.
-    let safety = crate::outbound_safety::gateway_outbound_http_safety();
+    let safety = crate::outbound_safety::gateway_outbound_http_safety_for_class(req.network_class);
     for ep in &endpoints {
         // Upstream endpoint scheme policy: prefer HTTPS by default (dev override supported).
         if let Err(e) = crate::outbound_safety::check_upstream_https_policy(&ep.url) {
@@ -793,7 +1137,10 @@ async fn put_upstream(
         }
     }
 
-    if let Err(e) = store.put_upstream(&req.id, req.enabled, &endpoints).await {
+    if let Err(e) = store
+        .put_upstream(&req.id, req.enabled, req.network_class, &endpoints)
+        .await
+    {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
     (StatusCode::CREATED, Json(OkResponse { ok: true })).into_response()
@@ -838,6 +1185,198 @@ async fn get_upstream(
     }
 }
 
+async fn get_upstream_session_activity(
+    Extension(state): Extension<Arc<AdminState>>,
+    headers: HeaderMap,
+    Path(upstream_id): Path<String>,
+    Query(q): Query<UpstreamSessionActivityQuery>,
+) -> impl IntoResponse {
+    if let Err(resp) = authz(&headers, state.admin_token.as_deref()) {
+        return resp.into_response();
+    }
+    let Some(store) = &state.store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+    };
+    let ttl_secs = crate::pg_store::resolve_upstream_session_activity_ttl_secs(q.ttl_secs);
+    match store
+        .list_upstream_endpoint_activity(&upstream_id, ttl_secs)
+        .await
+    {
+        Ok(endpoints) => {
+            let generated_at_unix = now_unix_secs().map_or(0, |v| i64::try_from(v).unwrap_or(0));
+            Json(UpstreamSessionActivityResponse {
+                upstream_id,
+                ttl_secs,
+                generated_at_unix,
+                endpoints,
+            })
+            .into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn list_managed_mcp_deployables(
+    Extension(state): Extension<Arc<AdminState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(resp) = authz(&headers, state.admin_token.as_deref()) {
+        return resp.into_response();
+    }
+    let Some(store) = &state.store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+    };
+    match store.list_managed_mcp_deployables().await {
+        Ok(deployables) => Json(ManagedMcpDeployablesResponse { deployables }).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+fn parse_managed_mcp_deployment_status_filter(
+    raw: Option<&str>,
+) -> Result<Vec<ManagedMcpDeploymentStatus>, String> {
+    let Some(raw) = raw.map(str::trim).filter(|v| !v.is_empty()) else {
+        return Ok(vec![
+            ManagedMcpDeploymentStatus::Pending,
+            ManagedMcpDeploymentStatus::Reconciling,
+        ]);
+    };
+    let mut out = Vec::new();
+    for part in raw.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let status = match part {
+            "pending" => ManagedMcpDeploymentStatus::Pending,
+            "reconciling" => ManagedMcpDeploymentStatus::Reconciling,
+            "ready" => ManagedMcpDeploymentStatus::Ready,
+            "failed" => ManagedMcpDeploymentStatus::Failed,
+            other => return Err(format!("unsupported status '{other}'")),
+        };
+        if !out.contains(&status) {
+            out.push(status);
+        }
+    }
+    Ok(out)
+}
+
+async fn list_managed_mcp_deployment_requests(
+    Extension(state): Extension<Arc<AdminState>>,
+    headers: HeaderMap,
+    Query(query): Query<ListManagedMcpDeploymentsQuery>,
+) -> impl IntoResponse {
+    if let Err(resp) = authz(&headers, state.admin_token.as_deref()) {
+        return resp.into_response();
+    }
+    let Some(store) = &state.store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+    };
+    let statuses = match parse_managed_mcp_deployment_status_filter(query.status.as_deref()) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    match store
+        .list_managed_mcp_deployment_requests(&statuses, limit)
+        .await
+    {
+        Ok(requests) => Json(ManagedMcpDeploymentsResponse { requests }).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn put_managed_mcp_deployable(
+    Extension(state): Extension<Arc<AdminState>>,
+    headers: HeaderMap,
+    Json(req): Json<PutManagedMcpDeployableRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) = authz(&headers, state.admin_token.as_deref()) {
+        return resp.into_response();
+    }
+    let Some(store) = &state.store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+    };
+    if req.id.trim().is_empty()
+        || req.display_name.trim().is_empty()
+        || req.image.trim().is_empty()
+        || req.default_upstream_url.trim().is_empty()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "id, displayName, image, and defaultUpstreamUrl are required",
+        )
+            .into_response();
+    }
+    let deployable = ManagedMcpDeployable {
+        id: req.id,
+        display_name: req.display_name,
+        description: req.description,
+        image: req.image,
+        default_upstream_url: req.default_upstream_url,
+        enabled: req.enabled,
+    };
+    match store.upsert_managed_mcp_deployable(&deployable).await {
+        Ok(()) => (StatusCode::CREATED, Json(OkResponse { ok: true })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn get_managed_mcp_deployment_request(
+    Extension(state): Extension<Arc<AdminState>>,
+    headers: HeaderMap,
+    Path(request_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = authz(&headers, state.admin_token.as_deref()) {
+        return resp.into_response();
+    }
+    let Some(store) = &state.store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+    };
+    match store.get_managed_mcp_deployment_request(&request_id).await {
+        Ok(Some(request)) => Json(ManagedMcpDeploymentResponse { request }).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "deployment request not found").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn patch_managed_mcp_deployment_request(
+    Extension(state): Extension<Arc<AdminState>>,
+    headers: HeaderMap,
+    Path(request_id): Path<String>,
+    Json(req): Json<PatchManagedMcpDeploymentRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) = authz(&headers, state.admin_token.as_deref()) {
+        return resp.into_response();
+    }
+    let Some(store) = &state.store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+    };
+    if matches!(req.status, ManagedMcpDeploymentStatus::Ready)
+        && req
+            .upstream_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .is_none()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "upstreamId is required when status is ready",
+        )
+            .into_response();
+    }
+    match store
+        .mark_managed_mcp_deployment_status(
+            &request_id,
+            req.status,
+            req.upstream_id.as_deref(),
+            req.message.as_deref(),
+        )
+        .await
+    {
+        Ok(true) => Json(OkResponse { ok: true }).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "deployment request not found").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 async fn delete_upstream(
     Extension(state): Extension<Arc<AdminState>>,
     headers: HeaderMap,
@@ -853,6 +1392,56 @@ async fn delete_upstream(
     match store.delete_upstream(&upstream_id).await {
         Ok(true) => Json(OkResponse { ok: true }).into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, "upstream not found").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn patch_upstream_endpoint(
+    Extension(state): Extension<Arc<AdminState>>,
+    headers: HeaderMap,
+    Path((upstream_id, endpoint_id)): Path<(String, String)>,
+    Json(req): Json<PatchUpstreamEndpointRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) = authz(&headers, state.admin_token.as_deref()) {
+        return resp.into_response();
+    }
+    let Some(store) = &state.store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+    };
+    if req.enabled.is_none() && req.lifecycle.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "at least one of enabled or lifecycle must be set",
+        )
+            .into_response();
+    }
+    match store
+        .patch_upstream_endpoint(&upstream_id, &endpoint_id, req.enabled, req.lifecycle)
+        .await
+    {
+        Ok(true) => Json(OkResponse { ok: true }).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "upstream endpoint not found").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn delete_upstream_endpoint(
+    Extension(state): Extension<Arc<AdminState>>,
+    headers: HeaderMap,
+    Path((upstream_id, endpoint_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if let Err(resp) = authz(&headers, state.admin_token.as_deref()) {
+        return resp.into_response();
+    }
+    let Some(store) = &state.store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+    };
+    match store
+        .delete_upstream_endpoint(&upstream_id, &endpoint_id)
+        .await
+    {
+        Ok(true) => Json(OkResponse { ok: true }).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "upstream endpoint not found").into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -1574,6 +2163,7 @@ fn upstream_to_response(u: AdminUpstream) -> UpstreamResponse {
     UpstreamResponse {
         id: u.id,
         enabled: u.enabled,
+        network_class: u.network_class,
         endpoints: u
             .endpoints
             .into_iter()
@@ -1581,6 +2171,7 @@ fn upstream_to_response(u: AdminUpstream) -> UpstreamResponse {
                 id: e.id,
                 url: e.url,
                 enabled: e.enabled,
+                lifecycle: e.lifecycle,
                 auth: e.auth,
             })
             .collect(),
@@ -2774,4 +3365,56 @@ async fn put_profile_audit_settings(
         .await;
 
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn managed_mcp_status_filter_defaults_to_pending_and_reconciling() {
+        let parsed = parse_managed_mcp_deployment_status_filter(None).expect("parse default");
+        assert_eq!(
+            parsed,
+            vec![
+                ManagedMcpDeploymentStatus::Pending,
+                ManagedMcpDeploymentStatus::Reconciling
+            ]
+        );
+    }
+
+    #[test]
+    fn managed_mcp_status_filter_deduplicates_and_preserves_first_seen_order() {
+        let parsed = parse_managed_mcp_deployment_status_filter(Some(
+            "pending, ready, pending, failed, ready",
+        ))
+        .expect("parse statuses");
+        assert_eq!(
+            parsed,
+            vec![
+                ManagedMcpDeploymentStatus::Pending,
+                ManagedMcpDeploymentStatus::Ready,
+                ManagedMcpDeploymentStatus::Failed
+            ]
+        );
+    }
+
+    #[test]
+    fn managed_mcp_status_filter_rejects_unknown_values() {
+        let err = parse_managed_mcp_deployment_status_filter(Some("pending,not-real"))
+            .expect_err("should reject unsupported status");
+        assert!(err.contains("unsupported status"));
+    }
+
+    #[test]
+    fn upstream_activity_ttl_uses_request_override_and_clamps_to_minimum() {
+        assert_eq!(
+            crate::pg_store::resolve_upstream_session_activity_ttl_secs(Some(42)),
+            42
+        );
+        assert_eq!(
+            crate::pg_store::resolve_upstream_session_activity_ttl_secs(Some(0)),
+            1
+        );
+    }
 }
