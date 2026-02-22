@@ -1,0 +1,26 @@
+# Local kind overrides for testing unmerged workspace changes.
+# Use with values-dev.yaml:
+#   helm upgrade --install ... -f values-dev.yaml -f values-kind-local.yaml
+
+gateway:
+  image:
+    repository: unrelated-mcp-gateway
+    tag: kind
+    pullPolicy: IfNotPresent
+  migrations:
+    image:
+      repository: unrelated-mcp-gateway-migrator
+      tag: kind
+      pullPolicy: IfNotPresent
+
+gatewayui:
+  image:
+    repository: unrelated-mcp-gateway-ui
+    tag: kind
+    pullPolicy: IfNotPresent
+
+operator:
+  image:
+    repository: unrelated-mcp-gateway-operator
+    tag: kind
+    pullPolicy: IfNotPresent

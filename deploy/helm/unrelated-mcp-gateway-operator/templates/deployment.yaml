@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "unrelated-mcp-gateway-operator.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "unrelated-mcp-gateway-operator.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "unrelated-mcp-gateway-operator.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "unrelated-mcp-gateway-operator.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ include "unrelated-mcp-gateway-operator.serviceAccountName" . }}
+      containers:
+        - name: operator
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: RUST_LOG
+              value: info
+            - name: OPERATOR_NAMESPACE
+              value: {{ default .Release.Namespace .Values.watch.namespace | quote }}
+            - name: OPERATOR_LABEL_SELECTOR
+              value: {{ .Values.watch.labelSelector | quote }}
+            - name: OPERATOR_LEADER_ELECTION_ENABLED
+              value: {{ ternary "true" "false" .Values.leaderElection.enabled | quote }}
+            - name: OPERATOR_LEADER_ELECTION_LEASE_NAME
+              value: {{ .Values.leaderElection.leaseName | quote }}
+            - name: OPERATOR_LEADER_ELECTION_LEASE_NAMESPACE
+              value: {{ default .Release.Namespace .Values.leaderElection.leaseNamespace | quote }}
+            - name: OPERATOR_LEADER_ELECTION_LEASE_DURATION_SECS
+              value: {{ .Values.leaderElection.leaseDurationSeconds | quote }}
+            - name: OPERATOR_LEADER_ELECTION_RENEW_INTERVAL_SECS
+              value: {{ .Values.leaderElection.renewIntervalSeconds | quote }}
+            - name: OPERATOR_LEADER_ELECTION_RETRY_INTERVAL_SECS
+              value: {{ .Values.leaderElection.retryIntervalSeconds | quote }}
+            - name: OPERATOR_GATEWAY_BASE_URL
+              value: {{ .Values.gateway.baseUrl | quote }}
+            - name: OPERATOR_GATEWAY_BEARER_TOKEN
+              value: {{ .Values.gateway.bearerToken | quote }}
+            - name: OPERATOR_GATEWAY_TIMEOUT_SECS
+              value: {{ .Values.gateway.timeoutSeconds | quote }}
+            - name: OPERATOR_GATEWAY_RETRY_MAX_ATTEMPTS
+              value: {{ .Values.gateway.retryMaxAttempts | quote }}
+            - name: OPERATOR_GATEWAY_RETRY_BASE_DELAY_MS
+              value: {{ .Values.gateway.retryBaseDelayMs | quote }}
+            - name: OPERATOR_GATEWAY_SESSION_ACTIVITY_TTL_SECS
+              value: {{ .Values.gateway.sessionActivityTtlSeconds | quote }}
+            - name: OPERATOR_GATEWAY_UPSTREAM_NETWORK_CLASS
+              value: {{ .Values.gateway.upstreamNetworkClass | quote }}
+            - name: OPERATOR_GATEWAY_CLEANUP_MODE
+              value: {{ .Values.gateway.cleanupMode | quote }}
+            - name: OPERATOR_SERVICE_ENDPOINT_SCHEME
+              value: {{ .Values.serviceEndpoint.scheme | quote }}
+            - name: OPERATOR_SERVICE_DOMAIN_SUFFIX
+              value: {{ .Values.serviceEndpoint.domainSuffix | quote }}
+            - name: OPERATOR_REQUEST_NAMESPACE
+              value: {{ default .Release.Namespace .Values.managedRequests.namespace | quote }}
+            - name: OPERATOR_DEPLOYMENT_REQUEST_POLL_SECS
+              value: {{ .Values.managedRequests.pollSeconds | quote }}
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+      nodeSelector:
+{{ toYaml .Values.nodeSelector | indent 8 }}
+      tolerations:
+{{ toYaml .Values.tolerations | indent 8 }}
+      affinity:
+{{ toYaml .Values.affinity | indent 8 }}

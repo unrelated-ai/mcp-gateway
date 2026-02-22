@@ -1,0 +1,183 @@
+{{- $inlineSecretName := include "unrelated-mcp-gateway.inlineSecretName" . -}}
+{{- $dbSecretName := .Values.database.existingSecret.name | default "" -}}
+{{- $dbSecretKey := .Values.database.existingSecret.key | default "UNRELATED_GATEWAY_DATABASE_URL" -}}
+{{- $hasBundledDbInline := and .Values.postgres.enabled (eq $dbSecretName "") (not .Values.database.url) (eq (.Values.postgres.auth.existingSecret.name | default "") "") -}}
+{{- if and (eq $dbSecretName "") (not .Values.database.url) (not $hasBundledDbInline) -}}
+{{- fail "Set database.existingSecret.name or database.url. For bundled mode, enable postgres.enabled and set postgres.auth values (without postgres.auth.existingSecret)." -}}
+{{- end -}}
+{{- if and (eq $dbSecretName "") (or .Values.database.url $hasBundledDbInline) -}}
+{{- $dbSecretName = $inlineSecretName -}}
+{{- $dbSecretKey = "UNRELATED_GATEWAY_DATABASE_URL" -}}
+{{- end -}}
+{{- $adminTokenSecretName := .Values.auth.adminToken.existingSecret.name | default "" -}}
+{{- $adminTokenSecretKey := .Values.auth.adminToken.existingSecret.key | default "UNRELATED_GATEWAY_ADMIN_TOKEN" -}}
+{{- if and (eq $adminTokenSecretName "") .Values.auth.adminToken.value -}}
+{{- $adminTokenSecretName = $inlineSecretName -}}
+{{- $adminTokenSecretKey = "UNRELATED_GATEWAY_ADMIN_TOKEN" -}}
+{{- end -}}
+{{- $sessionSecretName := .Values.session.secret.existingSecret.name | default "" -}}
+{{- $sessionSecretKey := .Values.session.secret.existingSecret.key | default "UNRELATED_GATEWAY_SESSION_SECRET" -}}
+{{- if and (eq $sessionSecretName "") .Values.session.secret.value -}}
+{{- $sessionSecretName = $inlineSecretName -}}
+{{- $sessionSecretKey = "UNRELATED_GATEWAY_SESSION_SECRET" -}}
+{{- end -}}
+{{- $sessionSecretKeysName := .Values.session.secretKeys.existingSecret.name | default "" -}}
+{{- $sessionSecretKeysKey := .Values.session.secretKeys.existingSecret.key | default "UNRELATED_GATEWAY_SECRET_KEYS" -}}
+{{- if and (eq $sessionSecretKeysName "") .Values.session.secretKeys.value -}}
+{{- $sessionSecretKeysName = $inlineSecretName -}}
+{{- $sessionSecretKeysKey = "UNRELATED_GATEWAY_SECRET_KEYS" -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "unrelated-mcp-gateway.fullname" . }}
+  labels:
+{{ include "unrelated-mcp-gateway.labels" . | indent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+{{ include "unrelated-mcp-gateway.selectorLabels" . | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "unrelated-mcp-gateway.selectorLabels" . | indent 8 }}
+{{- with .Values.podLabels }}
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.podAnnotations }}
+      annotations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+    spec:
+      serviceAccountName: {{ include "unrelated-mcp-gateway.serviceAccountName" . }}
+{{- with .Values.podSecurityContext }}
+      securityContext:
+{{ toYaml . | indent 8 }}
+{{- end }}
+      containers:
+        - name: gateway
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+{{- with .Values.securityContext }}
+          securityContext:
+{{ toYaml . | indent 12 }}
+{{- end }}
+          ports:
+            - name: data
+              containerPort: 4000
+              protocol: TCP
+            - name: admin
+              containerPort: 4001
+              protocol: TCP
+          env:
+            - name: UNRELATED_GATEWAY_BIND
+              value: "0.0.0.0:4000"
+            - name: UNRELATED_GATEWAY_ADMIN_BIND
+              value: "0.0.0.0:4001"
+            - name: UNRELATED_GATEWAY_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $dbSecretName | quote }}
+                  key: {{ $dbSecretKey | quote }}
+            - name: UNRELATED_GATEWAY_LOG
+              value: {{ .Values.logLevel | quote }}
+            - name: UNRELATED_GATEWAY_BOOTSTRAP_ENABLED
+              value: {{ ternary "1" "0" .Values.bootstrapEnabled | quote }}
+            - name: UNRELATED_GATEWAY_SESSION_TTL_SECS
+              value: {{ .Values.session.ttlSeconds | quote }}
+            - name: UNRELATED_GATEWAY_OUTBOUND_ALLOW_PRIVATE_NETWORKS
+              value: {{ ternary "1" "0" .Values.outboundAllowPrivateNetworks | quote }}
+            {{- if .Values.topology }}
+            - name: UNRELATED_GATEWAY_TOPOLOGY
+              value: {{ .Values.topology | quote }}
+            {{- end }}
+            {{- if .Values.nodeId }}
+            - name: UNRELATED_GATEWAY_NODE_ID
+              value: {{ .Values.nodeId | quote }}
+            {{- end }}
+            {{- if $adminTokenSecretName }}
+            - name: UNRELATED_GATEWAY_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $adminTokenSecretName | quote }}
+                  key: {{ $adminTokenSecretKey | quote }}
+            {{- end }}
+            {{- if $sessionSecretName }}
+            - name: UNRELATED_GATEWAY_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $sessionSecretName | quote }}
+                  key: {{ $sessionSecretKey | quote }}
+            {{- end }}
+            {{- if $sessionSecretKeysName }}
+            - name: UNRELATED_GATEWAY_SECRET_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $sessionSecretKeysName | quote }}
+                  key: {{ $sessionSecretKeysKey | quote }}
+            {{- end }}
+            {{- if and .Values.controlPlaneOidc.enabled .Values.controlPlaneOidc.issuer }}
+            - name: UNRELATED_GATEWAY_CONTROL_PLANE_OIDC_ISSUER
+              value: {{ .Values.controlPlaneOidc.issuer | quote }}
+            {{- end }}
+            {{- if and .Values.controlPlaneOidc.enabled .Values.controlPlaneOidc.audience }}
+            - name: UNRELATED_GATEWAY_CONTROL_PLANE_OIDC_AUDIENCE
+              value: {{ .Values.controlPlaneOidc.audience | quote }}
+            {{- end }}
+            {{- if and .Values.controlPlaneOidc.enabled .Values.controlPlaneOidc.jwksUrl }}
+            - name: UNRELATED_GATEWAY_CONTROL_PLANE_OIDC_JWKS_URL
+              value: {{ .Values.controlPlaneOidc.jwksUrl | quote }}
+            {{- end }}
+            {{- if .Values.controlPlaneOidc.enabled }}
+            - name: UNRELATED_GATEWAY_CONTROL_PLANE_SCOPE_READ
+              value: {{ .Values.controlPlaneOidc.requiredScopes.read | quote }}
+            - name: UNRELATED_GATEWAY_CONTROL_PLANE_SCOPE_WRITE
+              value: {{ .Values.controlPlaneOidc.requiredScopes.write | quote }}
+            {{- end }}
+{{- with .Values.extraEnv }}
+{{ toYaml . | indent 12 }}
+{{- end }}
+{{- with .Values.extraEnvFrom }}
+          envFrom:
+{{ toYaml . | indent 12 }}
+{{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: admin
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: admin
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          startupProbe:
+            httpGet:
+              path: /health
+              port: admin
+            periodSeconds: 3
+            timeoutSeconds: 3
+            failureThreshold: 60
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+{{- with .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+{{- end }}

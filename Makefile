@@ -19,9 +19,12 @@
         clean clean-all \
         docker-build-all docker-build-adapter docker-build-adapter-stdio-node \
         docker-run-adapter docker-build-gateway docker-build-gateway-migrator \
+        docker-build-gateway-operator docker-build-ui \
+        kind-local-build-images kind-local-load-images kind-local-deploy kind-local-refresh \
         up down logs status \
         inspector \
-        ci ci-quick test-ci \
+        ci ci-quick test-ci qa-release-gates \
+        helm-validate helm-validate-optional \
         hooks-install bench help
 
 # Default target
@@ -115,6 +118,16 @@ test-integration-adapter:
 test-integration-gateway:
 	cargo test -p unrelated-mcp-gateway --tests -- --nocapture --test-threads=1 && \
 	cargo test -p unrelated-mcp-gateway --tests -- --ignored --nocapture --test-threads=1
+
+## Cross-milestone OSS release gates (gateway + operator + UI + compatibility)
+qa-release-gates:
+	cargo check -p unrelated-mcp-gateway
+	cargo test -p unrelated-mcp-gateway --test integration_tenant_api -- --ignored --nocapture --test-threads=1
+	cargo test -p unrelated-mcp-gateway --test integration_mode1_config -- --nocapture --test-threads=1
+	cargo check -p unrelated-mcp-gateway-operator
+	cargo test -p unrelated-mcp-gateway-operator
+	cd ui && npm run lint && npm run build
+	$(MAKE) helm-validate-optional
 
 # =============================================================================
 # Code Quality Targets
@@ -260,6 +273,11 @@ clean-all: clean
 # Docker
 # =============================================================================
 
+KIND_CLUSTER_NAME ?= kind
+KIND_IMAGE_TAG ?= kind
+KIND_NAMESPACE ?= mcp-gateway
+KIND_RELEASE_NAME ?= unrelated-mcp-gateway
+
 ## Build adapter runtime image (default target in Dockerfile)
 docker-build-adapter:
 	docker build -t unrelated-mcp-adapter:latest .
@@ -285,6 +303,45 @@ docker-build-gateway:
 ## Build Gateway migrator image (dbmate + baked migrations)
 docker-build-gateway-migrator:
 	docker build --target gateway-migrator -t unrelated-mcp-gateway-migrator:latest .
+
+## Build Gateway operator image (runtime)
+docker-build-gateway-operator:
+	docker build --target gateway-operator-runtime -t unrelated-mcp-gateway-operator:latest .
+
+## Build Gateway UI image
+docker-build-ui:
+	docker build -t unrelated-mcp-gateway-ui:latest ui
+
+## Build local images for kind from current workspace
+kind-local-build-images:
+	docker build --target gateway-runtime -t unrelated-mcp-gateway:$(KIND_IMAGE_TAG) .
+	docker build --target gateway-migrator -t unrelated-mcp-gateway-migrator:$(KIND_IMAGE_TAG) .
+	docker build --target gateway-operator-runtime -t unrelated-mcp-gateway-operator:$(KIND_IMAGE_TAG) .
+	docker build -t unrelated-mcp-gateway-ui:$(KIND_IMAGE_TAG) ui
+
+## Load locally built images into kind
+kind-local-load-images:
+	kind load docker-image unrelated-mcp-gateway:$(KIND_IMAGE_TAG) --name $(KIND_CLUSTER_NAME)
+	kind load docker-image unrelated-mcp-gateway-migrator:$(KIND_IMAGE_TAG) --name $(KIND_CLUSTER_NAME)
+	kind load docker-image unrelated-mcp-gateway-operator:$(KIND_IMAGE_TAG) --name $(KIND_CLUSTER_NAME)
+	kind load docker-image unrelated-mcp-gateway-ui:$(KIND_IMAGE_TAG) --name $(KIND_CLUSTER_NAME)
+
+## Deploy Helm stack to kind with local images (dev profile)
+kind-local-deploy:
+	kubectl create namespace $(KIND_NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
+	helm dependency build deploy/helm/unrelated-mcp-gateway
+	helm dependency build deploy/helm/unrelated-mcp-gateway-stack
+	helm upgrade --install $(KIND_RELEASE_NAME) deploy/helm/unrelated-mcp-gateway-stack \
+		--namespace $(KIND_NAMESPACE) \
+		-f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml \
+		-f deploy/helm/unrelated-mcp-gateway-stack/values-kind-local.yaml \
+		--set gateway.image.tag=$(KIND_IMAGE_TAG) \
+		--set gateway.migrations.image.tag=$(KIND_IMAGE_TAG) \
+		--set gatewayui.image.tag=$(KIND_IMAGE_TAG) \
+		--set operator.image.tag=$(KIND_IMAGE_TAG)
+
+## Rebuild + load + deploy local images to kind
+kind-local-refresh: kind-local-build-images kind-local-load-images kind-local-deploy
 
 ## Start services with docker-compose
 up:
@@ -328,6 +385,32 @@ ci-quick: check fmt-check test-unit
 test-ci:
 	cargo test --workspace --all-targets
 
+## Validate Helm charts (deps + lint + render smoke)
+helm-validate:
+	@command -v helm >/dev/null 2>&1 || { echo "ERROR: helm is not installed"; exit 1; }
+	helm dependency build deploy/helm/unrelated-mcp-gateway
+	helm dependency build deploy/helm/unrelated-mcp-gateway-stack
+	helm lint deploy/helm/unrelated-mcp-postgres
+	helm lint deploy/helm/unrelated-mcp-gateway-operator
+	helm lint deploy/helm/unrelated-mcp-gateway --set database.url='postgres://postgres:postgres@db:5432/gateway?sslmode=disable' --set auth.adminToken.value=dev-admin-token --set session.secret.value=dev-session-secret --set session.secretKeys.value=dev-secret-keys
+	helm lint deploy/helm/unrelated-mcp-gateway-ui --set gateway.dataBase=http://localhost:27100
+	helm lint deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml
+	helm lint deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token
+	helm template unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway --set database.url='postgres://postgres:postgres@db:5432/gateway?sslmode=disable' --set auth.adminToken.value=dev-admin-token --set session.secret.value=dev-session-secret --set session.secretKeys.value=dev-secret-keys >/dev/null
+	helm template unrelated-mcp-gateway-ui deploy/helm/unrelated-mcp-gateway-ui --set gateway.dataBase=http://localhost:27100 >/dev/null
+	helm template unrelated-mcp-gateway-stack deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml >/dev/null
+	helm template unrelated-mcp-gateway-stack deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token >/dev/null
+	helm install unrelated-mcp-gateway-smoke deploy/helm/unrelated-mcp-gateway-stack --dry-run --debug -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml >/dev/null
+	helm install unrelated-mcp-gateway-smoke deploy/helm/unrelated-mcp-gateway-stack --dry-run --debug -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token >/dev/null
+
+## Validate Helm charts if helm exists (skip otherwise)
+helm-validate-optional:
+	@if command -v helm >/dev/null 2>&1; then \
+		$(MAKE) helm-validate; \
+	else \
+		echo "Skipping helm-validate (helm not installed)."; \
+	fi
+
 ## Install repo githooks (pre-push)
 hooks-install:
 	chmod +x .githooks/pre-push
@@ -364,6 +447,7 @@ help:
 	@echo "  test-gateway         Run gateway tests"
 	@echo "  test-cli             Run gateway CLI tests"
 	@echo "  test-integration     Run integration tests (requires Docker)"
+	@echo "  qa-release-gates     Run OSS release gate suite (gateway/operator/ui)"
 	@echo ""
 	@echo "Code Quality:"
 	@echo "  fmt            Format code"
@@ -396,7 +480,13 @@ help:
 	@echo "  docker-build-adapter-stdio-node Build adapter stdio-node image"
 	@echo "  docker-build-gateway           Build gateway Docker image"
 	@echo "  docker-build-gateway-migrator  Build gateway migrator Docker image"
+	@echo "  docker-build-gateway-operator  Build gateway operator Docker image"
+	@echo "  docker-build-ui                Build gateway UI Docker image"
 	@echo "  docker-build-all               Build all images used by docker-compose"
+	@echo "  kind-local-build-images        Build gateway/ui/operator/migrator images for kind"
+	@echo "  kind-local-load-images         Load local kind images into kind cluster"
+	@echo "  kind-local-deploy              Helm deploy to kind with local image overrides"
+	@echo "  kind-local-refresh             Build + load + deploy local kind stack"
 	@echo "  docker-run-adapter            Run adapter in Docker container (standalone)"
 	@echo "  up                            Start docker-compose stack"
 	@echo "  up-reset                      Reset compose DB (delete all tenants/config)"
@@ -410,3 +500,4 @@ help:
 	@echo "CI:"
 	@echo "  ci             Run all CI checks"
 	@echo "  ci-quick       Fast CI for PRs"
+	@echo "  helm-validate  Run Helm deps/lint/template/dry-run checks"

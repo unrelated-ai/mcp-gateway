@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "unrelated-mcp-postgres.fullname" . }}
+  labels:
+{{ include "unrelated-mcp-postgres.labels" . | indent 4 }}
+spec:
+  serviceName: {{ include "unrelated-mcp-postgres.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+{{ include "unrelated-mcp-postgres.selectorLabels" . | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "unrelated-mcp-postgres.selectorLabels" . | indent 8 }}
+    spec:
+      containers:
+        - name: postgres
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: postgresql
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "unrelated-mcp-postgres.secretName" . }}
+                  key: {{ .Values.auth.existingSecret.usernameKey | default "POSTGRES_USER" | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "unrelated-mcp-postgres.secretName" . }}
+                  key: {{ .Values.auth.existingSecret.passwordKey | default "POSTGRES_PASSWORD" | quote }}
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "unrelated-mcp-postgres.secretName" . }}
+                  key: {{ .Values.auth.existingSecret.databaseKey | default "POSTGRES_DB" | quote }}
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+{{- with .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+{{ include "unrelated-mcp-postgres.labels" . | indent 10 }}
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        {{- if .Values.persistence.storageClassName }}
+        storageClassName: {{ .Values.persistence.storageClassName | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+{{- else }}
+      volumes:
+        - name: data
+          emptyDir: {}
+{{- end }}

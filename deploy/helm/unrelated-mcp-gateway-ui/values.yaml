@@ -1,0 +1,71 @@
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/unrelated-ai/mcp-gateway-ui
+  tag: "0.6.0"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+serviceAccount:
+  create: true
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+podSecurityContext: {}
+securityContext: {}
+
+service:
+  type: ClusterIP
+  port: 3000
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: ""
+  path: /
+  pathType: Prefix
+  tls: []
+
+gateway:
+  adminBase: "http://unrelated-mcp-gateway-admin:4001"
+  dataBase: "http://localhost:27100"
+  uiVersion: ""
+
+auth:
+  adminToken:
+    existingSecret:
+      name: ""
+      key: GATEWAY_ADMIN_TOKEN
+    value: ""
+
+extraEnv: []
+extraEnvFrom: []
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 75
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+networkPolicy:
+  enabled: false
+  allowSameNamespace: true
+  additionalIngressFrom: []
+  allowAllEgress: true
+  allowDnsEgress: true
+  additionalEgressTo: []

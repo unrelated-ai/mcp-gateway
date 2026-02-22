@@ -1,0 +1,150 @@
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/unrelated-ai/mcp-gateway
+  tag: "0.10.0"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+serviceAccount:
+  create: true
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+podSecurityContext: {}
+securityContext: {}
+
+service:
+  data:
+    type: ClusterIP
+    port: 4000
+    annotations: {}
+  admin:
+    type: ClusterIP
+    port: 4001
+    annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: ""
+  path: /
+  pathType: Prefix
+  tls: []
+
+adminIngress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: ""
+  path: /
+  pathType: Prefix
+  tls: []
+
+database:
+  existingSecret:
+    name: ""
+    key: UNRELATED_GATEWAY_DATABASE_URL
+  url: ""
+
+postgres:
+  enabled: false
+  fullnameOverride: unrelated-mcp-gateway-postgres
+  auth:
+    username: postgres
+    password: postgres
+    database: gateway
+  image:
+    repository: postgres
+    tag: "16-alpine"
+    pullPolicy: IfNotPresent
+  service:
+    port: 5432
+  persistence:
+    enabled: true
+    size: 8Gi
+    storageClassName: ""
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+migrations:
+  enabled: true
+  image:
+    repository: ghcr.io/unrelated-ai/mcp-gateway-migrator
+    tag: "0.10.0"
+    pullPolicy: IfNotPresent
+  # `gateway-migrator` image uses dbmate as ENTRYPOINT.
+  # Set args (not command) so this renders to `dbmate up`.
+  args:
+    - up
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 3600
+  resources: {}
+
+auth:
+  adminToken:
+    existingSecret:
+      name: ""
+      key: UNRELATED_GATEWAY_ADMIN_TOKEN
+    value: ""
+
+session:
+  secret:
+    existingSecret:
+      name: ""
+      key: UNRELATED_GATEWAY_SESSION_SECRET
+    value: ""
+  secretKeys:
+    existingSecret:
+      name: ""
+      key: UNRELATED_GATEWAY_SECRET_KEYS
+    value: ""
+  ttlSeconds: 3600
+
+bootstrapEnabled: true
+outboundAllowPrivateNetworks: false
+logLevel: info
+topology: ""
+nodeId: ""
+
+controlPlaneOidc:
+  enabled: false
+  issuer: ""
+  audience: ""
+  jwksUrl: ""
+  requiredScopes:
+    read: gateway.operator.read
+    write: gateway.operator.write
+
+extraEnv: []
+extraEnvFrom: []
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 75
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+networkPolicy:
+  enabled: false
+  allowSameNamespace: true
+  additionalIngressFrom: []
+  allowAllEgress: true
+  allowDnsEgress: true
+  additionalEgressTo: []

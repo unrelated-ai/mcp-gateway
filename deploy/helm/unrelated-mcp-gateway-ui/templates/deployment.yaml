@@ -1,0 +1,120 @@
+{{- if not .Values.gateway.adminBase -}}
+{{- fail "gateway.adminBase must be set for the UI chart." -}}
+{{- end -}}
+{{- if not .Values.gateway.dataBase -}}
+{{- fail "gateway.dataBase must be set for the UI chart." -}}
+{{- end -}}
+{{- $adminTokenSecretName := .Values.auth.adminToken.existingSecret.name | default "" -}}
+{{- $adminTokenSecretKey := .Values.auth.adminToken.existingSecret.key | default "GATEWAY_ADMIN_TOKEN" -}}
+{{- if and (eq $adminTokenSecretName "") .Values.auth.adminToken.value -}}
+{{- $adminTokenSecretName = include "unrelated-mcp-gateway-ui.inlineSecretName" . -}}
+{{- $adminTokenSecretKey = "GATEWAY_ADMIN_TOKEN" -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "unrelated-mcp-gateway-ui.fullname" . }}
+  labels:
+{{ include "unrelated-mcp-gateway-ui.labels" . | indent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+{{ include "unrelated-mcp-gateway-ui.selectorLabels" . | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "unrelated-mcp-gateway-ui.selectorLabels" . | indent 8 }}
+{{- with .Values.podLabels }}
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.podAnnotations }}
+      annotations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+    spec:
+      serviceAccountName: {{ include "unrelated-mcp-gateway-ui.serviceAccountName" . }}
+{{- with .Values.podSecurityContext }}
+      securityContext:
+{{ toYaml . | indent 8 }}
+{{- end }}
+      containers:
+        - name: ui
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+{{- with .Values.securityContext }}
+          securityContext:
+{{ toYaml . | indent 12 }}
+{{- end }}
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "3000"
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            - name: NEXT_TELEMETRY_DISABLED
+              value: "1"
+            - name: GATEWAY_ADMIN_BASE
+              value: {{ .Values.gateway.adminBase | quote }}
+            - name: NEXT_PUBLIC_GATEWAY_DATA_BASE
+              value: {{ .Values.gateway.dataBase | quote }}
+            {{- if .Values.gateway.uiVersion }}
+            - name: NEXT_PUBLIC_UI_VERSION
+              value: {{ .Values.gateway.uiVersion | quote }}
+            {{- end }}
+            {{- if $adminTokenSecretName }}
+            - name: GATEWAY_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $adminTokenSecretName | quote }}
+                  key: {{ $adminTokenSecretKey | quote }}
+            {{- end }}
+{{- with .Values.extraEnv }}
+{{ toYaml . | indent 12 }}
+{{- end }}
+{{- with .Values.extraEnvFrom }}
+          envFrom:
+{{ toYaml . | indent 12 }}
+{{- end }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 3
+            timeoutSeconds: 3
+            failureThreshold: 60
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+{{- with .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+{{- end }}

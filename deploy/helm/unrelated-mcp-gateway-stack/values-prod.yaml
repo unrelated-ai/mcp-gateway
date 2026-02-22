@@ -1,0 +1,125 @@
+operator:
+  enabled: true
+  replicaCount: 2
+  gateway:
+    baseUrl: http://unrelated-mcp-gateway-admin:4001
+    # Prefer injecting via a pre-created Secret in your platform pipeline.
+    bearerToken: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+gateway:
+  enabled: true
+  # External DB default: point this to your existing DB URL secret.
+  database:
+    existingSecret:
+      name: unrelated-mcp-gateway-db
+      key: UNRELATED_GATEWAY_DATABASE_URL
+    url: ""
+  auth:
+    adminToken:
+      existingSecret:
+        name: unrelated-mcp-gateway-secrets
+        key: UNRELATED_GATEWAY_ADMIN_TOKEN
+      value: ""
+  session:
+    secret:
+      existingSecret:
+        name: unrelated-mcp-gateway-secrets
+        key: UNRELATED_GATEWAY_SESSION_SECRET
+      value: ""
+    secretKeys:
+      existingSecret:
+        name: unrelated-mcp-gateway-secrets
+        key: UNRELATED_GATEWAY_SECRET_KEYS
+      value: ""
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    host: gateway.example.com
+    path: /
+    pathType: Prefix
+    tls:
+      - secretName: unrelated-mcp-gateway-tls
+        hosts:
+          - gateway.example.com
+  adminIngress:
+    enabled: false
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  networkPolicy:
+    enabled: true
+    allowSameNamespace: true
+    allowAllEgress: true
+    allowDnsEgress: true
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+gatewayui:
+  enabled: true
+  gateway:
+    adminBase: http://unrelated-mcp-gateway-admin:4001
+    dataBase: https://gateway.example.com
+  auth:
+    adminToken:
+      existingSecret:
+        name: unrelated-mcp-gateway-secrets
+        key: UNRELATED_GATEWAY_ADMIN_TOKEN
+      value: ""
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    host: gateway-ui.example.com
+    path: /
+    pathType: Prefix
+    tls:
+      - secretName: unrelated-mcp-gateway-ui-tls
+        hosts:
+          - gateway-ui.example.com
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  networkPolicy:
+    enabled: true
+    allowSameNamespace: true
+    allowAllEgress: true
+    allowDnsEgress: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+postgres:
+  enabled: false

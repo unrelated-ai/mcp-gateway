@@ -1,0 +1,123 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: mcpservers.gateway.unrelated.ai
+spec:
+  group: gateway.unrelated.ai
+  names:
+    kind: McpServer
+    listKind: McpServerList
+    plural: mcpservers
+    singular: mcpserver
+    shortNames:
+      - mcpsrv
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required:
+                - image
+              properties:
+                image:
+                  type: string
+                replicas:
+                  type: integer
+                  format: int32
+                  minimum: 0
+                service:
+                  type: object
+                  properties:
+                    port:
+                      type: integer
+                      format: int32
+                rollout:
+                  type: object
+                  properties:
+                    maxUnavailable:
+                      type: integer
+                      format: int32
+                    maxSurge:
+                      type: integer
+                      format: int32
+                    drainTimeoutSecs:
+                      type: integer
+                      format: int64
+                      minimum: 0
+                    rollbackTimeoutSecs:
+                      type: integer
+                      format: int64
+                      minimum: 0
+                    forceRollback:
+                      type: boolean
+                gateway:
+                  type: object
+                  properties:
+                    upstreamId:
+                      type: string
+                    deploymentRequestId:
+                      type: string
+                    endpointPath:
+                      type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                observedGeneration:
+                  type: integer
+                  format: int64
+                message:
+                  type: string
+                upstreamId:
+                  type: string
+                sourceRegistered:
+                  type: boolean
+                activeImage:
+                  type: string
+                stableImage:
+                  type: string
+                activeEndpointId:
+                  type: string
+                stableEndpointId:
+                  type: string
+                drainingEndpointId:
+                  type: string
+                rolloutPhase:
+                  type: string
+                rolloutStartedAtUnix:
+                  type: integer
+                  format: int64
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string

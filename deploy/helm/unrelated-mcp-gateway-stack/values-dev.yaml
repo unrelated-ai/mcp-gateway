@@ -1,0 +1,68 @@
+operator:
+  enabled: true
+  gateway:
+    baseUrl: http://unrelated-mcp-gateway-admin:4001
+    bearerToken: dev-admin-token
+
+gateway:
+  enabled: true
+  database:
+    existingSecret:
+      name: ""
+      key: UNRELATED_GATEWAY_DATABASE_URL
+    url: postgres://postgres:postgres@unrelated-mcp-gateway-stack-postgres:5432/gateway?sslmode=disable
+  auth:
+    adminToken:
+      existingSecret:
+        name: ""
+      value: dev-admin-token
+  session:
+    secret:
+      existingSecret:
+        name: ""
+      value: dev-session-secret
+    secretKeys:
+      existingSecret:
+        name: ""
+      value: dev-secret-keys
+  outboundAllowPrivateNetworks: true
+  ingress:
+    enabled: false
+  adminIngress:
+    enabled: false
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    enabled: false
+  networkPolicy:
+    enabled: false
+
+gatewayui:
+  enabled: true
+  gateway:
+    adminBase: http://unrelated-mcp-gateway-admin:4001
+    dataBase: http://localhost:27100
+  auth:
+    adminToken:
+      existingSecret:
+        name: ""
+      value: dev-admin-token
+  ingress:
+    enabled: false
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    enabled: false
+  networkPolicy:
+    enabled: false
+
+postgres:
+  enabled: true
+  fullnameOverride: unrelated-mcp-gateway-stack-postgres
+  auth:
+    username: postgres
+    password: postgres
+    database: gateway
+  persistence:
+    enabled: true
+    size: 4Gi
