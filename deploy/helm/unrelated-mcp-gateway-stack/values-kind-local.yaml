@@ -12,6 +12,10 @@ gateway:
       repository: unrelated-mcp-gateway-migrator
       tag: kind
       pullPolicy: IfNotPresent
+  extraEnv:
+    # Local kind/dev fixture override: managed MCP endpoints are plain HTTP service URLs.
+    - name: UNRELATED_GATEWAY_UPSTREAM_ALLOW_HTTP
+      value: "1"
 
 gatewayui:
   image:
@@ -24,3 +28,24 @@ operator:
     repository: unrelated-mcp-gateway-operator
     tag: kind
     pullPolicy: IfNotPresent
+  gateway:
+    upstreamNetworkClass: external
+
+managedFixtures:
+  enabled: true
+  auth:
+    adminToken:
+      value: dev-admin-token
+  deployables:
+    - id: real-stdio-aggregation
+      displayName: Real Stdio Aggregation
+      description: Two stdio MCP backends via Adapter (kind fixture)
+      image: unrelated-mcp-managed-stdio-aggregation:kind
+      defaultUpstreamUrl: http://managed:8080/mcp
+      enabled: true
+    - id: real-stdio-smoke
+      displayName: Real Stdio Smoke
+      description: Single stdio MCP backend via Adapter (kind fixture)
+      image: unrelated-mcp-managed-stdio-smoke:kind
+      defaultUpstreamUrl: http://managed:8080/mcp
+      enabled: true

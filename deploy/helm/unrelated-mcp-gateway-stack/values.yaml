@@ -60,3 +60,12 @@ postgres:
     database: gateway
   service:
     port: 5432
+
+managedFixtures:
+  enabled: false
+  gateway:
+    adminBaseUrl: http://unrelated-mcp-gateway-admin:4001
+  auth:
+    adminToken:
+      value: ""
+  deployables: []

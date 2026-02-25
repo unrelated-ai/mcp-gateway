@@ -11,5 +11,8 @@ dependencies:
 - name: unrelated-mcp-postgres
   repository: file://../unrelated-mcp-postgres
   version: 0.1.0
-digest: sha256:163a6619a8d7b0280a83878f9dbc5008a2a774ddcce8b4c206a2af9acc35be03
-generated: "2026-02-18T17:42:41.251551275+04:00"
+- name: unrelated-mcp-gateway-managed-fixtures
+  repository: file://../unrelated-mcp-gateway-managed-fixtures
+  version: 0.1.0
+digest: sha256:a19d810f705d04ea6bdec904b114e85ec680fadc9a10258f262472576a2b6fcf
+generated: "2026-02-23T12:10:14.041172109+04:00"

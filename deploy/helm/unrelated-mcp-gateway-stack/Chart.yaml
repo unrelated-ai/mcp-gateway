@@ -25,3 +25,8 @@ dependencies:
     repository: file://../unrelated-mcp-postgres
     alias: postgres
     condition: postgres.enabled
+  - name: unrelated-mcp-gateway-managed-fixtures
+    version: 0.1.0
+    repository: file://../unrelated-mcp-gateway-managed-fixtures
+    alias: managedFixtures
+    condition: managedFixtures.enabled
