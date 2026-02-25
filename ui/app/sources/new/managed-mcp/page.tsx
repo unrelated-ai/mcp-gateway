@@ -1,11 +1,10 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
 import { Button } from "@/components/ui";
-import { CheckCircleIcon, InfoIcon, ServerIconWireframe } from "@/components/icons";
+import { InfoIcon, ServerIconWireframe } from "@/components/icons";
 import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
 import { useToastStore } from "@/src/lib/toast-store";
@@ -23,6 +22,10 @@ function formatUnix(unix: number): string {
   return new Date(unix * 1000).toLocaleString();
 }
 
+function isInFlight(status: tenantApi.ManagedMcpDeploymentStatus): boolean {
+  return status === "pending" || status === "reconciling";
+}
+
 function statusTone(status: tenantApi.ManagedMcpDeploymentStatus): string {
   if (status === "ready") return "bg-emerald-500/10 text-emerald-300 border-emerald-500/20";
   if (status === "failed") return "bg-red-500/10 text-red-300 border-red-500/20";
@@ -33,9 +36,9 @@ function statusTone(status: tenantApi.ManagedMcpDeploymentStatus): string {
 export default function ManagedMcpDeployPage() {
   const queryClient = useQueryClient();
   const pushToast = useToastStore((s) => s.push);
-  const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const [deployingId, setDeployingId] = useState<string | null>(null);
-  const notifiedRequestRef = useRef<string | null>(null);
+  const [updatingRequestId, setUpdatingRequestId] = useState<string | null>(null);
+  const [replicaDrafts, setReplicaDrafts] = useState<Record<string, string>>({});
 
   const gatewayStatusQuery = useQuery({
     queryKey: qk.gatewayStatus(),
@@ -52,20 +55,34 @@ export default function ManagedMcpDeployPage() {
     queryFn: tenantApi.listManagedMcpDeployables,
   });
 
-  const requestQuery = useQuery({
-    queryKey: qk.managedMcpDeployment(activeRequestId ?? "none"),
-    queryFn: async () => {
-      if (!activeRequestId) throw new Error("request id is required");
-      const response = await tenantApi.getManagedMcpDeploymentRequest(activeRequestId);
-      return response.request;
-    },
-    enabled: !!activeRequestId,
+  const deploymentsQuery = useQuery({
+    queryKey: qk.managedMcpDeployments(),
+    queryFn: tenantApi.listManagedMcpDeploymentRequests,
     refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      if (status === "ready" || status === "failed") return false;
+      const requests = query.state.data?.requests ?? [];
+      if (!requests.some((request) => isInFlight(request.status))) return false;
       return 2000;
     },
   });
+
+  const latestRequestByDeployable = useMemo(() => {
+    const latest = new Map<string, tenantApi.ManagedMcpDeploymentRequest>();
+    for (const request of deploymentsQuery.data?.requests ?? []) {
+      const current = latest.get(request.deployableId);
+      if (!current) {
+        latest.set(request.deployableId, request);
+        continue;
+      }
+      if (
+        request.updatedAtUnix > current.updatedAtUnix ||
+        (request.updatedAtUnix === current.updatedAtUnix &&
+          request.createdAtUnix > current.createdAtUnix)
+      ) {
+        latest.set(request.deployableId, request);
+      }
+    }
+    return latest;
+  }, [deploymentsQuery.data?.requests]);
 
   const deployMutation = useMutation({
     mutationFn: async (deployableId: string) => {
@@ -77,11 +94,15 @@ export default function ManagedMcpDeployPage() {
     },
     onMutate: (deployableId) => {
       setDeployingId(deployableId);
-      notifiedRequestRef.current = null;
     },
-    onSuccess: (request) => {
-      setActiveRequestId(request.id);
-      pushToast({ variant: "success", message: "Deployment requested" });
+    onSuccess: async (request) => {
+      await queryClient.invalidateQueries({ queryKey: qk.managedMcpDeployments() });
+      if (request.status === "ready") {
+        await queryClient.invalidateQueries({ queryKey: qk.upstreams() });
+        pushToast({ variant: "success", message: "Managed MCP already deployed" });
+      } else {
+        pushToast({ variant: "success", message: "Deployment requested" });
+      }
     },
     onError: (e) => {
       pushToast({
@@ -94,33 +115,43 @@ export default function ManagedMcpDeployPage() {
     },
   });
 
-  useEffect(() => {
-    const request = requestQuery.data;
-    if (!request) return;
-    if (request.status !== "ready" && request.status !== "failed") return;
-    if (notifiedRequestRef.current === request.id) return;
-    notifiedRequestRef.current = request.id;
-
-    if (request.status === "ready") {
-      void queryClient.invalidateQueries({ queryKey: qk.upstreams() });
-      pushToast({ variant: "success", message: "Managed MCP is ready" });
-      return;
-    }
-
-    pushToast({
-      variant: "error",
-      message: request.message?.trim() || "Managed MCP deployment failed",
-    });
-  }, [pushToast, queryClient, requestQuery.data]);
+  const updateMutation = useMutation({
+    mutationFn: async (input: {
+      requestId: string;
+      patch: { enabled?: boolean; replicas?: number };
+    }) => {
+      const response = await tenantApi.updateManagedMcpDeploymentRequest(
+        input.requestId,
+        input.patch,
+      );
+      return response.request;
+    },
+    onMutate: ({ requestId }) => {
+      setUpdatingRequestId(requestId);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: qk.managedMcpDeployments() });
+      pushToast({ variant: "success", message: "Managed deployment update requested" });
+    },
+    onError: (e) => {
+      pushToast({
+        variant: "error",
+        message: e instanceof Error ? e.message : "Failed to update managed deployment",
+      });
+    },
+    onSettled: () => {
+      setUpdatingRequestId(null);
+    },
+  });
 
   const deployables = deployablesQuery.data?.deployables ?? [];
 
   return (
     <AppShell>
       <PageHeader
-        title="Deploy managed MCP"
+        title="Deployment"
         description="Pick an approved deployable and request a cluster deployment. This creates a source in Gateway only; profile attachment remains manual."
-        breadcrumb={[{ label: "Sources", href: "/sources" }, { label: "Managed MCP" }]}
+        breadcrumb={[{ label: "Sources", href: "/sources" }, { label: "Deployment" }]}
       />
 
       <PageContent className="space-y-6">
@@ -146,57 +177,6 @@ export default function ManagedMcpDeployPage() {
           </div>
         </section>
 
-        {activeRequestId && (
-          <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-5 space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="text-sm font-semibold text-zinc-100">Latest deployment request</h2>
-              {requestQuery.data ? (
-                <span
-                  className={`px-2 py-1 rounded-md border text-xs font-medium ${statusTone(requestQuery.data.status)}`}
-                >
-                  {requestQuery.data.status}
-                </span>
-              ) : null}
-            </div>
-            {requestQuery.isPending && (
-              <p className="text-sm text-zinc-400">Loading request status…</p>
-            )}
-            {requestQuery.error && (
-              <p className="text-sm text-red-300">
-                {requestQuery.error instanceof Error
-                  ? requestQuery.error.message
-                  : "Failed to load deployment status"}
-              </p>
-            )}
-            {requestQuery.data && (
-              <div className="space-y-2 text-sm text-zinc-300">
-                <p>
-                  Request: <span className="font-mono text-zinc-100">{requestQuery.data.id}</span>
-                </p>
-                <p>
-                  Deployable:{" "}
-                  <span className="font-mono text-zinc-100">{requestQuery.data.deployableId}</span>
-                </p>
-                <p>Updated: {formatUnix(requestQuery.data.updatedAtUnix)}</p>
-                {requestQuery.data.message ? (
-                  <p className="text-zinc-400">{requestQuery.data.message}</p>
-                ) : null}
-                {requestQuery.data.status === "ready" && requestQuery.data.upstreamId ? (
-                  <div className="pt-1">
-                    <Link
-                      href={`/sources/upstreams/${encodeURIComponent(requestQuery.data.upstreamId)}`}
-                      className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20 transition-colors"
-                    >
-                      <CheckCircleIcon className="w-4 h-4" />
-                      Open upstream
-                    </Link>
-                  </div>
-                ) : null}
-              </div>
-            )}
-          </section>
-        )}
-
         <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 overflow-hidden">
           <div className="px-5 py-4 border-b border-zinc-800/60">
             <h2 className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
@@ -216,6 +196,13 @@ export default function ManagedMcpDeployPage() {
                   : "Failed to load deployables"}
               </div>
             )}
+            {deploymentsQuery.error && (
+              <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200">
+                {deploymentsQuery.error instanceof Error
+                  ? deploymentsQuery.error.message
+                  : "Failed to load deployment status"}
+              </div>
+            )}
             {!deployablesQuery.isPending && !deployablesQuery.error && deployables.length === 0 && (
               <div className="text-sm text-zinc-500">
                 No deployables are available right now. Ask an admin to publish entries.
@@ -223,43 +210,149 @@ export default function ManagedMcpDeployPage() {
             )}
             {!deployablesQuery.isPending && !deployablesQuery.error && deployables.length > 0 && (
               <div className="space-y-3">
-                {deployables.map((deployable) => (
-                  <article
-                    key={deployable.id}
-                    className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4 flex items-start justify-between gap-4"
-                  >
-                    <div className="min-w-0">
-                      <h3 className="text-base font-semibold text-zinc-100">
-                        {deployable.displayName}
-                      </h3>
-                      {deployable.description ? (
-                        <p className="mt-1 text-sm text-zinc-400">{deployable.description}</p>
-                      ) : null}
-                      <div className="mt-2 space-y-1 text-xs text-zinc-500">
-                        <p>
-                          ID: <span className="font-mono">{deployable.id}</span>
-                        </p>
-                        <p>
-                          Image: <span className="font-mono break-all">{deployable.image}</span>
-                        </p>
-                        <p>
-                          Endpoint template:{" "}
-                          <span className="font-mono break-all">
-                            {deployable.defaultUpstreamUrl}
-                          </span>
-                        </p>
-                      </div>
-                    </div>
-                    <Button
-                      type="button"
-                      onClick={() => deployMutation.mutate(deployable.id)}
-                      loading={deployMutation.isPending && deployingId === deployable.id}
-                      disabled={deployMutation.isPending || !managedMcpSupported}
+                {deployables.map((deployable) => {
+                  const latest = latestRequestByDeployable.get(deployable.id);
+                  const inFlight = latest ? isInFlight(latest.status) : false;
+                  const isReady = latest?.status === "ready" && !!latest.upstreamId;
+                  const controlsBusy =
+                    !!latest &&
+                    (inFlight || (updateMutation.isPending && updatingRequestId === latest.id));
+                  const canDeploy =
+                    !deployMutation.isPending && !inFlight && !isReady && managedMcpSupported;
+                  const deployLabel = inFlight
+                    ? "Deploying..."
+                    : latest?.status === "failed"
+                      ? "Retry deploy"
+                      : "Deploy";
+                  const draftReplicasRaw = latest
+                    ? (replicaDrafts[latest.id] ?? String(latest.desiredReplicas))
+                    : "1";
+                  const parsedDraftReplicas = Number.parseInt(draftReplicasRaw, 10);
+                  const draftReplicasValid =
+                    Number.isFinite(parsedDraftReplicas) &&
+                    parsedDraftReplicas >= 1 &&
+                    parsedDraftReplicas <= 50;
+                  const replicasDirty =
+                    !!latest &&
+                    draftReplicasValid &&
+                    parsedDraftReplicas !== latest.desiredReplicas;
+
+                  return (
+                    <article
+                      key={deployable.id}
+                      className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4 flex items-start justify-between gap-4"
                     >
-                      Deploy
-                    </Button>
-                  </article>
-                ))}
+                      <div className="min-w-0">
+                        <h3 className="text-base font-semibold text-zinc-100">
+                          {deployable.displayName}
+                        </h3>
+                        {deployable.description ? (
+                          <p className="mt-1 text-sm text-zinc-400">{deployable.description}</p>
+                        ) : null}
+                        {latest ? (
+                          <div className="mt-2 flex items-center gap-2 text-xs">
+                            <span
+                              className={`px-2 py-0.5 rounded-md border font-medium ${statusTone(latest.status)}`}
+                            >
+                              {latest.status}
+                            </span>
+                            <span className="text-zinc-500">
+                              Updated {formatUnix(latest.updatedAtUnix)}
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="mt-2 text-xs text-zinc-500">Not deployed yet.</div>
+                        )}
+                        {latest ? (
+                          <div className="mt-1 text-xs text-zinc-500">
+                            Desired state: {latest.desiredEnabled ? "enabled" : "disabled"} ·
+                            replicas {latest.desiredReplicas}
+                          </div>
+                        ) : null}
+                        {latest?.status === "failed" && latest.message ? (
+                          <p className="mt-2 text-xs text-red-300 break-words">{latest.message}</p>
+                        ) : null}
+                        <div className="mt-2 space-y-1 text-xs text-zinc-500">
+                          <p>
+                            ID: <span className="font-mono">{deployable.id}</span>
+                          </p>
+                          <p>
+                            Image: <span className="font-mono break-all">{deployable.image}</span>
+                          </p>
+                        </div>
+                      </div>
+                      {isReady && latest ? (
+                        <div className="shrink-0 space-y-2 w-[220px]">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            disabled={controlsBusy || updateMutation.isPending}
+                            onClick={() => {
+                              const nextEnabled = !latest.desiredEnabled;
+                              const nextReplicas = nextEnabled
+                                ? Math.max(latest.desiredReplicas, 1)
+                                : 0;
+                              updateMutation.mutate({
+                                requestId: latest.id,
+                                patch: { enabled: nextEnabled, replicas: nextReplicas },
+                              });
+                            }}
+                          >
+                            {latest.desiredEnabled ? "Disable" : "Enable"}
+                          </Button>
+                          <div className="rounded-lg border border-zinc-800/60 bg-zinc-900/50 p-2 space-y-2">
+                            <label className="text-xs text-zinc-400">Replicas</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={50}
+                              inputMode="numeric"
+                              value={draftReplicasRaw}
+                              disabled={
+                                !latest.desiredEnabled ||
+                                controlsBusy ||
+                                updateMutation.isPending ||
+                                (updatingRequestId != null && updatingRequestId !== latest.id)
+                              }
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                setReplicaDrafts((prev) => ({ ...prev, [latest.id]: value }));
+                              }}
+                              className="w-full h-9 rounded-md bg-zinc-950 border border-zinc-800 px-2 text-sm text-zinc-200"
+                            />
+                            <Button
+                              type="button"
+                              disabled={
+                                !latest.desiredEnabled ||
+                                !draftReplicasValid ||
+                                !replicasDirty ||
+                                controlsBusy ||
+                                updateMutation.isPending
+                              }
+                              onClick={() =>
+                                updateMutation.mutate({
+                                  requestId: latest.id,
+                                  patch: { replicas: parsedDraftReplicas },
+                                })
+                              }
+                            >
+                              Apply
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <Button
+                          type="button"
+                          onClick={() => deployMutation.mutate(deployable.id)}
+                          loading={deployMutation.isPending && deployingId === deployable.id}
+                          disabled={!canDeploy}
+                        >
+                          {deployLabel}
+                        </Button>
+                      )}
+                    </article>
+                  );
+                })}
               </div>
             )}
           </div>

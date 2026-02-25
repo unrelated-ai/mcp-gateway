@@ -20,7 +20,6 @@ import {
   DocumentIcon,
   GlobeIconSimple,
   PlusIcon,
-  ServerIconStack,
   ServerIconWireframe,
   SourcesIcon,
   TrashIcon,
@@ -32,14 +31,6 @@ const EMPTY_UPSTREAMS: tenantApi.Upstream[] = [];
 const EMPTY_SOURCES: ToolSourceSummary[] = [];
 
 type CreateKind = "tool_http";
-type GatewayStatusResponse =
-  | {
-      ok: true;
-      status: {
-        topology?: string;
-      };
-    }
-  | { ok: false; error?: string; status?: number };
 
 export default function SourcesPage() {
   const router = useRouter();
@@ -67,23 +58,51 @@ export default function SourcesPage() {
   });
   const sources: ToolSourceSummary[] = (sourcesQuery.data?.sources ??
     EMPTY_SOURCES) as ToolSourceSummary[];
-
-  const gatewayStatusQuery = useQuery({
-    queryKey: qk.gatewayStatus(),
-    queryFn: async () => {
-      const res = await fetch("/api/gateway/status", { cache: "no-store" });
-      return (await res.json()) as GatewayStatusResponse;
-    },
+  const managedDeploymentsQuery = useQuery({
+    queryKey: qk.managedMcpDeployments(),
+    queryFn: tenantApi.listManagedMcpDeploymentRequests,
   });
-  const managedMcpSupported =
-    gatewayStatusQuery.data?.ok && gatewayStatusQuery.data.status.topology === "operator-oss";
-  const managedMcpReason = gatewayStatusQuery.isPending
-    ? "Checking Gateway topology…"
-    : managedMcpSupported
-      ? null
-      : gatewayStatusQuery.data?.ok
-        ? `Requires operator topology (current: ${gatewayStatusQuery.data.status.topology ?? "unknown"}).`
-        : "Gateway status unavailable.";
+  const managedDeployablesQuery = useQuery({
+    queryKey: qk.managedMcpDeployables(),
+    queryFn: tenantApi.listManagedMcpDeployables,
+  });
+  const managedDisplayByUpstreamId = useMemo(() => {
+    const deployableById = new Map(
+      (managedDeployablesQuery.data?.deployables ?? []).map((deployable) => [
+        deployable.id,
+        deployable,
+      ]),
+    );
+    const latestByUpstreamId = new Map<string, tenantApi.ManagedMcpDeploymentRequest>();
+    for (const request of managedDeploymentsQuery.data?.requests ?? []) {
+      const upstreamId = request.upstreamId;
+      if (!upstreamId) continue;
+      const current = latestByUpstreamId.get(upstreamId);
+      if (
+        !current ||
+        request.updatedAtUnix > current.updatedAtUnix ||
+        (request.updatedAtUnix === current.updatedAtUnix &&
+          request.createdAtUnix > current.createdAtUnix)
+      ) {
+        latestByUpstreamId.set(upstreamId, request);
+      }
+    }
+    const result = new Map<
+      string,
+      {
+        displayName: string;
+        deployableId: string;
+      }
+    >();
+    for (const [upstreamId, request] of latestByUpstreamId) {
+      const deployable = deployableById.get(request.deployableId);
+      result.set(upstreamId, {
+        displayName: deployable?.displayName ?? request.deployableId,
+        deployableId: request.deployableId,
+      });
+    }
+    return result;
+  }, [managedDeploymentsQuery.data?.requests, managedDeployablesQuery.data?.deployables]);
 
   const profilesQuery = useQuery({
     queryKey: qk.profiles(),
@@ -221,61 +240,75 @@ export default function SourcesPage() {
             )}
             {!upstreamsQuery.isPending && !upstreamsQuery.error && upstreams.length > 0 && (
               <div className="space-y-3">
-                {upstreams.map((u) => (
-                  <Link
-                    key={`${u.owner}:${u.id}`}
-                    href={`/sources/upstreams/${encodeURIComponent(u.id)}`}
-                    className="block rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-5 hover:border-zinc-700/80 hover:bg-zinc-900/40 transition-all duration-150 group"
-                  >
-                    <div className="flex items-center justify-between gap-4">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-3">
-                          <h3 className="text-base font-semibold text-zinc-100 font-mono">
-                            {u.id}
-                          </h3>
-                          <Badge tone={u.owner === "tenant" ? "violet" : "zinc"}>
-                            {u.owner === "tenant" ? "tenant" : "global"}
-                          </Badge>
-                          <Badge tone={u.enabled ? "emerald" : "zinc"}>
-                            {u.enabled ? "enabled" : "disabled"}
-                          </Badge>
-                        </div>
-                        <div className="mt-2 space-y-1 text-xs text-zinc-400">
-                          {u.endpoints.map((ep, idx) => (
-                            <div key={ep.id} className="flex items-center gap-2">
-                              {u.endpoints.length > 1 ? (
-                                <span className="text-zinc-500">Endpoint {idx + 1}</span>
-                              ) : (
-                                <span className="text-zinc-500">Endpoint</span>
-                              )}
-                              <span className="truncate">{ep.url}</span>
+                {upstreams.map((u) => {
+                  const managedInfo = managedDisplayByUpstreamId.get(u.id);
+                  return (
+                    <Link
+                      key={`${u.owner}:${u.id}`}
+                      href={`/sources/upstreams/${encodeURIComponent(u.id)}`}
+                      className="block rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-5 hover:border-zinc-700/80 hover:bg-zinc-900/40 transition-all duration-150 group"
+                    >
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-3">
+                            <h3
+                              className={`text-base font-semibold text-zinc-100 ${managedInfo ? "" : "font-mono"}`}
+                            >
+                              {managedInfo?.displayName ?? u.id}
+                            </h3>
+                            <Badge tone={u.owner === "tenant" ? "violet" : "zinc"}>
+                              {u.owner === "tenant" ? "tenant" : "global"}
+                            </Badge>
+                            <Badge tone={u.enabled ? "emerald" : "zinc"}>
+                              {u.enabled ? "enabled" : "disabled"}
+                            </Badge>
+                          </div>
+                          {managedInfo ? (
+                            <div className="mt-1 text-xs text-zinc-500">
+                              Deployable ID:{" "}
+                              <span className="font-mono text-zinc-300">
+                                {managedInfo.deployableId}
+                              </span>{" "}
+                              · Upstream ID: <span className="font-mono text-zinc-300">{u.id}</span>
                             </div>
-                          ))}
+                          ) : null}
+                          <div className="mt-2 space-y-1 text-xs text-zinc-400">
+                            {u.endpoints.map((ep, idx) => (
+                              <div key={ep.id} className="flex items-center gap-2">
+                                {u.endpoints.length > 1 ? (
+                                  <span className="text-zinc-500">Endpoint {idx + 1}</span>
+                                ) : (
+                                  <span className="text-zinc-500">Endpoint</span>
+                                )}
+                                <span className="truncate">{ep.url}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          {u.owner === "tenant" && (
+                            <button
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setDeleteTarget({ kind: "upstream", id: u.id });
+                              }}
+                              disabled={
+                                deleteUpstreamMutation.isPending && deletingUpstreamId === u.id
+                              }
+                              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-zinc-300 hover:text-white hover:bg-zinc-800/60 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              <TrashIcon className="w-4 h-4" />
+                              Delete
+                            </button>
+                          )}
+                          <ChevronRightIcon className="w-5 h-5 text-zinc-600 group-hover:text-zinc-400 transition-colors shrink-0" />
                         </div>
                       </div>
-
-                      <div className="flex items-center gap-2 shrink-0">
-                        {u.owner === "tenant" && (
-                          <button
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setDeleteTarget({ kind: "upstream", id: u.id });
-                            }}
-                            disabled={
-                              deleteUpstreamMutation.isPending && deletingUpstreamId === u.id
-                            }
-                            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-zinc-300 hover:text-white hover:bg-zinc-800/60 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            <TrashIcon className="w-4 h-4" />
-                            Delete
-                          </button>
-                        )}
-                        <ChevronRightIcon className="w-5 h-5 text-zinc-600 group-hover:text-zinc-400 transition-colors shrink-0" />
-                      </div>
-                    </div>
-                  </Link>
-                ))}
+                    </Link>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -447,26 +480,6 @@ export default function SourcesPage() {
               <ServerIconWireframe className="w-8 h-8 text-violet-400 mx-auto mb-2" />
               <div className="text-sm font-medium text-zinc-200">Remote MCP</div>
               <div className="text-xs text-zinc-500 mt-1">Connect an existing MCP endpoint</div>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (!managedMcpSupported) return;
-                addPicker.onClose();
-                router.push("/sources/new/managed-mcp");
-              }}
-              disabled={!managedMcpSupported}
-              className={`p-4 rounded-xl border border-zinc-800 bg-zinc-950/60 transition-all ${
-                managedMcpSupported
-                  ? "hover:border-indigo-500/30 hover:bg-indigo-500/5"
-                  : "opacity-60 cursor-not-allowed"
-              }`}
-            >
-              <ServerIconStack className="w-8 h-8 text-indigo-400 mx-auto mb-2" />
-              <div className="text-sm font-medium text-zinc-200">Managed MCP</div>
-              <div className="text-xs text-zinc-500 mt-1">
-                {managedMcpReason ?? "Deploy from approved catalog"}
-              </div>
             </button>
             <button
               type="button"

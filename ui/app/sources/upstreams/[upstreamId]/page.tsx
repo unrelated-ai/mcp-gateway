@@ -4,7 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
-import { Button, ConfirmModal, Input, QueryParamAuthWarning } from "@/components/ui";
+import { Button, ConfirmModal, CopyButton, Input, QueryParamAuthWarning } from "@/components/ui";
 import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
 import { useToastStore } from "@/src/lib/toast-store";
@@ -98,10 +98,26 @@ function formatLastSeen(unix: number | null | undefined): string {
   return `${Math.floor(delta / 86400)}d ago`;
 }
 
+function formatAuthTypeLabel(authType: EndpointDraft["authType"]): string {
+  switch (authType) {
+    case "bearer":
+      return "Bearer";
+    case "basic":
+      return "Basic";
+    case "header":
+      return "Header";
+    case "query":
+      return "Query";
+    default:
+      return "None";
+  }
+}
+
 export default function UpstreamDetailPage() {
   const params = useParams();
   const router = useRouter();
   const upstreamId = String(params.upstreamId ?? "");
+  const isManagedUpstreamId = upstreamId.startsWith("managed_");
 
   const queryClient = useQueryClient();
   const pushToast = useToastStore((s) => s.push);
@@ -113,6 +129,43 @@ export default function UpstreamDetailPage() {
   });
   const upstream = upstreamQuery.data ?? null;
 
+  const managedDeploymentsQuery = useQuery({
+    queryKey: qk.managedMcpDeployments(),
+    enabled: isManagedUpstreamId,
+    queryFn: tenantApi.listManagedMcpDeploymentRequests,
+  });
+  const managedDeployablesQuery = useQuery({
+    queryKey: qk.managedMcpDeployables(),
+    enabled: isManagedUpstreamId,
+    queryFn: tenantApi.listManagedMcpDeployables,
+  });
+  const latestManagedRequest = useMemo(() => {
+    if (!isManagedUpstreamId) return null;
+    let latest: tenantApi.ManagedMcpDeploymentRequest | null = null;
+    for (const request of managedDeploymentsQuery.data?.requests ?? []) {
+      if (request.upstreamId !== upstreamId) continue;
+      if (!latest) {
+        latest = request;
+        continue;
+      }
+      if (
+        request.updatedAtUnix > latest.updatedAtUnix ||
+        (request.updatedAtUnix === latest.updatedAtUnix &&
+          request.createdAtUnix > latest.createdAtUnix)
+      ) {
+        latest = request;
+      }
+    }
+    return latest;
+  }, [isManagedUpstreamId, managedDeploymentsQuery.data?.requests, upstreamId]);
+  const managedDeployable = useMemo(() => {
+    const deployableId = latestManagedRequest?.deployableId;
+    if (!deployableId) return null;
+    return (
+      (managedDeployablesQuery.data?.deployables ?? []).find((d) => d.id === deployableId) ?? null
+    );
+  }, [latestManagedRequest?.deployableId, managedDeployablesQuery.data?.deployables]);
+
   const [activeTab, setActiveTab] = useState<"endpoints" | "discovery">("endpoints");
   const [draft, setDraft] = useState<EndpointDraft[] | null>(null);
   const [showDelete, setShowDelete] = useState(false);
@@ -123,7 +176,7 @@ export default function UpstreamDetailPage() {
 
   const sessionActivityQuery = useQuery({
     queryKey: qk.upstreamSessionActivity(upstreamId, 300),
-    enabled: !!upstreamId && activeTab === "endpoints",
+    enabled: !!upstreamId && activeTab === "endpoints" && !isManagedUpstreamId,
     queryFn: () => tenantApi.getUpstreamSessionActivity(upstreamId, 300),
     refetchInterval: 15000,
   });
@@ -136,6 +189,7 @@ export default function UpstreamDetailPage() {
   }, [sessionActivityQuery.data]);
 
   const canEdit = upstream?.owner === "tenant";
+  const isManagedUpstream = upstream?.id.startsWith("managed_") ?? false;
 
   const initialDraft = useMemo(() => {
     if (!upstream) return null;
@@ -267,11 +321,20 @@ export default function UpstreamDetailPage() {
     },
   });
 
+  const headerTitle = upstream
+    ? isManagedUpstream
+      ? (managedDeployable?.displayName ?? latestManagedRequest?.deployableId ?? upstream.id)
+      : upstream.id
+    : "Upstream";
+  const headerDescription = isManagedUpstream
+    ? "Managed MCP upstream."
+    : "Streamable HTTP MCP upstream.";
+
   return (
     <AppShell>
       <PageHeader
-        title={upstream ? upstream.id : "Upstream"}
-        description="Streamable HTTP MCP upstream."
+        title={headerTitle}
+        description={headerDescription}
         breadcrumb={[
           { label: "Sources", href: "/sources" },
           { label: "Upstreams", href: "/sources" },
@@ -298,6 +361,28 @@ export default function UpstreamDetailPage() {
           </div>
         ) : (
           <>
+            {isManagedUpstream ? (
+              <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-4">
+                <div className="text-xs font-medium text-zinc-400">Managed deployment</div>
+                <div className="mt-1 text-sm text-zinc-200">
+                  {managedDeployable?.displayName ??
+                    latestManagedRequest?.deployableId ??
+                    "Managed MCP upstream"}
+                </div>
+                <div className="mt-1 text-xs text-zinc-500 space-y-1">
+                  {managedDeployable ? (
+                    <div>
+                      Deployable ID:{" "}
+                      <span className="font-mono text-zinc-300">{managedDeployable.id}</span>
+                    </div>
+                  ) : null}
+                  <div>
+                    Upstream ID: <span className="font-mono text-zinc-300">{upstream.id}</span>
+                  </div>
+                </div>
+              </section>
+            ) : null}
+
             <div className="flex items-center gap-1 border-b border-zinc-800/60">
               {(
                 [
@@ -325,29 +410,36 @@ export default function UpstreamDetailPage() {
                 <div className="flex items-center justify-between gap-4">
                   <div className="space-y-1">
                     <div className="text-sm text-zinc-400">
-                      Endpoints used by the Gateway to connect to this upstream.
+                      {isManagedUpstream
+                        ? "Managed endpoint used by the Gateway to connect to this deployment."
+                        : "Endpoints used by the Gateway to connect to this upstream."}
                     </div>
-                    <div className="text-xs text-zinc-500">
-                      Network class: <span className="text-zinc-300">{upstream.networkClass}</span>{" "}
-                      · Session TTL:{" "}
-                      <span className="text-zinc-300">
-                        {sessionActivityQuery.data?.ttlSecs ?? 300}s
-                      </span>
-                    </div>
+                    {!isManagedUpstream ? (
+                      <div className="text-xs text-zinc-500">
+                        Network class:{" "}
+                        <span className="text-zinc-300">{upstream.networkClass}</span> · Session
+                        TTL:{" "}
+                        <span className="text-zinc-300">
+                          {sessionActivityQuery.data?.ttlSecs ?? 300}s
+                        </span>
+                      </div>
+                    ) : null}
                   </div>
                   <div className="flex items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      onClick={() =>
-                        queryClient.invalidateQueries({
-                          queryKey: qk.upstreamSessionActivity(upstreamId, 300),
-                        })
-                      }
-                      disabled={sessionActivityQuery.isFetching}
-                    >
-                      {sessionActivityQuery.isFetching ? "Refreshing…" : "Refresh activity"}
-                    </Button>
+                    {!isManagedUpstream ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={() =>
+                          queryClient.invalidateQueries({
+                            queryKey: qk.upstreamSessionActivity(upstreamId, 300),
+                          })
+                        }
+                        disabled={sessionActivityQuery.isFetching}
+                      >
+                        {sessionActivityQuery.isFetching ? "Refreshing…" : "Refresh activity"}
+                      </Button>
+                    ) : null}
                     {canEdit ? (
                       <>
                         <Button
@@ -381,6 +473,10 @@ export default function UpstreamDetailPage() {
                       deleteEndpointMutation.isPending &&
                       deleteEndpointMutation.variables === ep.id;
                     const endpointBusy = patchingThis || deletingThis || saveMutation.isPending;
+                    const managedReadOnly = isManagedUpstream && !canEdit;
+                    const urlTone = ep.enabled
+                      ? "bg-emerald-500/5 border-emerald-500/25 text-emerald-200"
+                      : "bg-zinc-950/60 border-zinc-800 text-zinc-200";
                     return (
                       <div
                         key={ep.id}
@@ -388,22 +484,50 @@ export default function UpstreamDetailPage() {
                       >
                         <div className="flex items-start justify-between gap-4">
                           <div className="min-w-0">
-                            <div className="text-xs text-zinc-500">Endpoint</div>
-                            {(effectiveDraft?.length ?? 0) > 1 || ep.id !== "e1" ? (
-                              <div className="text-sm font-semibold text-zinc-200 font-mono">
-                                {ep.id}
-                              </div>
-                            ) : (
-                              <div className="text-sm font-semibold text-zinc-200">Primary</div>
-                            )}
-                            <div className="mt-1 text-xs text-zinc-500">
-                              Active sessions:{" "}
-                              <span className="text-zinc-300">{activity?.activeSessions ?? 0}</span>{" "}
-                              · last seen{" "}
-                              <span className="text-zinc-300">
-                                {formatLastSeen(activity?.lastSeenUnix)}
-                              </span>
+                            <div className="text-xs text-zinc-500">
+                              {managedReadOnly ? "Managed endpoint" : "Endpoint"}
                             </div>
+                            {managedReadOnly ? (
+                              <>
+                                <div className="text-sm font-semibold text-zinc-200">
+                                  {managedDeployable?.displayName ??
+                                    latestManagedRequest?.deployableId ??
+                                    "Managed MCP"}
+                                </div>
+                                {managedDeployable ? (
+                                  <div className="mt-1 text-xs text-zinc-500">
+                                    Deployable ID:{" "}
+                                    <span className="font-mono text-zinc-300">
+                                      {managedDeployable.id}
+                                    </span>
+                                  </div>
+                                ) : null}
+                                <div className="mt-1 text-xs text-zinc-500">
+                                  Revision:{" "}
+                                  <span className="font-mono text-zinc-300 break-all">{ep.id}</span>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                {(effectiveDraft?.length ?? 0) > 1 || ep.id !== "e1" ? (
+                                  <div className="text-sm font-semibold text-zinc-200 font-mono">
+                                    {ep.id}
+                                  </div>
+                                ) : (
+                                  <div className="text-sm font-semibold text-zinc-200">Primary</div>
+                                )}
+                                <div className="mt-1 text-xs text-zinc-500">
+                                  Active sessions:{" "}
+                                  <span className="text-zinc-300">
+                                    {activity?.activeSessions ?? 0}
+                                  </span>{" "}
+                                  · last seen{" "}
+                                  <span className="text-zinc-300">
+                                    {formatLastSeen(activity?.lastSeenUnix)}
+                                  </span>
+                                </div>
+                              </>
+                            )}
                           </div>
                           {canEdit ? (
                             <div className="flex items-center gap-2">
@@ -462,100 +586,147 @@ export default function UpstreamDetailPage() {
                           )}
                         </div>
 
-                        <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-4">
-                          <Input
-                            label="URL"
-                            value={ep.url}
-                            disabled={!canEdit}
-                            onChange={(e) =>
-                              updateDraft((rows) =>
-                                rows.map((r) =>
-                                  r.id === ep.id ? { ...r, url: e.target.value } : r,
-                                ),
-                              )
-                            }
-                            className="md:col-span-2"
-                          />
-                          <div>
-                            <div className="text-xs font-medium text-zinc-400 mb-2">Lifecycle</div>
-                            <select
-                              value={ep.lifecycle}
-                              disabled={!canEdit}
-                              onChange={(e) =>
-                                updateDraft((rows) =>
-                                  rows.map((r) =>
-                                    r.id === ep.id
-                                      ? {
-                                          ...r,
-                                          lifecycle: e.target
-                                            .value as tenantApi.UpstreamEndpointLifecycle,
-                                        }
-                                      : r,
-                                  ),
-                                )
-                              }
-                              className="w-full h-10 rounded-xl bg-zinc-900 border border-zinc-800 px-3 text-sm text-zinc-200"
-                            >
-                              <option value="active">active</option>
-                              <option value="draining">draining</option>
-                              <option value="disabled">disabled</option>
-                            </select>
-                          </div>
-                          <div>
-                            <div className="text-xs font-medium text-zinc-400 mb-2">Enabled</div>
-                            <label className="inline-flex items-center gap-2 text-sm text-zinc-300 h-10">
-                              <input
-                                type="checkbox"
-                                checked={ep.enabled}
+                        <div className="mt-4 space-y-4">
+                          {managedReadOnly ? (
+                            <div>
+                              <div className="text-xs font-medium text-zinc-400 mb-2">URL</div>
+                              <div className="flex items-center gap-2">
+                                <code
+                                  className={`flex-1 min-w-0 px-4 py-2.5 rounded-xl border text-sm font-mono break-all ${urlTone}`}
+                                >
+                                  {ep.url}
+                                </code>
+                                <CopyButton text={ep.url} label="Copy URL" size="md" />
+                              </div>
+                            </div>
+                          ) : null}
+
+                          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            {!managedReadOnly ? (
+                              <Input
+                                label="URL"
+                                value={ep.url}
                                 disabled={!canEdit}
                                 onChange={(e) =>
                                   updateDraft((rows) =>
                                     rows.map((r) =>
-                                      r.id === ep.id ? { ...r, enabled: e.target.checked } : r,
+                                      r.id === ep.id ? { ...r, url: e.target.value } : r,
                                     ),
                                   )
                                 }
-                                className="rounded border-zinc-700 bg-zinc-900"
+                                className="md:col-span-2"
                               />
-                              {ep.enabled ? "enabled" : "disabled"}
-                            </label>
+                            ) : null}
+
+                            <div className={managedReadOnly ? "md:col-span-2" : ""}>
+                              <div className="text-xs font-medium text-zinc-400 mb-2">
+                                Lifecycle
+                              </div>
+                              {managedReadOnly ? (
+                                <div className="inline-flex items-center h-10 px-3 rounded-xl border border-zinc-800 bg-zinc-950/40 text-sm text-zinc-200">
+                                  {ep.lifecycle}
+                                </div>
+                              ) : (
+                                <select
+                                  value={ep.lifecycle}
+                                  disabled={!canEdit}
+                                  onChange={(e) =>
+                                    updateDraft((rows) =>
+                                      rows.map((r) =>
+                                        r.id === ep.id
+                                          ? {
+                                              ...r,
+                                              lifecycle: e.target
+                                                .value as tenantApi.UpstreamEndpointLifecycle,
+                                            }
+                                          : r,
+                                      ),
+                                    )
+                                  }
+                                  className="w-full h-10 rounded-xl bg-zinc-900 border border-zinc-800 px-3 text-sm text-zinc-200"
+                                >
+                                  <option value="active">active</option>
+                                  <option value="draining">draining</option>
+                                  <option value="disabled">disabled</option>
+                                </select>
+                              )}
+                            </div>
+
+                            <div>
+                              <div className="text-xs font-medium text-zinc-400 mb-2">Enabled</div>
+                              {managedReadOnly ? (
+                                <span className="inline-flex items-center h-10 px-3 rounded-xl border border-zinc-800 bg-zinc-950/40 text-sm text-zinc-200">
+                                  {ep.enabled ? "enabled" : "disabled"}
+                                </span>
+                              ) : (
+                                <label className="inline-flex items-center gap-2 text-sm text-zinc-300 h-10">
+                                  <input
+                                    type="checkbox"
+                                    checked={ep.enabled}
+                                    disabled={!canEdit}
+                                    onChange={(e) =>
+                                      updateDraft((rows) =>
+                                        rows.map((r) =>
+                                          r.id === ep.id ? { ...r, enabled: e.target.checked } : r,
+                                        ),
+                                      )
+                                    }
+                                    className="rounded border-zinc-700 bg-zinc-900"
+                                  />
+                                  {ep.enabled ? "enabled" : "disabled"}
+                                </label>
+                              )}
+                            </div>
                           </div>
                         </div>
 
                         <div className="mt-4">
                           <div className="text-xs font-medium text-zinc-400 mb-2">Auth</div>
-                          <select
-                            value={ep.authType}
-                            disabled={!canEdit}
-                            onChange={(e) =>
-                              updateDraft((rows) =>
-                                rows.map((r) =>
-                                  r.id === ep.id
-                                    ? {
-                                        ...r,
-                                        authType: e.target.value as EndpointDraft["authType"],
-                                      }
-                                    : r,
-                                ),
-                              )
-                            }
-                            className="w-full h-10 rounded-xl bg-zinc-900 border border-zinc-800 px-3 text-sm text-zinc-200"
-                          >
-                            <option value="none">None</option>
-                            <option value="bearer">Bearer</option>
-                            <option value="basic">Basic</option>
-                            <option value="header">Header</option>
-                            <option value="query">Query</option>
-                          </select>
-                          <div className="mt-2 text-xs text-zinc-500">
-                            Used only for Gateway → upstream connections.
-                          </div>
-                          {ep.authType === "query" ? (
-                            <QueryParamAuthWarning className="mt-2" />
-                          ) : null}
+                          {managedReadOnly ? (
+                            <>
+                              <div className="inline-flex items-center h-10 px-3 rounded-xl border border-zinc-800 bg-zinc-950/40 text-sm text-zinc-200">
+                                {formatAuthTypeLabel(ep.authType)}
+                              </div>
+                              <div className="mt-2 text-xs text-zinc-500">
+                                Managed upstream auth is controlled by deployment settings.
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <select
+                                value={ep.authType}
+                                disabled={!canEdit}
+                                onChange={(e) =>
+                                  updateDraft((rows) =>
+                                    rows.map((r) =>
+                                      r.id === ep.id
+                                        ? {
+                                            ...r,
+                                            authType: e.target.value as EndpointDraft["authType"],
+                                          }
+                                        : r,
+                                    ),
+                                  )
+                                }
+                                className="w-full h-10 rounded-xl bg-zinc-900 border border-zinc-800 px-3 text-sm text-zinc-200"
+                              >
+                                <option value="none">None</option>
+                                <option value="bearer">Bearer</option>
+                                <option value="basic">Basic</option>
+                                <option value="header">Header</option>
+                                <option value="query">Query</option>
+                              </select>
+                              <div className="mt-2 text-xs text-zinc-500">
+                                Used only for Gateway → upstream connections.
+                              </div>
+                              {ep.authType === "query" ? (
+                                <QueryParamAuthWarning className="mt-2" />
+                              ) : null}
+                            </>
+                          )}
                         </div>
 
-                        {ep.authType === "bearer" && (
+                        {!managedReadOnly && ep.authType === "bearer" && (
                           <div className="mt-4">
                             <Input
                               label="Bearer token"
@@ -572,7 +743,7 @@ export default function UpstreamDetailPage() {
                             />
                           </div>
                         )}
-                        {ep.authType === "basic" && (
+                        {!managedReadOnly && ep.authType === "basic" && (
                           <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
                             <Input
                               label="Username"
@@ -601,7 +772,7 @@ export default function UpstreamDetailPage() {
                             />
                           </div>
                         )}
-                        {ep.authType === "header" && (
+                        {!managedReadOnly && ep.authType === "header" && (
                           <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
                             <Input
                               label="Header name"
@@ -630,7 +801,7 @@ export default function UpstreamDetailPage() {
                             />
                           </div>
                         )}
-                        {ep.authType === "query" && (
+                        {!managedReadOnly && ep.authType === "query" && (
                           <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
                             <Input
                               label="Query name"

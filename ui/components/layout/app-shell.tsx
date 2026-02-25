@@ -8,6 +8,7 @@ import {
   GridIcon,
   KeyIcon,
   LockIcon,
+  ServerIconStack,
   SettingsCogIcon,
   ShieldIcon,
   SourcesDbIcon,
@@ -19,9 +20,28 @@ interface AppShellProps {
   children: ReactNode;
 }
 
-const navItems = [
+type NavItem = {
+  href: string;
+  label: string;
+  icon: typeof GridIcon;
+  extraActivePrefixes?: string[];
+  excludeActivePrefixes?: string[];
+};
+
+const navItems: NavItem[] = [
   { href: "/profiles", label: "Profiles", icon: GridIcon },
-  { href: "/sources", label: "Sources", icon: SourcesDbIcon },
+  {
+    href: "/sources",
+    label: "Sources",
+    icon: SourcesDbIcon,
+    excludeActivePrefixes: ["/sources/deployment"],
+  },
+  {
+    href: "/sources/deployment",
+    label: "Deployment",
+    icon: ServerIconStack,
+    extraActivePrefixes: ["/sources/new/managed-mcp"],
+  },
   { href: "/api-keys", label: "API Keys", icon: KeyIcon },
   { href: "/secrets", label: "Secrets", icon: ShieldIcon },
   { href: "/audit", label: "Audit", icon: ChartIcon },
@@ -53,7 +73,14 @@ export function AppShell({ children }: AppShellProps) {
         {/* Navigation */}
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
           {navItems.map((item) => {
-            const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
+            const matchesPrefix = pathname === item.href || pathname.startsWith(item.href + "/");
+            const matchesExtra = (item.extraActivePrefixes ?? []).some(
+              (prefix) => pathname === prefix || pathname.startsWith(prefix + "/"),
+            );
+            const isExcluded = (item.excludeActivePrefixes ?? []).some(
+              (prefix) => pathname === prefix || pathname.startsWith(prefix + "/"),
+            );
+            const isActive = (matchesPrefix || matchesExtra) && !isExcluded;
             return (
               <Link
                 key={item.href}

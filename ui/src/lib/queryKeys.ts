@@ -13,6 +13,7 @@ export const qk = {
   upstreamSessionActivity: (id: string, ttlSecs?: number) =>
     ["upstreams", id, "sessionActivity", ttlSecs ?? "default"] as const,
   managedMcpDeployables: () => ["managedMcp", "deployables"] as const,
+  managedMcpDeployments: () => ["managedMcp", "deployments"] as const,
   managedMcpDeployment: (id: string) => ["managedMcp", "deployments", id] as const,
 
   toolSources: () => ["toolSources"] as const,

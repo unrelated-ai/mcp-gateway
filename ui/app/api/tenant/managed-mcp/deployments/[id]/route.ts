@@ -48,3 +48,37 @@ export async function GET(_req: Request, { params }: Params) {
     );
   }
 }
+
+export async function PATCH(req: Request, { params }: Params) {
+  const base = gatewayAdminBase();
+  if (!base) {
+    return NextResponse.json(
+      { ok: false, error: "GATEWAY_ADMIN_BASE is not set" },
+      { status: 500 },
+    );
+  }
+  const auth = await tenantAuthHeader();
+  if (!auth) {
+    return NextResponse.json({ ok: false, error: "missing tenant session" }, { status: 401 });
+  }
+  const { id } = await params;
+  const body = await req.text();
+  const res = await fetch(`${base}/tenant/v1/managed-mcp/deployments/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    cache: "no-store",
+    headers: { Authorization: auth, "Content-Type": "application/json" },
+    body,
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    return NextResponse.json({ ok: false, status: res.status, body: text }, { status: 502 });
+  }
+  try {
+    return NextResponse.json(JSON.parse(text) as unknown, { status: res.status });
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: "invalid JSON from gateway", body: text },
+      { status: 502 },
+    );
+  }
+}

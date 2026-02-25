@@ -58,6 +58,8 @@ export type ManagedMcpDeploymentRequest = {
   id: string;
   tenantId: string;
   deployableId: string;
+  desiredEnabled: boolean;
+  desiredReplicas: number;
   status: ManagedMcpDeploymentStatus;
   upstreamId?: string | null;
   message?: string | null;
@@ -213,6 +215,17 @@ export async function createManagedMcpDeploymentRequest(
   );
 }
 
+export async function listManagedMcpDeploymentRequests(): Promise<{
+  requests: ManagedMcpDeploymentRequest[];
+}> {
+  return await tenantFetchJson<{ requests: ManagedMcpDeploymentRequest[] }>(
+    "/api/tenant/managed-mcp/deployments",
+    {
+      cache: "no-store",
+    },
+  );
+}
+
 export async function getManagedMcpDeploymentRequest(
   requestId: string,
 ): Promise<{ request: ManagedMcpDeploymentRequest }> {
@@ -220,6 +233,20 @@ export async function getManagedMcpDeploymentRequest(
     `/api/tenant/managed-mcp/deployments/${encodeURIComponent(requestId)}`,
     {
       cache: "no-store",
+    },
+  );
+}
+
+export async function updateManagedMcpDeploymentRequest(
+  requestId: string,
+  body: { enabled?: boolean; replicas?: number },
+): Promise<{ request: ManagedMcpDeploymentRequest }> {
+  return await tenantFetchJson<{ request: ManagedMcpDeploymentRequest }>(
+    `/api/tenant/managed-mcp/deployments/${encodeURIComponent(requestId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
     },
   );
 }
