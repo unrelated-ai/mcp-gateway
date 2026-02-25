@@ -2815,6 +2815,35 @@ where id = $1
             anyhow::bail!("deployable not found or disabled");
         }
 
+        let existing = sqlx::query(
+            r"
+select
+  id,
+  tenant_id,
+  deployable_id,
+  desired_enabled,
+  desired_replicas,
+  status,
+  upstream_id,
+  message,
+  extract(epoch from created_at)::bigint as created_at_unix,
+  extract(epoch from updated_at)::bigint as updated_at_unix
+from managed_mcp_deployment_requests
+where tenant_id = $1
+  and deployable_id = $2
+  and status in ('pending', 'reconciling', 'ready')
+order by created_at desc
+limit 1
+",
+        )
+        .bind(tenant_id)
+        .bind(deployable_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        if let Some(row) = existing {
+            return parse_managed_mcp_deployment_request_row(&row);
+        }
+
         let request_id = Uuid::new_v4().to_string();
         let row = sqlx::query(
             r"
@@ -2822,13 +2851,17 @@ insert into managed_mcp_deployment_requests (
   id,
   tenant_id,
   deployable_id,
+  desired_enabled,
+  desired_replicas,
   status
 )
-values ($1, $2, $3, 'pending')
+values ($1, $2, $3, true, 1, 'pending')
 returning
   id,
   tenant_id,
   deployable_id,
+  desired_enabled,
+  desired_replicas,
   status,
   upstream_id,
   message,
@@ -2854,6 +2887,8 @@ select
   id,
   tenant_id,
   deployable_id,
+  desired_enabled,
+  desired_replicas,
   status,
   upstream_id,
   message,
@@ -2883,6 +2918,8 @@ select
   id,
   tenant_id,
   deployable_id,
+  desired_enabled,
+  desired_replicas,
   status,
   upstream_id,
   message,
@@ -2914,6 +2951,8 @@ select
   id,
   tenant_id,
   deployable_id,
+  desired_enabled,
+  desired_replicas,
   status,
   upstream_id,
   message,
@@ -2941,6 +2980,83 @@ from managed_mcp_deployment_requests
             out.push(parse_managed_mcp_deployment_request_row(&row)?);
         }
         Ok(out)
+    }
+
+    async fn list_managed_mcp_deployment_requests_for_tenant(
+        &self,
+        tenant_id: &str,
+        limit: u32,
+    ) -> anyhow::Result<Vec<ManagedMcpDeploymentRequest>> {
+        let rows = sqlx::query(
+            r"
+select
+  id,
+  tenant_id,
+  deployable_id,
+  desired_enabled,
+  desired_replicas,
+  status,
+  upstream_id,
+  message,
+  extract(epoch from created_at)::bigint as created_at_unix,
+  extract(epoch from updated_at)::bigint as updated_at_unix
+from managed_mcp_deployment_requests
+where tenant_id = $1
+order by created_at desc
+limit $2
+",
+        )
+        .bind(tenant_id)
+        .bind(i64::from(limit.max(1)))
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            out.push(parse_managed_mcp_deployment_request_row(&row)?);
+        }
+        Ok(out)
+    }
+
+    async fn update_managed_mcp_deployment_request_for_tenant(
+        &self,
+        tenant_id: &str,
+        request_id: &str,
+        desired_enabled: bool,
+        desired_replicas: i32,
+    ) -> anyhow::Result<Option<ManagedMcpDeploymentRequest>> {
+        let row = sqlx::query(
+            r"
+update managed_mcp_deployment_requests
+set desired_enabled = $3,
+    desired_replicas = $4,
+    status = 'pending',
+    message = null,
+    updated_at = now()
+where tenant_id = $1
+  and id = $2
+returning
+  id,
+  tenant_id,
+  deployable_id,
+  desired_enabled,
+  desired_replicas,
+  status,
+  upstream_id,
+  message,
+  extract(epoch from created_at)::bigint as created_at_unix,
+  extract(epoch from updated_at)::bigint as updated_at_unix
+",
+        )
+        .bind(tenant_id)
+        .bind(request_id)
+        .bind(desired_enabled)
+        .bind(desired_replicas)
+        .fetch_optional(&self.pool)
+        .await?;
+        match row {
+            Some(row) => Ok(Some(parse_managed_mcp_deployment_request_row(&row)?)),
+            None => Ok(None),
+        }
     }
 
     async fn mark_managed_mcp_deployment_status(
@@ -3084,6 +3200,8 @@ fn parse_managed_mcp_deployment_request_row(
         id: row.try_get("id")?,
         tenant_id: row.try_get("tenant_id")?,
         deployable_id: row.try_get("deployable_id")?,
+        desired_enabled: row.try_get("desired_enabled")?,
+        desired_replicas: row.try_get("desired_replicas")?,
         status: parse_managed_mcp_deployment_status(&status_raw)?,
         upstream_id: row.try_get("upstream_id")?,
         message: row.try_get("message")?,

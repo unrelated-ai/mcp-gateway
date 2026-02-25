@@ -20,7 +20,9 @@
         docker-build-all docker-build-adapter docker-build-adapter-stdio-node \
         docker-run-adapter docker-build-gateway docker-build-gateway-migrator \
         docker-build-gateway-operator docker-build-ui \
-        kind-local-build-images kind-local-load-images kind-local-deploy kind-local-refresh \
+        kind-local-build-managed-mcp-images kind-local-build-images \
+        kind-local-load-managed-mcp-images kind-local-load-images \
+        kind-local-deploy kind-local-refresh kind-local-reset \
         up down logs status \
         inspector \
         ci ci-quick test-ci qa-release-gates \
@@ -277,6 +279,7 @@ KIND_CLUSTER_NAME ?= kind
 KIND_IMAGE_TAG ?= kind
 KIND_NAMESPACE ?= mcp-gateway
 KIND_RELEASE_NAME ?= unrelated-mcp-gateway
+KIND_NAMESPACE_DELETE_TIMEOUT_SECONDS ?= 120
 
 ## Build adapter runtime image (default target in Dockerfile)
 docker-build-adapter:
@@ -312,15 +315,26 @@ docker-build-gateway-operator:
 docker-build-ui:
 	docker build -t unrelated-mcp-gateway-ui:latest ui
 
+## Build managed MCP fixture images for kind (stdio smoke + aggregation)
+kind-local-build-managed-mcp-images:
+	docker build --target stdio-node -t unrelated-mcp-adapter:stdio-node .
+	docker build -f tests/fixtures/managed-images/stdio-aggregation.Dockerfile -t unrelated-mcp-managed-stdio-aggregation:$(KIND_IMAGE_TAG) .
+	docker build -f tests/fixtures/managed-images/stdio-smoke.Dockerfile -t unrelated-mcp-managed-stdio-smoke:$(KIND_IMAGE_TAG) .
+
 ## Build local images for kind from current workspace
-kind-local-build-images:
+kind-local-build-images: kind-local-build-managed-mcp-images
 	docker build --target gateway-runtime -t unrelated-mcp-gateway:$(KIND_IMAGE_TAG) .
 	docker build --target gateway-migrator -t unrelated-mcp-gateway-migrator:$(KIND_IMAGE_TAG) .
 	docker build --target gateway-operator-runtime -t unrelated-mcp-gateway-operator:$(KIND_IMAGE_TAG) .
 	docker build -t unrelated-mcp-gateway-ui:$(KIND_IMAGE_TAG) ui
 
+## Load managed MCP fixture images into kind
+kind-local-load-managed-mcp-images:
+	kind load docker-image unrelated-mcp-managed-stdio-aggregation:$(KIND_IMAGE_TAG) --name $(KIND_CLUSTER_NAME)
+	kind load docker-image unrelated-mcp-managed-stdio-smoke:$(KIND_IMAGE_TAG) --name $(KIND_CLUSTER_NAME)
+
 ## Load locally built images into kind
-kind-local-load-images:
+kind-local-load-images: kind-local-load-managed-mcp-images
 	kind load docker-image unrelated-mcp-gateway:$(KIND_IMAGE_TAG) --name $(KIND_CLUSTER_NAME)
 	kind load docker-image unrelated-mcp-gateway-migrator:$(KIND_IMAGE_TAG) --name $(KIND_CLUSTER_NAME)
 	kind load docker-image unrelated-mcp-gateway-operator:$(KIND_IMAGE_TAG) --name $(KIND_CLUSTER_NAME)
@@ -342,6 +356,31 @@ kind-local-deploy:
 
 ## Rebuild + load + deploy local images to kind
 kind-local-refresh: kind-local-build-images kind-local-load-images kind-local-deploy
+
+## Fully reset kind namespace/release and redeploy fresh (also restarts core deployments)
+kind-local-reset:
+	helm uninstall $(KIND_RELEASE_NAME) -n $(KIND_NAMESPACE) --ignore-not-found
+	kubectl delete namespace $(KIND_NAMESPACE) --ignore-not-found --wait=false
+	@echo "Waiting up to $(KIND_NAMESPACE_DELETE_TIMEOUT_SECONDS)s for namespace $(KIND_NAMESPACE) deletion..."
+	@elapsed=0; \
+	while kubectl get namespace $(KIND_NAMESPACE) >/dev/null 2>&1; do \
+		kubectl -n $(KIND_NAMESPACE) get mcpservers.gateway.unrelated.ai -o name 2>/dev/null | while read -r name; do \
+			[ -n "$$name" ] || continue; \
+			kubectl -n $(KIND_NAMESPACE) patch "$$name" --type=merge -p '{"metadata":{"finalizers":[]}}' >/dev/null 2>&1 || true; \
+		done; \
+		if [ $$elapsed -ge $(KIND_NAMESPACE_DELETE_TIMEOUT_SECONDS) ]; then \
+			echo "Namespace $(KIND_NAMESPACE) is still terminating after $(KIND_NAMESPACE_DELETE_TIMEOUT_SECONDS)s."; \
+			echo "Check finalizers with: kubectl get namespace $(KIND_NAMESPACE) -o yaml"; \
+			exit 1; \
+		fi; \
+		sleep 2; \
+		elapsed=$$((elapsed + 2)); \
+	done
+	$(MAKE) kind-local-refresh
+	kubectl -n $(KIND_NAMESPACE) rollout restart deploy/unrelated-mcp-gateway deploy/unrelated-mcp-gateway-ui deploy/unrelated-mcp-gateway-operator
+	kubectl -n $(KIND_NAMESPACE) rollout status deploy/unrelated-mcp-gateway
+	kubectl -n $(KIND_NAMESPACE) rollout status deploy/unrelated-mcp-gateway-ui
+	kubectl -n $(KIND_NAMESPACE) rollout status deploy/unrelated-mcp-gateway-operator
 
 ## Start services with docker-compose
 up:
@@ -483,10 +522,13 @@ help:
 	@echo "  docker-build-gateway-operator  Build gateway operator Docker image"
 	@echo "  docker-build-ui                Build gateway UI Docker image"
 	@echo "  docker-build-all               Build all images used by docker-compose"
+	@echo "  kind-local-build-managed-mcp-images Build managed MCP fixture images for kind"
 	@echo "  kind-local-build-images        Build gateway/ui/operator/migrator images for kind"
+	@echo "  kind-local-load-managed-mcp-images Load managed MCP fixture images into kind"
 	@echo "  kind-local-load-images         Load local kind images into kind cluster"
 	@echo "  kind-local-deploy              Helm deploy to kind with local image overrides"
 	@echo "  kind-local-refresh             Build + load + deploy local kind stack"
+	@echo "  kind-local-reset               Full clean reset + refresh + rollout restart/status"
 	@echo "  docker-run-adapter            Run adapter in Docker container (standalone)"
 	@echo "  up                            Start docker-compose stack"
 	@echo "  up-reset                      Reset compose DB (delete all tenants/config)"

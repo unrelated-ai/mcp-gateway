@@ -36,6 +36,9 @@ use unrelated_tool_transforms::TransformPipeline;
 use uuid::{Uuid, Version};
 
 const OIDC_NOT_CONFIGURED_MSG: &str = "JWT/OIDC is unavailable because OIDC is not configured on the Gateway (missing UNRELATED_GATEWAY_OIDC_ISSUER). Configure OIDC or choose a different mode.";
+const DEFAULT_TENANT_MANAGED_MCP_DEPLOYMENT_LIST_LIMIT: u32 = 200;
+const MIN_MANAGED_MCP_REPLICAS: i32 = 0;
+const MAX_MANAGED_MCP_REPLICAS: i32 = 50;
 
 #[derive(Clone)]
 pub struct TenantState {
@@ -73,11 +76,11 @@ pub fn router(state: Arc<TenantState>) -> Router {
         )
         .route(
             "/tenant/v1/managed-mcp/deployments",
-            axum::routing::post(create_managed_mcp_deployment_request),
+            get(list_managed_mcp_deployment_requests).post(create_managed_mcp_deployment_request),
         )
         .route(
             "/tenant/v1/managed-mcp/deployments/{request_id}",
-            get(get_managed_mcp_deployment_request),
+            get(get_managed_mcp_deployment_request).patch(patch_managed_mcp_deployment_request),
         )
         .route(
             "/tenant/v1/profiles",
@@ -178,7 +181,7 @@ struct ValidateSourceIdResponse {
 
 const TENANT_UPSTREAM_ID_PREFIX: &str = "tu1.";
 
-fn tenant_upstream_internal_id(tenant_id: &str, upstream_id: &str) -> String {
+pub(crate) fn tenant_upstream_internal_id(tenant_id: &str, upstream_id: &str) -> String {
     let t = URL_SAFE_NO_PAD.encode(tenant_id);
     let u = URL_SAFE_NO_PAD.encode(upstream_id);
     format!("{TENANT_UPSTREAM_ID_PREFIX}{t}.{u}")
@@ -512,6 +515,34 @@ async fn create_managed_mcp_deployment_request(
     }
 }
 
+async fn list_managed_mcp_deployment_requests(
+    axum::Extension(state): axum::Extension<Arc<TenantState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let tenant_id = match authn(&headers, &state.signer) {
+        Ok(t) => t,
+        Err(resp) => return resp.into_response(),
+    };
+    let Some(store) = &state.store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+    };
+    match store.get_tenant(&tenant_id).await {
+        Ok(Some(t)) if t.enabled => {}
+        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+    match store
+        .list_managed_mcp_deployment_requests_for_tenant(
+            &tenant_id,
+            DEFAULT_TENANT_MANAGED_MCP_DEPLOYMENT_LIST_LIMIT,
+        )
+        .await
+    {
+        Ok(requests) => Json(ManagedMcpDeploymentsResponse { requests }).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 async fn get_managed_mcp_deployment_request(
     axum::Extension(state): axum::Extension<Arc<TenantState>>,
     headers: HeaderMap,
@@ -526,6 +557,76 @@ async fn get_managed_mcp_deployment_request(
     };
     match store
         .get_managed_mcp_deployment_request_for_tenant(&tenant_id, &request_id)
+        .await
+    {
+        Ok(Some(request)) => Json(ManagedMcpDeploymentResponse { request }).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "deployment request not found").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn patch_managed_mcp_deployment_request(
+    axum::Extension(state): axum::Extension<Arc<TenantState>>,
+    headers: HeaderMap,
+    Path(request_id): Path<String>,
+    Json(req): Json<PatchManagedMcpDeploymentRequestBody>,
+) -> impl IntoResponse {
+    let tenant_id = match authn(&headers, &state.signer) {
+        Ok(t) => t,
+        Err(resp) => return resp.into_response(),
+    };
+    let Some(store) = &state.store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+    };
+    match store.get_tenant(&tenant_id).await {
+        Ok(Some(t)) if t.enabled => {}
+        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+    if req.enabled.is_none() && req.replicas.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "at least one of enabled or replicas is required",
+        )
+            .into_response();
+    }
+
+    let Some(existing) = (match store
+        .get_managed_mcp_deployment_request_for_tenant(&tenant_id, &request_id)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }) else {
+        return (StatusCode::NOT_FOUND, "deployment request not found").into_response();
+    };
+
+    let desired_enabled = req.enabled.unwrap_or(existing.desired_enabled);
+    let desired_replicas = req.replicas.unwrap_or(existing.desired_replicas);
+    if !(MIN_MANAGED_MCP_REPLICAS..=MAX_MANAGED_MCP_REPLICAS).contains(&desired_replicas) {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!(
+                "replicas must be between {MIN_MANAGED_MCP_REPLICAS} and {MAX_MANAGED_MCP_REPLICAS}"
+            ),
+        )
+            .into_response();
+    }
+    if desired_enabled && desired_replicas < 1 {
+        return (
+            StatusCode::BAD_REQUEST,
+            "replicas must be at least 1 when enabled",
+        )
+            .into_response();
+    }
+
+    match store
+        .update_managed_mcp_deployment_request_for_tenant(
+            &tenant_id,
+            &request_id,
+            desired_enabled,
+            desired_replicas,
+        )
         .await
     {
         Ok(Some(request)) => Json(ManagedMcpDeploymentResponse { request }).into_response(),
@@ -868,10 +969,25 @@ struct ManagedMcpDeploymentResponse {
     request: ManagedMcpDeploymentRequest,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagedMcpDeploymentsResponse {
+    requests: Vec<ManagedMcpDeploymentRequest>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateManagedMcpDeploymentRequestBody {
     deployable_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PatchManagedMcpDeploymentRequestBody {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    replicas: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]

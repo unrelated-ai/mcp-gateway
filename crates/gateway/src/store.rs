@@ -829,6 +829,8 @@ pub struct ManagedMcpDeploymentRequest {
     pub id: String,
     pub tenant_id: String,
     pub deployable_id: String,
+    pub desired_enabled: bool,
+    pub desired_replicas: i32,
     pub status: ManagedMcpDeploymentStatus,
     pub upstream_id: Option<String>,
     pub message: Option<String>,
@@ -1130,6 +1132,24 @@ pub trait AdminStore: Send + Sync {
         _limit: u32,
     ) -> anyhow::Result<Vec<ManagedMcpDeploymentRequest>> {
         Ok(Vec::new())
+    }
+
+    async fn list_managed_mcp_deployment_requests_for_tenant(
+        &self,
+        _tenant_id: &str,
+        _limit: u32,
+    ) -> anyhow::Result<Vec<ManagedMcpDeploymentRequest>> {
+        Ok(Vec::new())
+    }
+
+    async fn update_managed_mcp_deployment_request_for_tenant(
+        &self,
+        _tenant_id: &str,
+        _request_id: &str,
+        _desired_enabled: bool,
+        _desired_replicas: i32,
+    ) -> anyhow::Result<Option<ManagedMcpDeploymentRequest>> {
+        Ok(None)
     }
 
     async fn mark_managed_mcp_deployment_status(

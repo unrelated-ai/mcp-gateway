@@ -52,6 +52,9 @@ const ERROR_REQUEUE_SECS: u64 = 10;
 const MIN_SERVICE_PORT: i32 = 1;
 const MAX_SERVICE_PORT: i32 = 65_535;
 const ENDPOINT_ID_MAX_LEN: usize = 40;
+const LABEL_MANAGED_REQUEST: &str = "gateway.unrelated.ai/managed-request";
+const LABEL_DEPLOYABLE_ID: &str = "gateway.unrelated.ai/deployable-id";
+const LABEL_TENANT_ID: &str = "gateway.unrelated.ai/tenant-id";
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
@@ -227,9 +230,21 @@ struct GatewayPutEndpoint {
 #[serde(rename_all = "camelCase")]
 struct GatewayPutUpstreamRequest {
     id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tenant_id: Option<String>,
     enabled: bool,
     network_class: &'static str,
     endpoints: Vec<GatewayPutEndpoint>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GatewayUpsertEndpointRequest<'a> {
+    upstream_id: &'a str,
+    tenant_id: Option<&'a str>,
+    endpoint_id: &'a str,
+    endpoint_url: &'a str,
+    enabled: bool,
+    lifecycle: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -291,6 +306,18 @@ struct GatewayDeploymentRequest {
     id: String,
     tenant_id: String,
     deployable_id: String,
+    #[serde(default = "default_request_desired_enabled")]
+    desired_enabled: bool,
+    #[serde(default = "default_request_desired_replicas")]
+    desired_replicas: i32,
+}
+
+const fn default_request_desired_enabled() -> bool {
+    true
+}
+
+const fn default_request_desired_replicas() -> i32 {
+    1
 }
 
 impl GatewayClient {
@@ -384,21 +411,20 @@ impl GatewayClient {
         }))
     }
 
-    async fn upsert_active_endpoint(
+    async fn upsert_endpoint(
         &self,
-        upstream_id: &str,
-        endpoint_id: &str,
-        endpoint_url: &str,
+        request: GatewayUpsertEndpointRequest<'_>,
     ) -> anyhow::Result<()> {
         let body = GatewayPutUpstreamRequest {
-            id: upstream_id.to_string(),
-            enabled: true,
+            id: request.upstream_id.to_string(),
+            tenant_id: request.tenant_id.map(std::string::ToString::to_string),
+            enabled: request.enabled,
             network_class: self.network_class.as_str(),
             endpoints: vec![GatewayPutEndpoint {
-                id: endpoint_id.to_string(),
-                url: endpoint_url.to_string(),
-                enabled: true,
-                lifecycle: "active",
+                id: request.endpoint_id.to_string(),
+                url: request.endpoint_url.to_string(),
+                enabled: request.enabled,
+                lifecycle: request.lifecycle,
             }],
         };
         self.send_json(Method::POST, "/admin/v1/upstreams", Some(&body))
@@ -907,6 +933,7 @@ async fn reconcile_pending_deployment_requests(
 
     let api: Api<McpServer> = Api::namespaced(client, namespace);
     for request in requests {
+        let desired_replicas = desired_replicas_for_request(&request);
         let request_id = request.id;
         let tenant_id = request.tenant_id;
         let deployable_id = request.deployable_id;
@@ -939,14 +966,14 @@ async fn reconcile_pending_deployment_requests(
                 "name": name,
                 "namespace": namespace,
                 "labels": {
-                    "gateway.unrelated.ai/managed-request": "true",
-                    "gateway.unrelated.ai/deployable-id": deployable.id.clone(),
-                    "gateway.unrelated.ai/tenant-id": tenant_id.clone(),
+                    (LABEL_MANAGED_REQUEST): "true",
+                    (LABEL_DEPLOYABLE_ID): deployable.id.clone(),
+                    (LABEL_TENANT_ID): tenant_id.clone(),
                 }
             },
             "spec": {
                 "image": deployable.image.clone(),
-                "replicas": 1,
+                "replicas": desired_replicas,
                 "service": { "port": service_port },
                 "gateway": {
                     "upstreamId": upstream_id,
@@ -960,6 +987,13 @@ async fn reconcile_pending_deployment_requests(
             .with_context(|| format!("apply McpServer for deployment request {request_id}"))?;
     }
     Ok(())
+}
+
+fn desired_replicas_for_request(request: &GatewayDeploymentRequest) -> i32 {
+    if !request.desired_enabled {
+        return 0;
+    }
+    request.desired_replicas.max(1)
 }
 
 fn mcpserver_name_for_request(request_id: &str) -> String {
@@ -1049,6 +1083,7 @@ async fn reconcile(
 struct ReconcilePlan {
     name: String,
     namespace: String,
+    tenant_id: Option<String>,
     deployment_name: String,
     service_name: String,
     service_port: i32,
@@ -1131,8 +1166,15 @@ fn build_reconcile_plan(
     let service_name = desired_service_name(&name);
     let service_port = desired_service_port(&mcp_server.spec);
     let endpoint_path = desired_endpoint_path(&mcp_server.spec);
+    let tenant_id = mcp_server
+        .meta()
+        .labels
+        .as_ref()
+        .and_then(|labels| labels.get(LABEL_TENANT_ID))
+        .cloned();
 
     Ok(ReconcilePlan {
+        tenant_id,
         deployment_name: desired_deployment_name(&name),
         service_name: service_name.clone(),
         service_port,
@@ -1205,12 +1247,21 @@ async fn reconcile_workload_and_source(
         rollout: mcp_server.spec.rollout.as_ref(),
     };
     apply_workload(ctx.client.clone(), &workload).await?;
+    let endpoint_enabled = plan.desired_replicas > 0;
+    let endpoint_lifecycle = if endpoint_enabled {
+        "active"
+    } else {
+        "disabled"
+    };
     gateway
-        .upsert_active_endpoint(
-            &plan.desired_upstream_id,
-            &plan.desired_endpoint_id,
-            &plan.endpoint_url,
-        )
+        .upsert_endpoint(GatewayUpsertEndpointRequest {
+            upstream_id: &plan.desired_upstream_id,
+            tenant_id: plan.tenant_id.as_deref(),
+            endpoint_id: &plan.desired_endpoint_id,
+            endpoint_url: &plan.endpoint_url,
+            enabled: endpoint_enabled,
+            lifecycle: endpoint_lifecycle,
+        })
         .await
         .map_err(|e| ReconcileError::Gateway(e.to_string()))?;
     Ok(())
@@ -1852,6 +1903,7 @@ fn now_unix_secs_i64() -> i64 {
 mod tests {
     use super::*;
     use kube::core::ObjectMeta;
+    use std::collections::BTreeMap;
 
     fn mk_server(
         name: &str,
@@ -1964,6 +2016,19 @@ mod tests {
     }
 
     #[test]
+    fn build_reconcile_plan_uses_tenant_label_for_scoped_upstream_registration() {
+        let mut server = mk_server("demo", None, Some(8080));
+        server.metadata.labels = Some(BTreeMap::from([(
+            LABEL_TENANT_ID.to_string(),
+            "tenant-a".to_string(),
+        )]));
+
+        let plan = build_reconcile_plan(&server, &McpServerStatus::default())
+            .expect("reconcile plan should build");
+        assert_eq!(plan.tenant_id.as_deref(), Some("tenant-a"));
+    }
+
+    #[test]
     fn service_port_from_default_url_prefers_explicit_port_then_scheme_defaults() {
         assert_eq!(
             service_port_from_default_upstream_url("http://demo-nginx:18080/mcp"),
@@ -1981,5 +2046,35 @@ mod tests {
             service_port_from_default_upstream_url("not-a-valid-url"),
             DEFAULT_SERVICE_PORT
         );
+    }
+
+    #[test]
+    fn desired_replicas_for_request_enforces_disable_and_minimum_enabled_replica() {
+        let disabled = GatewayDeploymentRequest {
+            id: "r1".to_string(),
+            tenant_id: "t1".to_string(),
+            deployable_id: "d1".to_string(),
+            desired_enabled: false,
+            desired_replicas: 5,
+        };
+        assert_eq!(desired_replicas_for_request(&disabled), 0);
+
+        let enabled_zero = GatewayDeploymentRequest {
+            id: "r2".to_string(),
+            tenant_id: "t1".to_string(),
+            deployable_id: "d1".to_string(),
+            desired_enabled: true,
+            desired_replicas: 0,
+        };
+        assert_eq!(desired_replicas_for_request(&enabled_zero), 1);
+
+        let enabled_many = GatewayDeploymentRequest {
+            id: "r3".to_string(),
+            tenant_id: "t1".to_string(),
+            deployable_id: "d1".to_string(),
+            desired_enabled: true,
+            desired_replicas: 3,
+        };
+        assert_eq!(desired_replicas_for_request(&enabled_many), 3);
     }
 }

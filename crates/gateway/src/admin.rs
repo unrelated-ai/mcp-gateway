@@ -12,7 +12,9 @@ use crate::store::{
     PutProfileLimits, TenantSecretMetadata, ToolSourceKind, UpstreamEndpoint,
     UpstreamEndpointActivity, UpstreamEndpointLifecycle, UpstreamNetworkClass,
 };
-use crate::tenant::{IssueTenantTokenRequest, IssueTenantTokenResponse, now_unix_secs};
+use crate::tenant::{
+    IssueTenantTokenRequest, IssueTenantTokenResponse, now_unix_secs, tenant_upstream_internal_id,
+};
 use crate::tenant_token::{TenantSigner, TenantTokenPayloadV1};
 use crate::tool_policy::ToolPolicy;
 use axum::{
@@ -572,6 +574,8 @@ struct PutTenantRequest {
 #[serde(rename_all = "camelCase")]
 struct PutUpstreamRequest {
     id: String,
+    #[serde(default)]
+    tenant_id: Option<String>,
     #[serde(default = "default_true")]
     enabled: bool,
     #[serde(default = "default_upstream_network_class")]
@@ -1098,6 +1102,22 @@ async fn put_upstream(
         )
             .into_response();
     }
+    let upstream_id = if let Some(tenant_id_raw) = req.tenant_id.as_deref() {
+        let tenant_id = tenant_id_raw.trim();
+        if tenant_id.is_empty() {
+            return (StatusCode::BAD_REQUEST, "tenantId must be non-empty").into_response();
+        }
+        match store.get_tenant(tenant_id).await {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return (StatusCode::BAD_REQUEST, "tenantId does not exist").into_response();
+            }
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+        tenant_upstream_internal_id(tenant_id, &req.id)
+    } else {
+        req.id.clone()
+    };
 
     let endpoints: Vec<UpstreamEndpoint> = req
         .endpoints
@@ -1138,7 +1158,7 @@ async fn put_upstream(
     }
 
     if let Err(e) = store
-        .put_upstream(&req.id, req.enabled, req.network_class, &endpoints)
+        .put_upstream(&upstream_id, req.enabled, req.network_class, &endpoints)
         .await
     {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
