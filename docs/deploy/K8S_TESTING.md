@@ -48,6 +48,21 @@ The command above uses:
 
 and deploys branch-local images tagged `:kind`.
 
+To reset cluster:
+
+```bash
+make kind-local-reset
+```
+
+This target:
+
+- uninstalls the Helm release (if present),
+- deletes the `mcp-gateway` namespace without blocking forever,
+- clears stuck `McpServer` finalizers while waiting for namespace deletion,
+- rebuilds + loads + redeploys local `:kind` images,
+- restarts core deployments and waits for rollout.
+- waits up to `120s` for namespace deletion by default (`KIND_NAMESPACE_DELETE_TIMEOUT_SECONDS` override).
+
 ## Verify deployment health
 
 ```bash
@@ -98,26 +113,17 @@ kubectl -n mcp-gateway run status-check --image=curlimages/curl:8.12.1 --rm -i -
 
 You should see `"topology":"operator-oss"` in the JSON payload.
 
-Seed one deployable in the catalog for end-to-end UI testing:
+For `kind-local` deploys, two Managed MCP deployables are seeded automatically:
 
-```bash
-curl -sS -X PUT http://127.0.0.1:4001/admin/v1/managed-mcp/deployables \
-  -H 'Authorization: Bearer dev-admin-token' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "id":"demo-nginx",
-    "displayName":"Demo Nginx",
-    "description":"Managed deployment pipeline smoke test",
-    "image":"nginx:1.27-alpine",
-    "defaultUpstreamUrl":"http://demo/mcp",
-    "enabled":true
-  }'
-```
+- `real-stdio-aggregation` -> `unrelated-mcp-managed-stdio-aggregation:kind`
+- `real-stdio-smoke` -> `unrelated-mcp-managed-stdio-smoke:kind`
+
+`values-kind-local.yaml` also sets `UNRELATED_GATEWAY_UPSTREAM_ALLOW_HTTP=1` for local-only testing, so managed upstream registration can use in-cluster `http://` service URLs.
 
 Then test in UI:
 
 - `Sources` -> `Add Source` -> `Managed MCP`
-- Deploy catalog item
+- Deploy either pre-seeded catalog item
 - watch request status transition (`pending`/`reconciling`/`ready`/`failed`)
 - open generated upstream from the success link
 
@@ -129,16 +135,34 @@ Build local images only:
 make kind-local-build-images
 ```
 
+Build only Managed MCP fixture images:
+
+```bash
+make kind-local-build-managed-mcp-images
+```
+
 Load local images only:
 
 ```bash
 make kind-local-load-images
 ```
 
+Load only Managed MCP fixture images:
+
+```bash
+make kind-local-load-managed-mcp-images
+```
+
 Deploy/redeploy only:
 
 ```bash
 make kind-local-deploy
+```
+
+Full clean reset + refresh:
+
+```bash
+make kind-local-reset
 ```
 
 Helm chart validation:
@@ -151,7 +175,7 @@ make helm-validate-optional
 
 - **UI appears old**
   - Confirm UI pod image is `unrelated-mcp-gateway-ui:kind`.
-  - Re-run `make kind-local-refresh`.
+  - Re-run `make kind-local-reset`.
 - **Managed MCP option disabled in UI**
   - Gateway topology is not `operator-oss` or `/status` is unavailable.
   - Check `http://127.0.0.1:4001/status` and deployment health.

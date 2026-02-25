@@ -17,6 +17,8 @@ This repository now ships Helm packaging for the OSS control/data plane stack.
 - `deploy/helm/unrelated-mcp-gateway-stack/`
   - Umbrella chart composing operator + gateway + UI + optional postgres.
   - Includes `values-dev.yaml` and `values-prod.yaml` profiles.
+- `deploy/helm/unrelated-mcp-gateway-managed-fixtures/`
+  - Optional helper chart (disabled by default) that seeds Managed MCP deployables for local testing.
 
 ## What Is Not Covered
 
@@ -116,6 +118,7 @@ make kind-local-deploy
 - `deploy/helm/unrelated-mcp-gateway-stack/values-kind-local.yaml`
 
 So chart behavior stays dev-like while image repositories/tags are local (`*:kind` by default).
+The `values-kind-local.yaml` overlay also enables the optional managed fixtures helper so two Managed MCP deployables are available out of the box.
 
 For a full command reference (verification, troubleshooting, cleanup), see:
 
