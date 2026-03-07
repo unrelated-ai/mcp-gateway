@@ -293,6 +293,17 @@ fn authn(headers: &HeaderMap, signer: &TenantSigner) -> Result<String, impl Into
     Ok(payload.tenant_id)
 }
 
+async fn ensure_enabled_tenant(
+    store: &Arc<dyn AdminStore>,
+    tenant_id: &str,
+) -> Result<(), Response> {
+    match store.get_tenant(tenant_id).await {
+        Ok(Some(t)) if t.enabled => Ok(()),
+        Ok(_) => Err((StatusCode::UNAUTHORIZED, "invalid tenant").into_response()),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()),
+    }
+}
+
 fn upstream_to_response(tenant_id: &str, u: AdminUpstream) -> Option<UpstreamResponse> {
     // Tenant-owned upstreams are stored in the shared upstream table with a stable encoded id.
     if let Some((t, local_id)) = parse_tenant_upstream_internal_id(&u.id) {
@@ -464,10 +475,8 @@ async fn list_managed_mcp_deployables(
     let Some(store) = &state.store else {
         return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
     };
-    match store.get_tenant(&tenant_id).await {
-        Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
+        return resp;
     }
     match store.list_managed_mcp_deployables().await {
         Ok(mut deployables) => {
@@ -490,10 +499,8 @@ async fn create_managed_mcp_deployment_request(
     let Some(store) = &state.store else {
         return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
     };
-    match store.get_tenant(&tenant_id).await {
-        Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
+        return resp;
     }
     if req.deployable_id.trim().is_empty() {
         return (StatusCode::BAD_REQUEST, "deployableId is required").into_response();
@@ -515,10 +522,7 @@ async fn create_managed_mcp_deployment_request(
             .into_response(),
         Err(e) => {
             let message = e.to_string();
-            if message.contains("not found") || message.contains("disabled") {
-                return (StatusCode::BAD_REQUEST, message).into_response();
-            }
-            (StatusCode::INTERNAL_SERVER_ERROR, message).into_response()
+            (managed_mcp_create_error_status(&message), message).into_response()
         }
     }
 }
@@ -534,10 +538,8 @@ async fn list_managed_mcp_deployment_requests(
     let Some(store) = &state.store else {
         return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
     };
-    match store.get_tenant(&tenant_id).await {
-        Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
+        return resp;
     }
     match store
         .list_managed_mcp_deployment_requests_for_tenant(
@@ -586,10 +588,8 @@ async fn patch_managed_mcp_deployment_request(
     let Some(store) = &state.store else {
         return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
     };
-    match store.get_tenant(&tenant_id).await {
-        Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
+        return resp;
     }
     if req.enabled.is_none() && req.replicas.is_none() {
         return (
@@ -615,24 +615,10 @@ async fn patch_managed_mcp_deployment_request(
         return (StatusCode::NOT_FOUND, "deployment request not found").into_response();
     };
 
-    let desired_enabled = req.enabled.unwrap_or(existing.desired_enabled);
-    let desired_replicas = req.replicas.unwrap_or(existing.desired_replicas);
-    if !(MIN_MANAGED_MCP_REPLICAS..=MAX_MANAGED_MCP_REPLICAS).contains(&desired_replicas) {
-        return (
-            StatusCode::BAD_REQUEST,
-            format!(
-                "replicas must be between {MIN_MANAGED_MCP_REPLICAS} and {MAX_MANAGED_MCP_REPLICAS}"
-            ),
-        )
-            .into_response();
-    }
-    if desired_enabled && desired_replicas < 1 {
-        return (
-            StatusCode::BAD_REQUEST,
-            "replicas must be at least 1 when enabled",
-        )
-            .into_response();
-    }
+    let (desired_enabled, desired_replicas) = match resolve_managed_mcp_patch(&existing, &req) {
+        Ok(v) => v,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
 
     match store
         .update_managed_mcp_deployment_request_for_tenant(
@@ -647,6 +633,30 @@ async fn patch_managed_mcp_deployment_request(
         Ok(None) => (StatusCode::NOT_FOUND, "deployment request not found").into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+
+fn managed_mcp_create_error_status(message: &str) -> StatusCode {
+    if message.contains("not found") || message.contains("disabled") {
+        return StatusCode::BAD_REQUEST;
+    }
+    StatusCode::INTERNAL_SERVER_ERROR
+}
+
+fn resolve_managed_mcp_patch(
+    existing: &ManagedMcpDeploymentRequest,
+    req: &PatchManagedMcpDeploymentRequestBody,
+) -> Result<(bool, i32), String> {
+    let desired_enabled = req.enabled.unwrap_or(existing.desired_enabled);
+    let desired_replicas = req.replicas.unwrap_or(existing.desired_replicas);
+    if !(MIN_MANAGED_MCP_REPLICAS..=MAX_MANAGED_MCP_REPLICAS).contains(&desired_replicas) {
+        return Err(format!(
+            "replicas must be between {MIN_MANAGED_MCP_REPLICAS} and {MAX_MANAGED_MCP_REPLICAS}"
+        ));
+    }
+    if desired_enabled && desired_replicas < 1 {
+        return Err("replicas must be at least 1 when enabled".to_string());
+    }
+    Ok((desired_enabled, desired_replicas))
 }
 
 async fn put_upstream(
@@ -688,32 +698,13 @@ async fn put_upstream(
         })
         .collect();
 
-    // Outbound safety (SSRF hardening): validate upstream endpoints before storing them.
-    let safety = crate::outbound_safety::gateway_outbound_http_safety_for_class(
+    if let Err(e) = crate::upstream_validation::validate_upstream_endpoints(
         UpstreamNetworkClass::External,
-    );
-    for ep in &endpoints {
-        // Upstream endpoint scheme policy: prefer HTTPS by default (dev override supported).
-        if let Err(e) = crate::outbound_safety::check_upstream_https_policy(&ep.url) {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "upstream endpoint '{}' rejected by HTTPS policy: {e}",
-                    ep.id
-                ),
-            )
-                .into_response();
-        }
-        if let Err(e) = crate::outbound_safety::check_url_allowed(&safety, &ep.url).await {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "upstream endpoint '{}' blocked by outbound safety: {e}",
-                    ep.id
-                ),
-            )
-                .into_response();
-        }
+        &endpoints,
+    )
+    .await
+    {
+        return (StatusCode::BAD_REQUEST, e).into_response();
     }
 
     let internal_id = tenant_upstream_internal_id(&tenant_id, &upstream_id);
@@ -3790,6 +3781,8 @@ pub fn now_unix_secs() -> anyhow::Result<u64> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn upstream_activity_ttl_uses_request_override_and_clamps_to_minimum() {
         assert_eq!(
@@ -3800,5 +3793,62 @@ mod tests {
             crate::pg_store::resolve_upstream_session_activity_ttl_secs(Some(0)),
             1
         );
+    }
+
+    #[test]
+    fn managed_mcp_create_error_status_maps_known_messages_to_bad_request() {
+        assert_eq!(
+            managed_mcp_create_error_status("deployable not found or disabled"),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            managed_mcp_create_error_status("unexpected db error"),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn resolve_managed_mcp_patch_validates_enabled_replica_rules() {
+        let existing = ManagedMcpDeploymentRequest {
+            id: "req-1".to_string(),
+            tenant_id: "t1".to_string(),
+            deployable_id: "d1".to_string(),
+            desired_enabled: true,
+            desired_replicas: 1,
+            status: crate::store::ManagedMcpDeploymentStatus::Pending,
+            upstream_id: None,
+            message: None,
+            created_at_unix: 0,
+            updated_at_unix: 0,
+        };
+        let patch = PatchManagedMcpDeploymentRequestBody {
+            enabled: Some(true),
+            replicas: Some(0),
+        };
+        let err = resolve_managed_mcp_patch(&existing, &patch).expect_err("should reject");
+        assert!(err.contains("at least 1"));
+    }
+
+    #[test]
+    fn resolve_managed_mcp_patch_applies_defaults_and_accepts_disable_to_zero() {
+        let existing = ManagedMcpDeploymentRequest {
+            id: "req-1".to_string(),
+            tenant_id: "t1".to_string(),
+            deployable_id: "d1".to_string(),
+            desired_enabled: true,
+            desired_replicas: 3,
+            status: crate::store::ManagedMcpDeploymentStatus::Ready,
+            upstream_id: Some("managed_t1_req_1".to_string()),
+            message: None,
+            created_at_unix: 0,
+            updated_at_unix: 0,
+        };
+        let patch = PatchManagedMcpDeploymentRequestBody {
+            enabled: Some(false),
+            replicas: Some(0),
+        };
+        let (enabled, replicas) = resolve_managed_mcp_patch(&existing, &patch).expect("valid");
+        assert!(!enabled);
+        assert_eq!(replicas, 0);
     }
 }

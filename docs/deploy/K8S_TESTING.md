@@ -124,8 +124,6 @@ For `kind-local` deploys, two Managed MCP deployables are seeded automatically:
 - `real-stdio-aggregation` -> `unrelated-mcp-managed-stdio-aggregation:kind`
 - `real-stdio-smoke` -> `unrelated-mcp-managed-stdio-smoke:kind`
 
-`values-kind-local.yaml` also sets `UNRELATED_GATEWAY_UPSTREAM_ALLOW_HTTP=1` for local-only testing, so managed upstream registration can use in-cluster `http://` service URLs.
-
 Then test in UI:
 
 - `Sources` -> `Add Source` -> `Managed MCP`

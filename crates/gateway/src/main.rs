@@ -35,6 +35,7 @@ mod timeouts;
 mod tool_policy;
 mod tools_cache;
 mod transport_limits;
+mod upstream_validation;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const LICENSE: &str = env!("CARGO_PKG_LICENSE");
@@ -148,6 +149,7 @@ async fn main() -> anyhow::Result<()> {
     Box::pin(run(args)).await
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run(args: CliArgs) -> anyhow::Result<()> {
     let (config, config_loaded) = load_config(&args).await?;
     validate_config_guardrails(&args, &config)?;

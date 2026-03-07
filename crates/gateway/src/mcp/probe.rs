@@ -96,7 +96,156 @@ async fn initialize_upstream_probe_session(
     Err(last_err.unwrap_or_else(|| "initialize failed".to_string()))
 }
 
-#[allow(clippy::too_many_lines)] // TODO: refactor this to be more readable.
+struct ClassifiedSourceOutcome {
+    source_id: String,
+    source: ProfileSurfaceSource,
+    tool_source: Option<surface::ToolSourceTools>,
+    upstream: Option<UpstreamCtx>,
+}
+
+fn classify_shared_local_source(
+    source_id: &str,
+    tools: Vec<rmcp::model::Tool>,
+) -> ClassifiedSourceOutcome {
+    ClassifiedSourceOutcome {
+        source_id: source_id.to_string(),
+        source: make_source("sharedLocal", source_id, true, None),
+        tool_source: Some(surface::ToolSourceTools {
+            kind: ToolRouteKind::SharedLocal,
+            source_id: source_id.to_string(),
+            tools,
+        }),
+        upstream: None,
+    }
+}
+
+async fn classify_tenant_local_source(
+    state: &McpState,
+    tenant_id: &str,
+    source_id: &str,
+) -> ClassifiedSourceOutcome {
+    let list_result = Box::pin(state.tenant_catalog.list_tools(
+        state.store.as_ref(),
+        tenant_id,
+        source_id,
+    ))
+    .await;
+    match list_result {
+        Ok(Some(tools)) => ClassifiedSourceOutcome {
+            source_id: source_id.to_string(),
+            source: make_source("tenantLocal", source_id, true, None),
+            tool_source: Some(surface::ToolSourceTools {
+                kind: ToolRouteKind::TenantLocal,
+                source_id: source_id.to_string(),
+                tools,
+            }),
+            upstream: None,
+        },
+        Ok(None) => ClassifiedSourceOutcome {
+            source_id: source_id.to_string(),
+            source: make_source(
+                "tenantLocal",
+                source_id,
+                false,
+                Some("tenant tool source not found".to_string()),
+            ),
+            tool_source: None,
+            upstream: None,
+        },
+        Err(e) => ClassifiedSourceOutcome {
+            source_id: source_id.to_string(),
+            source: make_source(
+                "tenantLocal",
+                source_id,
+                false,
+                Some(format_anyhow_chain(&e)),
+            ),
+            tool_source: None,
+            upstream: None,
+        },
+    }
+}
+
+async fn classify_upstream_source(
+    state: &McpState,
+    source_id: &str,
+    init_msg: &ClientJsonRpcMessage,
+) -> ClassifiedSourceOutcome {
+    let mut source = make_source("upstream", source_id, false, None);
+    let upstream = match state.store.get_upstream(source_id).await {
+        Ok(Some(u)) => u,
+        Ok(None) => {
+            source.error = Some("unknown upstream".to_string());
+            return ClassifiedSourceOutcome {
+                source_id: source_id.to_string(),
+                source,
+                tool_source: None,
+                upstream: None,
+            };
+        }
+        Err(e) => {
+            source.error = Some(e.to_string());
+            return ClassifiedSourceOutcome {
+                source_id: source_id.to_string(),
+                source,
+                tool_source: None,
+                upstream: None,
+            };
+        }
+    };
+    if upstream.endpoints.is_empty() {
+        source.error = Some("upstream has no endpoints".to_string());
+        return ClassifiedSourceOutcome {
+            source_id: source_id.to_string(),
+            source,
+            tool_source: None,
+            upstream: None,
+        };
+    }
+    match initialize_upstream_probe_session(state, source_id, &upstream, init_msg).await {
+        Ok(ctx) => {
+            source.ok = true;
+            ClassifiedSourceOutcome {
+                source_id: source_id.to_string(),
+                source,
+                tool_source: None,
+                upstream: Some(ctx),
+            }
+        }
+        Err(err) => {
+            source.error = Some(err);
+            ClassifiedSourceOutcome {
+                source_id: source_id.to_string(),
+                source,
+                tool_source: None,
+                upstream: None,
+            }
+        }
+    }
+}
+
+async fn classify_source(
+    state: &McpState,
+    profile: &crate::store::Profile,
+    source_id: &str,
+    init_msg: &ClientJsonRpcMessage,
+) -> ClassifiedSourceOutcome {
+    if state.catalog.is_local_tool_source(source_id) {
+        let tools = state.catalog.list_tools(source_id).unwrap_or_default();
+        return classify_shared_local_source(source_id, tools);
+    }
+
+    let is_tenant_local = state
+        .tenant_catalog
+        .has_tool_source(state.store.as_ref(), &profile.tenant_id, source_id)
+        .await
+        .unwrap_or(false);
+    if is_tenant_local {
+        return classify_tenant_local_source(state, &profile.tenant_id, source_id).await;
+    }
+    classify_upstream_source(state, source_id, init_msg).await
+}
+
 async fn classify_sources(
     state: &McpState,
     profile: &crate::store::Profile,
@@ -111,114 +260,14 @@ async fn classify_sources(
     let mut upstreams: Vec<UpstreamCtx> = Vec::new();
 
     for source_id in &profile.source_ids {
-        // Shared local sources.
-        if state.catalog.is_local_tool_source(source_id) {
-            let tools = state.catalog.list_tools(source_id).unwrap_or_default();
-            tool_sources.push(surface::ToolSourceTools {
-                kind: ToolRouteKind::SharedLocal,
-                source_id: source_id.clone(),
-                tools,
-            });
-            sources.insert(
-                source_id.clone(),
-                make_source("sharedLocal", source_id, true, None),
-            );
-            continue;
+        let outcome = classify_source(state, profile, source_id, init_msg).await;
+        if let Some(tool_source) = outcome.tool_source {
+            tool_sources.push(tool_source);
         }
-
-        // Tenant-owned local sources.
-        let is_tenant_local = state
-            .tenant_catalog
-            .has_tool_source(state.store.as_ref(), &profile.tenant_id, source_id)
-            .await
-            .unwrap_or(false);
-        if is_tenant_local {
-            match Box::pin(state.tenant_catalog.list_tools(
-                state.store.as_ref(),
-                &profile.tenant_id,
-                source_id,
-            ))
-            .await
-            {
-                Ok(Some(tools)) => {
-                    tool_sources.push(surface::ToolSourceTools {
-                        kind: ToolRouteKind::TenantLocal,
-                        source_id: source_id.clone(),
-                        tools,
-                    });
-                    sources.insert(
-                        source_id.clone(),
-                        make_source("tenantLocal", source_id, true, None),
-                    );
-                }
-                Ok(None) => {
-                    sources.insert(
-                        source_id.clone(),
-                        make_source(
-                            "tenantLocal",
-                            source_id,
-                            false,
-                            Some("tenant tool source not found".to_string()),
-                        ),
-                    );
-                }
-                Err(e) => {
-                    sources.insert(
-                        source_id.clone(),
-                        make_source(
-                            "tenantLocal",
-                            source_id,
-                            false,
-                            Some(format_anyhow_chain(&e)),
-                        ),
-                    );
-                }
-            }
-            continue;
+        if let Some(upstream) = outcome.upstream {
+            upstreams.push(upstream);
         }
-
-        // Upstream MCP server.
-        sources.insert(
-            source_id.clone(),
-            make_source("upstream", source_id, false, None),
-        );
-
-        let upstream = match state.store.get_upstream(source_id).await {
-            Ok(Some(u)) => u,
-            Ok(None) => {
-                if let Some(s) = sources.get_mut(source_id) {
-                    s.error = Some("unknown upstream".to_string());
-                }
-                continue;
-            }
-            Err(e) => {
-                if let Some(s) = sources.get_mut(source_id) {
-                    s.error = Some(e.to_string());
-                }
-                continue;
-            }
-        };
-
-        if upstream.endpoints.is_empty() {
-            if let Some(s) = sources.get_mut(source_id) {
-                s.error = Some("upstream has no endpoints".to_string());
-            }
-            continue;
-        }
-
-        match initialize_upstream_probe_session(state, source_id, &upstream, init_msg).await {
-            Ok(ctx) => {
-                if let Some(s) = sources.get_mut(source_id) {
-                    s.ok = true;
-                }
-                upstreams.push(ctx);
-            }
-            Err(err) => {
-                if let Some(s) = sources.get_mut(source_id) {
-                    s.error = Some(err);
-                }
-            }
-        }
+        sources.insert(outcome.source_id, outcome.source);
     }
 
     (tool_sources, sources, upstreams)

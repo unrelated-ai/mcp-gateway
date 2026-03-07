@@ -484,8 +484,7 @@ async fn mode3_pg_profile_aggregates_two_upstreams_and_prefixes_on_collision() -
 
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers)"]
-async fn admin_static_token_cannot_set_cluster_internal_managed_network_class() -> anyhow::Result<()>
-{
+async fn admin_static_token_can_set_cluster_internal_managed_network_class() -> anyhow::Result<()> {
     // Postgres
     let pg = GenericImage::new("postgres", "16-alpine")
         .with_exposed_port(5432.tcp())
@@ -523,14 +522,9 @@ async fn admin_static_token_cannot_set_cluster_internal_managed_network_class() 
         .context("admin POST /admin/v1/upstreams with cluster-internal-managed")?;
 
     anyhow::ensure!(
-        resp.status() == reqwest::StatusCode::FORBIDDEN,
-        "expected 403, got {}",
+        resp.status() == reqwest::StatusCode::CREATED,
+        "expected 201, got {}",
         resp.status()
-    );
-    let body = resp.text().await.context("error body")?;
-    anyhow::ensure!(
-        body.contains("requires OIDC machine identity"),
-        "unexpected response body: {body}"
     );
 
     Ok(())

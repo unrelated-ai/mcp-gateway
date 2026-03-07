@@ -227,7 +227,97 @@ async fn bootstrap_tenant_status(
     .into_response()
 }
 
-#[allow(clippy::too_many_lines)] // TODO: refactor this to be more readable.
+struct BootstrapProfileResult {
+    profile_id: String,
+    data_plane_path: String,
+}
+
+async fn create_bootstrap_profile(
+    store: &Arc<dyn AdminStore>,
+    tenant_id: &str,
+    req: &BootstrapTenantRequest,
+) -> Result<Option<BootstrapProfileResult>, Response> {
+    if !req.create_profile {
+        return Ok(None);
+    }
+    let profile_id = Uuid::new_v4().to_string();
+    let name = req
+        .profile_name
+        .as_deref()
+        .unwrap_or("Starter profile")
+        .trim();
+    if name.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "profileName must be non-empty").into_response());
+    }
+    let description = req.profile_description.as_deref();
+    let (transforms, mcp) = (TransformPipeline::default(), McpProfileSettings::default());
+    if let Err(e) = store
+        .put_profile(PutProfileInput {
+            profile_id: &profile_id,
+            tenant_id,
+            name,
+            description,
+            flags: PutProfileFlags {
+                enabled: true,
+                allow_partial_upstreams: true,
+            },
+            upstream_ids: &[],
+            source_ids: &[],
+            transforms: &transforms,
+            enabled_tools: &[],
+            data_plane_auth: PutProfileDataPlaneAuth {
+                // Security posture: strict mode by default for newly created starter profiles.
+                mode: DataPlaneAuthMode::ApiKeyEveryRequest,
+                accept_x_api_key: false,
+            },
+            limits: PutProfileLimits {
+                rate_limit_enabled: false,
+                rate_limit_tool_calls_per_minute: None,
+                quota_enabled: false,
+                quota_tool_calls: None,
+            },
+            tool_call_timeout_secs: None,
+            tool_policies: &[],
+            mcp: &mcp,
+        })
+        .await
+    {
+        if e.to_string().contains("profiles_tenant_name_ci_uq") {
+            return Err((
+                StatusCode::CONFLICT,
+                "profile name already exists for this tenant (case-insensitive)",
+            )
+                .into_response());
+        }
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response());
+    }
+    Ok(Some(BootstrapProfileResult {
+        data_plane_path: format!("/{profile_id}/mcp"),
+        profile_id,
+    }))
+}
+
+fn issue_bootstrap_token(
+    signer: &TenantSigner,
+    tenant_id: &str,
+    ttl_seconds: Option<u64>,
+) -> Result<(String, u64), (StatusCode, String)> {
+    let ttl = ttl_seconds.unwrap_or(31_536_000);
+    let now = match now_unix_secs() {
+        Ok(n) => n,
+        Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    };
+    let exp = now.saturating_add(ttl).max(now + 1);
+    let payload = TenantTokenPayloadV1 {
+        tenant_id: tenant_id.to_string(),
+        exp_unix_secs: exp,
+    };
+    match signer.sign_v1(&payload) {
+        Ok(token) => Ok((token, exp)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
+}
+
 async fn bootstrap_tenant(
     Extension(state): Extension<Arc<AdminState>>,
     Json(req): Json<BootstrapTenantRequest>,
@@ -258,90 +348,24 @@ async fn bootstrap_tenant(
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
 
-    let mut profile_id: Option<String> = None;
-    let mut data_plane_path: Option<String> = None;
-    if req.create_profile {
-        let pid = Uuid::new_v4().to_string();
-        let name = req
-            .profile_name
-            .as_deref()
-            .unwrap_or("Starter profile")
-            .trim();
-        if name.is_empty() {
-            return (StatusCode::BAD_REQUEST, "profileName must be non-empty").into_response();
-        }
-        let description = req.profile_description.as_deref();
-
-        // Create an empty (no upstreams/sources) profile; UI can attach sources later.
-        let (transforms, mcp) = (TransformPipeline::default(), McpProfileSettings::default());
-        if let Err(e) = store
-            .put_profile(PutProfileInput {
-                profile_id: &pid,
-                tenant_id,
-                name,
-                description,
-                flags: PutProfileFlags {
-                    enabled: true,
-                    allow_partial_upstreams: true,
-                },
-                upstream_ids: &[],
-                source_ids: &[],
-                transforms: &transforms,
-                enabled_tools: &[],
-                data_plane_auth: PutProfileDataPlaneAuth {
-                    // Security posture: strict mode by default for newly created starter profiles.
-                    mode: DataPlaneAuthMode::ApiKeyEveryRequest,
-                    accept_x_api_key: false,
-                },
-                limits: PutProfileLimits {
-                    rate_limit_enabled: false,
-                    rate_limit_tool_calls_per_minute: None,
-                    quota_enabled: false,
-                    quota_tool_calls: None,
-                },
-                tool_call_timeout_secs: None,
-                tool_policies: &[],
-                mcp: &mcp,
-            })
-            .await
-        {
-            if e.to_string().contains("profiles_tenant_name_ci_uq") {
-                return (
-                    StatusCode::CONFLICT,
-                    "profile name already exists for this tenant (case-insensitive)",
-                )
-                    .into_response();
-            }
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-        }
-
-        data_plane_path = Some(format!("/{pid}/mcp"));
-        profile_id = Some(pid);
-    }
-
-    let ttl = req.ttl_seconds.unwrap_or(31_536_000);
-    let now = match now_unix_secs() {
-        Ok(n) => n,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    let bootstrap_profile = match create_bootstrap_profile(store, tenant_id, &req).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
     };
-    let exp = now.saturating_add(ttl).max(now + 1);
 
-    let payload = TenantTokenPayloadV1 {
-        tenant_id: tenant_id.to_string(),
-        exp_unix_secs: exp,
-    };
-    let token = match state.tenant_signer.sign_v1(&payload) {
-        Ok(t) => t,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
+    let (token, exp_unix_secs) =
+        match issue_bootstrap_token(&state.tenant_signer, tenant_id, req.ttl_seconds) {
+            Ok(v) => v,
+            Err((status, message)) => return (status, message).into_response(),
+        };
 
     Json(BootstrapTenantResponse {
         ok: true,
         tenant_id: tenant_id.to_string(),
         token,
-        exp_unix_secs: exp,
-        profile_id,
-        data_plane_path,
+        exp_unix_secs,
+        profile_id: bootstrap_profile.as_ref().map(|p| p.profile_id.clone()),
+        data_plane_path: bootstrap_profile.map(|p| p.data_plane_path),
     })
     .into_response()
 }
@@ -1105,11 +1129,13 @@ async fn put_upstream(
     if matches!(
         req.network_class,
         UpstreamNetworkClass::ClusterInternalManaged
-    ) && !matches!(principal.as_ref().map(|p| p.0.auth_kind), Some("oidc"))
-    {
+    ) && !matches!(
+        principal.as_ref().map(|p| p.0.auth_kind),
+        Some("oidc" | "static-token")
+    ) {
         return (
             StatusCode::FORBIDDEN,
-            "cluster-internal-managed classification requires OIDC machine identity",
+            "cluster-internal-managed classification requires control-plane authentication",
         )
             .into_response();
     }
@@ -1142,30 +1168,10 @@ async fn put_upstream(
         })
         .collect();
 
-    // Outbound safety (SSRF hardening): validate upstream endpoints before storing them.
-    let safety = crate::outbound_safety::gateway_outbound_http_safety_for_class(req.network_class);
-    for ep in &endpoints {
-        // Upstream endpoint scheme policy: prefer HTTPS by default (dev override supported).
-        if let Err(e) = crate::outbound_safety::check_upstream_https_policy(&ep.url) {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "upstream endpoint '{}' rejected by HTTPS policy: {e}",
-                    ep.id
-                ),
-            )
-                .into_response();
-        }
-        if let Err(e) = crate::outbound_safety::check_url_allowed(&safety, &ep.url).await {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "upstream endpoint '{}' blocked by outbound safety: {e}",
-                    ep.id
-                ),
-            )
-                .into_response();
-        }
+    if let Err(e) =
+        crate::upstream_validation::validate_upstream_endpoints(req.network_class, &endpoints).await
+    {
+        return (StatusCode::BAD_REQUEST, e).into_response();
     }
 
     if let Err(e) = store
@@ -1274,11 +1280,8 @@ async fn put_managed_mcp_reconciler_heartbeat(
     let Some(store) = &state.store else {
         return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
     };
-    if matches!(req.mode, ManagedMcpBackendMode::None) {
-        return (StatusCode::BAD_REQUEST, "mode must be k8s or docker").into_response();
-    }
-    if req.reconciler_id.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "reconcilerId is required").into_response();
+    if let Err(message) = validate_managed_mcp_reconciler_heartbeat_request(&req) {
+        return (StatusCode::BAD_REQUEST, message).into_response();
     }
     match store
         .upsert_managed_mcp_reconciler_heartbeat(req.mode, &req.reconciler_id)
@@ -1287,6 +1290,18 @@ async fn put_managed_mcp_reconciler_heartbeat(
         Ok(()) => (StatusCode::CREATED, Json(OkResponse { ok: true })).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+
+fn validate_managed_mcp_reconciler_heartbeat_request(
+    req: &PutManagedMcpReconcilerHeartbeatRequest,
+) -> Result<(), &'static str> {
+    if matches!(req.mode, ManagedMcpBackendMode::None) {
+        return Err("mode must be k8s or docker");
+    }
+    if req.reconciler_id.trim().is_empty() {
+        return Err("reconcilerId is required");
+    }
+    Ok(())
 }
 
 fn parse_managed_mcp_deployment_status_filter(
@@ -1300,13 +1315,8 @@ fn parse_managed_mcp_deployment_status_filter(
     };
     let mut out = Vec::new();
     for part in raw.split(',').map(str::trim).filter(|p| !p.is_empty()) {
-        let status = match part {
-            "pending" => ManagedMcpDeploymentStatus::Pending,
-            "reconciling" => ManagedMcpDeploymentStatus::Reconciling,
-            "ready" => ManagedMcpDeploymentStatus::Ready,
-            "failed" => ManagedMcpDeploymentStatus::Failed,
-            other => return Err(format!("unsupported status '{other}'")),
-        };
+        let status = ManagedMcpDeploymentStatus::parse(part)
+            .ok_or_else(|| format!("unsupported status '{part}'"))?;
         if !out.contains(&status) {
             out.push(status);
         }
@@ -1405,19 +1415,8 @@ async fn patch_managed_mcp_deployment_request(
     let Some(store) = &state.store else {
         return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
     };
-    if matches!(req.status, ManagedMcpDeploymentStatus::Ready)
-        && req
-            .upstream_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .is_none()
-    {
-        return (
-            StatusCode::BAD_REQUEST,
-            "upstreamId is required when status is ready",
-        )
-            .into_response();
+    if let Err(message) = validate_managed_mcp_status_patch_request(&req) {
+        return (StatusCode::BAD_REQUEST, message).into_response();
     }
     match store
         .mark_managed_mcp_deployment_status(
@@ -1432,6 +1431,22 @@ async fn patch_managed_mcp_deployment_request(
         Ok(false) => (StatusCode::NOT_FOUND, "deployment request not found").into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+
+fn validate_managed_mcp_status_patch_request(
+    req: &PatchManagedMcpDeploymentRequest,
+) -> Result<(), &'static str> {
+    if matches!(req.status, ManagedMcpDeploymentStatus::Ready)
+        && req
+            .upstream_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .is_none()
+    {
+        return Err("upstreamId is required when status is ready");
+    }
+    Ok(())
 }
 
 async fn delete_upstream(
@@ -3461,6 +3476,44 @@ mod tests {
         let err = parse_managed_mcp_deployment_status_filter(Some("pending,not-real"))
             .expect_err("should reject unsupported status");
         assert!(err.contains("unsupported status"));
+    }
+
+    #[test]
+    fn managed_mcp_reconciler_heartbeat_validation_rejects_none_mode_and_empty_id() {
+        let req = PutManagedMcpReconcilerHeartbeatRequest {
+            mode: ManagedMcpBackendMode::None,
+            reconciler_id: "abc".to_string(),
+        };
+        let err =
+            validate_managed_mcp_reconciler_heartbeat_request(&req).expect_err("reject mode=none");
+        assert!(err.contains("mode must be k8s or docker"));
+
+        let req = PutManagedMcpReconcilerHeartbeatRequest {
+            mode: ManagedMcpBackendMode::K8s,
+            reconciler_id: "   ".to_string(),
+        };
+        let err = validate_managed_mcp_reconciler_heartbeat_request(&req)
+            .expect_err("reject empty reconcilerId");
+        assert!(err.contains("reconcilerId is required"));
+    }
+
+    #[test]
+    fn managed_mcp_status_patch_validation_requires_upstream_when_ready() {
+        let req = PatchManagedMcpDeploymentRequest {
+            status: ManagedMcpDeploymentStatus::Ready,
+            upstream_id: None,
+            message: None,
+        };
+        let err =
+            validate_managed_mcp_status_patch_request(&req).expect_err("ready requires upstream");
+        assert!(err.contains("upstreamId is required"));
+
+        let req = PatchManagedMcpDeploymentRequest {
+            status: ManagedMcpDeploymentStatus::Ready,
+            upstream_id: Some("managed_u1".to_string()),
+            message: None,
+        };
+        validate_managed_mcp_status_patch_request(&req).expect("ready with upstream should pass");
     }
 
     #[test]

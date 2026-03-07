@@ -23,9 +23,10 @@ pub(super) async fn upstream_initialize(
     headers: &reqwest::header::HeaderMap,
     network_class: crate::store::UpstreamNetworkClass,
 ) -> anyhow::Result<String> {
-    // Upstream endpoint scheme policy: prefer HTTPS by default (dev override supported).
-    if let Err(err) = crate::outbound_safety::check_upstream_https_policy(mcp_url) {
-        anyhow::bail!("upstream endpoint rejected by HTTPS policy: {err}");
+    if let Err(err) =
+        crate::outbound_safety::check_upstream_scheme_policy_for_class(network_class, mcp_url)
+    {
+        anyhow::bail!("upstream endpoint rejected by scheme policy: {err}");
     }
 
     // Outbound safety (SSRF hardening): validate the upstream endpoint before connecting.
@@ -270,12 +271,15 @@ pub(super) async fn resolve_endpoint_url(
     let safety =
         crate::outbound_safety::gateway_outbound_http_safety_for_class(upstream.network_class);
     for e in upstream.endpoints {
-        if let Err(err) = crate::outbound_safety::check_upstream_https_policy(&e.url) {
+        if let Err(err) = crate::outbound_safety::check_upstream_scheme_policy_for_class(
+            upstream.network_class,
+            &e.url,
+        ) {
             tracing::warn!(
                 upstream_id = %binding.upstream,
                 endpoint_id = %e.id,
                 error = %err,
-                "upstream endpoint rejected by HTTPS policy"
+                "upstream endpoint rejected by scheme policy"
             );
             continue;
         }

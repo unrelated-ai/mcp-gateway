@@ -67,8 +67,9 @@ Policy behavior:
 Assignment guards:
 
 - Tenant APIs cannot set `cluster-internal-managed`.
-- Admin API accepts `cluster-internal-managed` only for OIDC machine identities with control-plane write authorization.
-- Static compatibility admin token can still manage normal external upstreams, but cannot assign `cluster-internal-managed`.
+- Admin API accepts `cluster-internal-managed` for authenticated control-plane callers.
+  - OIDC machine identities with control-plane write authorization are supported.
+  - Static admin token auth is also supported for OSS operator deployments.
 
 ## Redirects and body limits
 
@@ -81,9 +82,11 @@ Gateway defaults are intentionally strict:
 
 For upstream MCP endpoint URLs (Streamable HTTP), the Gateway prefers **TLS by default**:
 
-- upstream endpoint URLs must use **`https://`**
-- `http://` is rejected unless an explicit dev override is set:
+- `external` upstream endpoint URLs must use **`https://`**
+- for `external`, `http://` is rejected unless an explicit dev override is set:
   - `UNRELATED_GATEWAY_UPSTREAM_ALLOW_HTTP=1`
+- `cluster-internal-managed` upstream endpoint URLs may use `http://` or `https://`
+  (intended for operator-managed in-cluster service URLs).
 
 This is enforced both:
 

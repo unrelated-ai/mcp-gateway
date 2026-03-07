@@ -854,6 +854,27 @@ pub enum ManagedMcpDeploymentStatus {
     Failed,
 }
 
+impl ManagedMcpDeploymentStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Reconciling => "reconciling",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "pending" => Some(Self::Pending),
+            "reconciling" => Some(Self::Reconciling),
+            "ready" => Some(Self::Ready),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedMcpDeploymentRequest {

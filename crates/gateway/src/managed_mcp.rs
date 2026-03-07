@@ -125,58 +125,14 @@ pub async fn managed_mcp_backend_status(
         }
     };
 
-    let now_unix = now_unix_secs_i64();
-    let reconciler_healthy = last_heartbeat_unix.is_some_and(|last| {
-        now_unix.saturating_sub(last) <= i64::try_from(cfg.heartbeat_ttl_secs).unwrap_or(i64::MAX)
-    });
-    let message = if reconciler_healthy {
-        None
-    } else if last_heartbeat_unix.is_none() {
-        Some(format!(
-            "no {} reconciler heartbeat observed",
-            cfg.backend_mode.as_str()
-        ))
-    } else {
-        Some(format!(
-            "{} reconciler heartbeat is older than {}s",
-            cfg.backend_mode.as_str(),
-            cfg.heartbeat_ttl_secs
-        ))
-    };
-
-    ManagedMcpBackendStatus {
-        backend_mode: cfg.backend_mode,
-        enabled: true,
-        reconciler_healthy,
-        accepting_requests: reconciler_healthy,
-        heartbeat_ttl_secs: cfg.heartbeat_ttl_secs,
-        last_heartbeat_unix,
-        message,
-    }
+    backend_status_for_heartbeat(now_unix_secs_i64(), last_heartbeat_unix, cfg)
 }
 
 pub async fn managed_mcp_write_guard(
     store: Option<Arc<dyn AdminStore>>,
     cfg: &ManagedMcpRuntimeConfig,
 ) -> ManagedMcpWriteGuard {
-    let status = managed_mcp_backend_status(store, cfg).await;
-    if !status.enabled {
-        return ManagedMcpWriteGuard::Reject {
-            status: StatusCode::CONFLICT,
-            message: status
-                .message
-                .unwrap_or_else(|| "managed deployments are disabled".to_string()),
-        };
-    }
-    if !status.accepting_requests {
-        return ManagedMcpWriteGuard::Reject {
-            status: StatusCode::SERVICE_UNAVAILABLE,
-            message: status.message.unwrap_or_else(|| {
-                "managed deployment backend is unavailable; no healthy reconciler".to_string()
-            }),
-        };
-    }
-    ManagedMcpWriteGuard::Allow
+    write_guard_for_status(managed_mcp_backend_status(store, cfg).await)
 }
 
 pub fn spawn_stale_request_sweeper_task(
@@ -235,15 +191,69 @@ pub fn spawn_stale_request_sweeper_task(
 
 fn parse_u64_env(name: &str, default: u64) -> u64 {
     match std::env::var(name) {
-        Ok(raw) => match raw.trim().parse::<u64>() {
-            Ok(v) => v.max(1),
-            Err(_) => {
+        Ok(raw) => {
+            if let Ok(v) = raw.trim().parse::<u64>() {
+                v.max(1)
+            } else {
                 tracing::warn!(name, value = %raw, "invalid u64 env value; falling back to default");
                 default
             }
-        },
+        }
         Err(_) => default,
     }
+}
+
+fn backend_status_for_heartbeat(
+    now_unix: i64,
+    last_heartbeat_unix: Option<i64>,
+    cfg: &ManagedMcpRuntimeConfig,
+) -> ManagedMcpBackendStatus {
+    let reconciler_healthy = last_heartbeat_unix.is_some_and(|last| {
+        now_unix.saturating_sub(last) <= i64::try_from(cfg.heartbeat_ttl_secs).unwrap_or(i64::MAX)
+    });
+    let message = if reconciler_healthy {
+        None
+    } else if last_heartbeat_unix.is_none() {
+        Some(format!(
+            "no {} reconciler heartbeat observed",
+            cfg.backend_mode.as_str()
+        ))
+    } else {
+        Some(format!(
+            "{} reconciler heartbeat is older than {}s",
+            cfg.backend_mode.as_str(),
+            cfg.heartbeat_ttl_secs
+        ))
+    };
+    ManagedMcpBackendStatus {
+        backend_mode: cfg.backend_mode,
+        enabled: true,
+        reconciler_healthy,
+        accepting_requests: reconciler_healthy,
+        heartbeat_ttl_secs: cfg.heartbeat_ttl_secs,
+        last_heartbeat_unix,
+        message,
+    }
+}
+
+fn write_guard_for_status(status: ManagedMcpBackendStatus) -> ManagedMcpWriteGuard {
+    if !status.enabled {
+        return ManagedMcpWriteGuard::Reject {
+            status: StatusCode::CONFLICT,
+            message: status
+                .message
+                .unwrap_or_else(|| "managed deployments are disabled".to_string()),
+        };
+    }
+    if !status.accepting_requests {
+        return ManagedMcpWriteGuard::Reject {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: status.message.unwrap_or_else(|| {
+                "managed deployment backend is unavailable; no healthy reconciler".to_string()
+            }),
+        };
+    }
+    ManagedMcpWriteGuard::Allow
 }
 
 fn now_unix_secs_i64() -> i64 {
@@ -271,5 +281,96 @@ mod tests {
             Some(ManagedMcpBackendMode::Docker)
         );
         assert_eq!(ManagedMcpBackendMode::parse("nope"), None);
+    }
+
+    #[test]
+    fn backend_status_marks_healthy_when_heartbeat_within_ttl() {
+        let cfg = ManagedMcpRuntimeConfig {
+            backend_mode: ManagedMcpBackendMode::K8s,
+            heartbeat_ttl_secs: 30,
+            stale_timeout_secs: 300,
+            stale_sweep_interval_secs: 30,
+        };
+        let status = backend_status_for_heartbeat(1_000, Some(980), &cfg);
+        assert!(status.reconciler_healthy);
+        assert!(status.accepting_requests);
+        assert!(status.message.is_none());
+    }
+
+    #[test]
+    fn backend_status_marks_stale_when_heartbeat_too_old() {
+        let cfg = ManagedMcpRuntimeConfig {
+            backend_mode: ManagedMcpBackendMode::Docker,
+            heartbeat_ttl_secs: 10,
+            stale_timeout_secs: 300,
+            stale_sweep_interval_secs: 30,
+        };
+        let status = backend_status_for_heartbeat(1_000, Some(900), &cfg);
+        assert!(!status.reconciler_healthy);
+        assert!(!status.accepting_requests);
+        assert!(
+            status
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains("older than 10s"))
+        );
+    }
+
+    #[test]
+    fn backend_status_reports_missing_heartbeat() {
+        let cfg = ManagedMcpRuntimeConfig {
+            backend_mode: ManagedMcpBackendMode::K8s,
+            heartbeat_ttl_secs: 30,
+            stale_timeout_secs: 300,
+            stale_sweep_interval_secs: 30,
+        };
+        let status = backend_status_for_heartbeat(1_000, None, &cfg);
+        assert!(!status.reconciler_healthy);
+        assert!(
+            status
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains("no k8s reconciler heartbeat observed"))
+        );
+    }
+
+    #[test]
+    fn write_guard_rejects_disabled_backend_with_conflict() {
+        let status = ManagedMcpBackendStatus {
+            backend_mode: ManagedMcpBackendMode::None,
+            enabled: false,
+            reconciler_healthy: false,
+            accepting_requests: false,
+            heartbeat_ttl_secs: 30,
+            last_heartbeat_unix: None,
+            message: Some("managed deployments are disabled".to_string()),
+        };
+        match write_guard_for_status(status) {
+            ManagedMcpWriteGuard::Allow => panic!("expected reject"),
+            ManagedMcpWriteGuard::Reject { status, message } => {
+                assert_eq!(status, StatusCode::CONFLICT);
+                assert!(message.contains("disabled"));
+            }
+        }
+    }
+
+    #[test]
+    fn write_guard_rejects_unhealthy_backend_with_service_unavailable() {
+        let status = ManagedMcpBackendStatus {
+            backend_mode: ManagedMcpBackendMode::K8s,
+            enabled: true,
+            reconciler_healthy: false,
+            accepting_requests: false,
+            heartbeat_ttl_secs: 30,
+            last_heartbeat_unix: None,
+            message: Some("no k8s reconciler heartbeat observed".to_string()),
+        };
+        match write_guard_for_status(status) {
+            ManagedMcpWriteGuard::Allow => panic!("expected reject"),
+            ManagedMcpWriteGuard::Reject { status, message } => {
+                assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+                assert!(message.contains("heartbeat"));
+            }
+        }
     }
 }

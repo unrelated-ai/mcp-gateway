@@ -101,3 +101,24 @@ pub fn check_upstream_https_policy(url: &str) -> Result<(), String> {
         )),
     }
 }
+
+/// Enforce upstream endpoint URL scheme policy by network class.
+///
+/// - `external`: strict HTTPS policy (with existing dev override behavior)
+/// - `cluster-internal-managed`: allow `http://` or `https://` because these endpoints are
+///   operator-managed in-cluster service URLs.
+pub fn check_upstream_scheme_policy_for_class(
+    network_class: UpstreamNetworkClass,
+    url: &str,
+) -> Result<(), String> {
+    if matches!(network_class, UpstreamNetworkClass::External) {
+        return check_upstream_https_policy(url);
+    }
+    let u = reqwest::Url::parse(url).map_err(|e| format!("invalid URL: {e}"))?;
+    match u.scheme() {
+        "http" | "https" => Ok(()),
+        other => Err(format!(
+            "unsupported upstream URL scheme '{other}' (expected http or https)"
+        )),
+    }
+}

@@ -2815,27 +2815,18 @@ where id = $1
             anyhow::bail!("deployable not found or disabled");
         }
 
-        let existing = sqlx::query(
+        let existing = sqlx::query(&format!(
             r"
 select
-  id,
-  tenant_id,
-  deployable_id,
-  desired_enabled,
-  desired_replicas,
-  status,
-  upstream_id,
-  message,
-  extract(epoch from created_at)::bigint as created_at_unix,
-  extract(epoch from updated_at)::bigint as updated_at_unix
+{MANAGED_MCP_DEPLOYMENT_REQUEST_COLUMNS}
 from managed_mcp_deployment_requests
 where tenant_id = $1
   and deployable_id = $2
   and status in ('pending', 'reconciling', 'ready')
 order by created_at desc
 limit 1
-",
-        )
+"
+        ))
         .bind(tenant_id)
         .bind(deployable_id)
         .fetch_optional(&self.pool)
@@ -2845,7 +2836,7 @@ limit 1
         }
 
         let request_id = Uuid::new_v4().to_string();
-        let row = sqlx::query(
+        let row = sqlx::query(&format!(
             r"
 insert into managed_mcp_deployment_requests (
   id,
@@ -2857,18 +2848,9 @@ insert into managed_mcp_deployment_requests (
 )
 values ($1, $2, $3, true, 1, 'pending')
 returning
-  id,
-  tenant_id,
-  deployable_id,
-  desired_enabled,
-  desired_replicas,
-  status,
-  upstream_id,
-  message,
-  extract(epoch from created_at)::bigint as created_at_unix,
-  extract(epoch from updated_at)::bigint as updated_at_unix
-",
-        )
+{MANAGED_MCP_DEPLOYMENT_REQUEST_COLUMNS}
+"
+        ))
         .bind(&request_id)
         .bind(tenant_id)
         .bind(deployable_id)
@@ -2881,23 +2863,14 @@ returning
         &self,
         request_id: &str,
     ) -> anyhow::Result<Option<ManagedMcpDeploymentRequest>> {
-        let row = sqlx::query(
+        let row = sqlx::query(&format!(
             r"
 select
-  id,
-  tenant_id,
-  deployable_id,
-  desired_enabled,
-  desired_replicas,
-  status,
-  upstream_id,
-  message,
-  extract(epoch from created_at)::bigint as created_at_unix,
-  extract(epoch from updated_at)::bigint as updated_at_unix
+{MANAGED_MCP_DEPLOYMENT_REQUEST_COLUMNS}
 from managed_mcp_deployment_requests
 where id = $1
-",
-        )
+"
+        ))
         .bind(request_id)
         .fetch_optional(&self.pool)
         .await?;
@@ -2912,24 +2885,15 @@ where id = $1
         tenant_id: &str,
         request_id: &str,
     ) -> anyhow::Result<Option<ManagedMcpDeploymentRequest>> {
-        let row = sqlx::query(
+        let row = sqlx::query(&format!(
             r"
 select
-  id,
-  tenant_id,
-  deployable_id,
-  desired_enabled,
-  desired_replicas,
-  status,
-  upstream_id,
-  message,
-  extract(epoch from created_at)::bigint as created_at_unix,
-  extract(epoch from updated_at)::bigint as updated_at_unix
+{MANAGED_MCP_DEPLOYMENT_REQUEST_COLUMNS}
 from managed_mcp_deployment_requests
 where tenant_id = $1
   and id = $2
-",
-        )
+"
+        ))
         .bind(tenant_id)
         .bind(request_id)
         .fetch_optional(&self.pool)
@@ -2945,22 +2909,13 @@ where tenant_id = $1
         statuses: &[ManagedMcpDeploymentStatus],
         limit: u32,
     ) -> anyhow::Result<Vec<ManagedMcpDeploymentRequest>> {
-        let mut qb = QueryBuilder::<Postgres>::new(
+        let mut qb = QueryBuilder::<Postgres>::new(&format!(
             r"
 select
-  id,
-  tenant_id,
-  deployable_id,
-  desired_enabled,
-  desired_replicas,
-  status,
-  upstream_id,
-  message,
-  extract(epoch from created_at)::bigint as created_at_unix,
-  extract(epoch from updated_at)::bigint as updated_at_unix
+{MANAGED_MCP_DEPLOYMENT_REQUEST_COLUMNS}
 from managed_mcp_deployment_requests
-",
-        );
+"
+        ));
         if !statuses.is_empty() {
             qb.push("where status in (");
             {
@@ -2987,25 +2942,16 @@ from managed_mcp_deployment_requests
         tenant_id: &str,
         limit: u32,
     ) -> anyhow::Result<Vec<ManagedMcpDeploymentRequest>> {
-        let rows = sqlx::query(
+        let rows = sqlx::query(&format!(
             r"
 select
-  id,
-  tenant_id,
-  deployable_id,
-  desired_enabled,
-  desired_replicas,
-  status,
-  upstream_id,
-  message,
-  extract(epoch from created_at)::bigint as created_at_unix,
-  extract(epoch from updated_at)::bigint as updated_at_unix
+{MANAGED_MCP_DEPLOYMENT_REQUEST_COLUMNS}
 from managed_mcp_deployment_requests
 where tenant_id = $1
 order by created_at desc
 limit $2
-",
-        )
+"
+        ))
         .bind(tenant_id)
         .bind(i64::from(limit.max(1)))
         .fetch_all(&self.pool)
@@ -3024,7 +2970,7 @@ limit $2
         desired_enabled: bool,
         desired_replicas: i32,
     ) -> anyhow::Result<Option<ManagedMcpDeploymentRequest>> {
-        let row = sqlx::query(
+        let row = sqlx::query(&format!(
             r"
 update managed_mcp_deployment_requests
 set desired_enabled = $3,
@@ -3035,18 +2981,9 @@ set desired_enabled = $3,
 where tenant_id = $1
   and id = $2
 returning
-  id,
-  tenant_id,
-  deployable_id,
-  desired_enabled,
-  desired_replicas,
-  status,
-  upstream_id,
-  message,
-  extract(epoch from created_at)::bigint as created_at_unix,
-  extract(epoch from updated_at)::bigint as updated_at_unix
-",
-        )
+{MANAGED_MCP_DEPLOYMENT_REQUEST_COLUMNS}
+"
+        ))
         .bind(tenant_id)
         .bind(request_id)
         .bind(desired_enabled)
@@ -3258,33 +3195,30 @@ const fn upstream_network_class_to_db(value: UpstreamNetworkClass) -> &'static s
     }
 }
 
+const MANAGED_MCP_DEPLOYMENT_REQUEST_COLUMNS: &str = r"
+  id,
+  tenant_id,
+  deployable_id,
+  desired_enabled,
+  desired_replicas,
+  status,
+  upstream_id,
+  message,
+  extract(epoch from created_at)::bigint as created_at_unix,
+  extract(epoch from updated_at)::bigint as updated_at_unix
+";
+
 fn parse_managed_mcp_deployment_status(value: &str) -> anyhow::Result<ManagedMcpDeploymentStatus> {
-    match value {
-        "pending" => Ok(ManagedMcpDeploymentStatus::Pending),
-        "reconciling" => Ok(ManagedMcpDeploymentStatus::Reconciling),
-        "ready" => Ok(ManagedMcpDeploymentStatus::Ready),
-        "failed" => Ok(ManagedMcpDeploymentStatus::Failed),
-        other => Err(anyhow::anyhow!(
-            "unknown managed MCP deployment status '{other}'"
-        )),
-    }
+    ManagedMcpDeploymentStatus::parse(value)
+        .ok_or_else(|| anyhow::anyhow!("unknown managed MCP deployment status '{value}'"))
 }
 
 const fn managed_mcp_deployment_status_to_db(value: ManagedMcpDeploymentStatus) -> &'static str {
-    match value {
-        ManagedMcpDeploymentStatus::Pending => "pending",
-        ManagedMcpDeploymentStatus::Reconciling => "reconciling",
-        ManagedMcpDeploymentStatus::Ready => "ready",
-        ManagedMcpDeploymentStatus::Failed => "failed",
-    }
+    value.as_str()
 }
 
 const fn managed_mcp_backend_mode_to_db(value: ManagedMcpBackendMode) -> &'static str {
-    match value {
-        ManagedMcpBackendMode::None => "none",
-        ManagedMcpBackendMode::K8s => "k8s",
-        ManagedMcpBackendMode::Docker => "docker",
-    }
+    value.as_str()
 }
 
 fn parse_managed_mcp_deployment_request_row(
@@ -3307,4 +3241,41 @@ fn parse_managed_mcp_deployment_request_row(
 
 fn hash_api_key_secret(secret: &str) -> String {
     hex::encode(sha2::Sha256::digest(secret.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn managed_mcp_deployment_status_db_roundtrip_uses_canonical_strings() {
+        let statuses = [
+            ManagedMcpDeploymentStatus::Pending,
+            ManagedMcpDeploymentStatus::Reconciling,
+            ManagedMcpDeploymentStatus::Ready,
+            ManagedMcpDeploymentStatus::Failed,
+        ];
+        for status in statuses {
+            let db = managed_mcp_deployment_status_to_db(status);
+            let parsed = parse_managed_mcp_deployment_status(db).expect("parse db status");
+            assert_eq!(parsed, status);
+            assert_eq!(db, status.as_str());
+        }
+    }
+
+    #[test]
+    fn managed_mcp_backend_mode_db_strings_match_store_enum() {
+        assert_eq!(
+            managed_mcp_backend_mode_to_db(ManagedMcpBackendMode::None),
+            ManagedMcpBackendMode::None.as_str()
+        );
+        assert_eq!(
+            managed_mcp_backend_mode_to_db(ManagedMcpBackendMode::K8s),
+            ManagedMcpBackendMode::K8s.as_str()
+        );
+        assert_eq!(
+            managed_mcp_backend_mode_to_db(ManagedMcpBackendMode::Docker),
+            ManagedMcpBackendMode::Docker.as_str()
+        );
+    }
 }

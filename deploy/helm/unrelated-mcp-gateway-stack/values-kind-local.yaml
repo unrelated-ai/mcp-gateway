@@ -14,10 +14,6 @@ gateway:
       repository: unrelated-mcp-gateway-migrator
       tag: kind
       pullPolicy: IfNotPresent
-  extraEnv:
-    # Local kind/dev fixture override: managed MCP endpoints are plain HTTP service URLs.
-    - name: UNRELATED_GATEWAY_UPSTREAM_ALLOW_HTTP
-      value: "1"
 
 gatewayui:
   image:
@@ -32,8 +28,6 @@ operator:
     pullPolicy: IfNotPresent
   managedDeployments:
     mode: k8s
-  gateway:
-    upstreamNetworkClass: external
 
 managedFixtures:
   enabled: true
