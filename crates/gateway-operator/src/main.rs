@@ -321,7 +321,7 @@ struct GatewayDeployablesResponse {
     deployables: Vec<GatewayDeployable>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GatewayDeployable {
     id: String,
@@ -487,8 +487,10 @@ impl DockerManagedRuntime {
                 .names
                 .as_ref()
                 .and_then(|names| names.first())
-                .map(|n| n.trim_start_matches('/').to_string())
-                .unwrap_or_else(|| "unknown-container".to_string());
+                .map_or_else(
+                    || "unknown-container".to_string(),
+                    |n| n.trim_start_matches('/').to_string(),
+                );
             let id = summary.id.unwrap_or_else(|| name.clone());
             let replica_index = summary
                 .labels
@@ -545,14 +547,11 @@ impl DockerManagedRuntime {
         );
         labels.insert(
             LABEL_MANAGED_REQUEST_ID.to_string(),
-            spec.request_id.to_string(),
+            spec.request_id.clone(),
         );
         labels.insert(LABEL_MANAGED_REPLICA_INDEX.to_string(), replica.to_string());
-        labels.insert(
-            LABEL_DEPLOYABLE_ID.to_string(),
-            spec.deployable_id.to_string(),
-        );
-        labels.insert(LABEL_TENANT_ID.to_string(), spec.tenant_id.to_string());
+        labels.insert(LABEL_DEPLOYABLE_ID.to_string(), spec.deployable_id.clone());
+        labels.insert(LABEL_TENANT_ID.to_string(), spec.tenant_id.clone());
 
         let config = ContainerCreateBody {
             image: Some(spec.image.clone()),
@@ -638,12 +637,10 @@ impl DockerManagedRuntime {
         }
         let status = state
             .status
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+            .map_or_else(|| "unknown".to_string(), |s| s.to_string());
         let exit_code = state
             .exit_code
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "n/a".to_string());
+            .map_or_else(|| "n/a".to_string(), |v| v.to_string());
         let runtime_error = state.error.unwrap_or_default();
         if runtime_error.is_empty() {
             return Err(anyhow!(
@@ -1049,6 +1046,7 @@ async fn run_k8s_operator(
     reconciler_id: String,
     heartbeat_interval: Duration,
 ) -> anyhow::Result<()> {
+    let gateway = require_gateway_registration(gateway, managed_deployment_mode)?;
     let client = Client::try_default().await.context("init kube client")?;
     ensure_crd_installed(client.clone()).await?;
 
@@ -1086,29 +1084,27 @@ async fn run_k8s_operator(
 
     let ctx = Arc::new(AppContext {
         client: client.clone(),
-        gateway,
+        gateway: Some(gateway.clone()),
     });
 
-    if let Some(gateway) = ctx.gateway.clone() {
-        let request_namespace = std::env::var("OPERATOR_REQUEST_NAMESPACE")
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .or_else(|| namespace.clone())
-            .unwrap_or_else(|| "default".to_string());
-        spawn_deployment_request_intake_loop(
-            client.clone(),
-            gateway.clone(),
-            request_namespace,
-            managed_request_poll_interval_from_env(),
-        );
-        spawn_reconciler_heartbeat_loop(
-            gateway,
-            managed_deployment_mode,
-            reconciler_id,
-            heartbeat_interval,
-        );
-    }
+    let request_namespace = std::env::var("OPERATOR_REQUEST_NAMESPACE")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| namespace.clone())
+        .unwrap_or_else(|| "default".to_string());
+    spawn_deployment_request_intake_loop(
+        client.clone(),
+        gateway.clone(),
+        request_namespace,
+        managed_request_poll_interval_from_env(),
+    );
+    spawn_reconciler_heartbeat_loop(
+        gateway,
+        managed_deployment_mode,
+        reconciler_id,
+        heartbeat_interval,
+    );
 
     Controller::new(mcp_api, watcher_cfg)
         .run(reconcile, error_policy, ctx)
@@ -1138,11 +1134,7 @@ async fn run_docker_operator(
     reconciler_id: String,
     heartbeat_interval: Duration,
 ) -> anyhow::Result<()> {
-    let gateway = gateway.ok_or_else(|| {
-        anyhow!(
-            "gateway registration is required for docker mode (set OPERATOR_GATEWAY_BASE_URL and OPERATOR_GATEWAY_BEARER_TOKEN)"
-        )
-    })?;
+    let gateway = require_gateway_registration(gateway, managed_deployment_mode)?;
     let runtime = DockerManagedRuntime::from_env().context("load Docker runtime config")?;
     let poll_interval = managed_request_poll_interval_from_env();
 
@@ -1397,6 +1389,18 @@ fn managed_request_poll_interval_from_env() -> Duration {
     Duration::from_secs(poll_secs)
 }
 
+fn require_gateway_registration(
+    gateway: Option<GatewayClient>,
+    mode: ManagedDeploymentMode,
+) -> anyhow::Result<GatewayClient> {
+    gateway.ok_or_else(|| {
+        anyhow!(
+            "gateway registration is required for {} mode (set OPERATOR_GATEWAY_BASE_URL and OPERATOR_GATEWAY_BEARER_TOKEN)",
+            mode.as_str()
+        )
+    })
+}
+
 fn spawn_reconciler_heartbeat_loop(
     gateway: GatewayClient,
     mode: ManagedDeploymentMode,
@@ -1455,32 +1459,16 @@ async fn reconcile_pending_deployment_requests(
 
     let api: Api<McpServer> = Api::namespaced(client, namespace);
     for request in requests {
-        let desired_replicas = desired_replicas_for_request(&request);
-        let request_id = request.id;
-        let tenant_id = request.tenant_id;
-        let deployable_id = request.deployable_id;
-        let Some(deployable) = deployables.iter().find(|d| d.id == deployable_id) else {
-            gateway
-                .patch_deployment_status(
-                    &request_id,
-                    "failed",
-                    None,
-                    Some(format!(
-                        "deployable '{deployable_id}' is missing or disabled"
-                    )),
-                )
-                .await?;
-            continue;
+        let plan = match build_managed_deployment_plan(request, &deployables) {
+            Ok(plan) => plan,
+            Err(err) => {
+                gateway
+                    .patch_deployment_status(&err.request_id, "failed", None, Some(err.message))
+                    .await?;
+                continue;
+            }
         };
-
-        let name = mcpserver_name_for_request(&request_id);
-        let upstream_id = sanitize_identifier(&format!("managed_{tenant_id}_{request_id}"));
-        let upstream_id = if upstream_id.is_empty() {
-            format!("managed_{request_id}")
-        } else {
-            upstream_id
-        };
-        let service_port = service_port_from_default_upstream_url(&deployable.default_upstream_url);
+        let name = mcpserver_name_for_request(&plan.request_id);
         let patch = Patch::Apply(json!({
             "apiVersion": "gateway.unrelated.ai/v1alpha1",
             "kind": "McpServer",
@@ -1489,42 +1477,83 @@ async fn reconcile_pending_deployment_requests(
                 "namespace": namespace,
                 "labels": {
                     (LABEL_MANAGED_REQUEST): "true",
-                    (LABEL_DEPLOYABLE_ID): deployable.id.clone(),
-                    (LABEL_TENANT_ID): tenant_id.clone(),
+                    (LABEL_DEPLOYABLE_ID): plan.deployable.id.clone(),
+                    (LABEL_TENANT_ID): plan.tenant_id.clone(),
                 }
             },
             "spec": {
-                "image": deployable.image.clone(),
-                "replicas": desired_replicas,
-                "service": { "port": service_port },
+                "image": plan.deployable.image.clone(),
+                "replicas": plan.desired_replicas,
+                "service": { "port": plan.endpoint_port },
                 "gateway": {
-                    "upstreamId": upstream_id,
-                    "deploymentRequestId": request_id.clone(),
-                    "endpointPath": endpoint_path_from_default_upstream_url(&deployable.default_upstream_url),
+                    "upstreamId": plan.upstream_id.clone(),
+                    "deploymentRequestId": plan.request_id.clone(),
+                    "endpointPath": plan.endpoint_path.clone(),
                 }
             }
         }));
         api.patch(&name, &PatchParams::apply(FIELD_MANAGER).force(), &patch)
             .await
-            .with_context(|| format!("apply McpServer for deployment request {request_id}"))?;
+            .with_context(|| {
+                format!("apply McpServer for deployment request {}", plan.request_id)
+            })?;
     }
     Ok(())
 }
 
-fn spawn_docker_deployment_request_intake_loop(
-    runtime: DockerManagedRuntime,
-    gateway: GatewayClient,
-    poll_interval: Duration,
-) {
-    tokio::spawn(async move {
-        loop {
-            if let Err(err) = reconcile_pending_docker_deployment_requests(&runtime, &gateway).await
-            {
-                warn!(error = %err, "managed docker deployment request intake failed");
-            }
-            tokio::time::sleep(poll_interval).await;
-        }
-    });
+#[derive(Debug, Clone)]
+struct ManagedDeploymentPlan {
+    request_id: String,
+    tenant_id: String,
+    desired_replicas: i32,
+    upstream_id: String,
+    endpoint_port: i32,
+    endpoint_path: String,
+    endpoint_scheme: String,
+    deployable: GatewayDeployable,
+}
+
+#[derive(Debug)]
+struct ManagedDeploymentPlanError {
+    request_id: String,
+    message: String,
+}
+
+fn build_managed_deployment_plan(
+    request: GatewayDeploymentRequest,
+    deployables: &[GatewayDeployable],
+) -> Result<ManagedDeploymentPlan, ManagedDeploymentPlanError> {
+    let desired_replicas = desired_replicas_for_request(&request);
+    let request_id = request.id;
+    let tenant_id = request.tenant_id;
+    let deployable_id = request.deployable_id;
+    let Some(deployable) = deployables.iter().find(|d| d.id == deployable_id).cloned() else {
+        return Err(ManagedDeploymentPlanError {
+            request_id,
+            message: format!("deployable '{deployable_id}' is missing or disabled"),
+        });
+    };
+    Ok(ManagedDeploymentPlan {
+        request_id: request_id.clone(),
+        tenant_id: tenant_id.clone(),
+        desired_replicas,
+        upstream_id: managed_upstream_id_for_request(&tenant_id, &request_id),
+        endpoint_port: service_port_from_default_upstream_url(&deployable.default_upstream_url),
+        endpoint_path: endpoint_path_from_default_upstream_url(&deployable.default_upstream_url),
+        endpoint_scheme: endpoint_scheme_from_default_upstream_url(
+            &deployable.default_upstream_url,
+        ),
+        deployable,
+    })
+}
+
+fn managed_upstream_id_for_request(tenant_id: &str, request_id: &str) -> String {
+    let upstream_id = sanitize_identifier(&format!("managed_{tenant_id}_{request_id}"));
+    if upstream_id.is_empty() {
+        format!("managed_{request_id}")
+    } else {
+        upstream_id
+    }
 }
 
 async fn reconcile_pending_docker_deployment_requests(
@@ -1564,57 +1593,37 @@ async fn reconcile_pending_docker_deployment_request(
     deployables: &[GatewayDeployable],
     request: GatewayDeploymentRequest,
 ) -> anyhow::Result<()> {
-    let desired_replicas = desired_replicas_for_request(&request);
-    let request_id = request.id;
-    let tenant_id = request.tenant_id;
-    let deployable_id = request.deployable_id;
-
-    let Some(deployable) = deployables.iter().find(|d| d.id == deployable_id) else {
-        gateway
-            .patch_deployment_status(
-                &request_id,
-                "failed",
-                None,
-                Some(format!(
-                    "deployable '{deployable_id}' is missing or disabled"
-                )),
-            )
-            .await?;
-        return Ok(());
+    let plan = match build_managed_deployment_plan(request, deployables) {
+        Ok(plan) => plan,
+        Err(err) => {
+            gateway
+                .patch_deployment_status(&err.request_id, "failed", None, Some(err.message))
+                .await?;
+            return Ok(());
+        }
     };
-
-    let upstream_id = sanitize_identifier(&format!("managed_{tenant_id}_{request_id}"));
-    let upstream_id = if upstream_id.is_empty() {
-        format!("managed_{request_id}")
-    } else {
-        upstream_id
-    };
-    let endpoint_port = service_port_from_default_upstream_url(&deployable.default_upstream_url);
-    let endpoint_path = endpoint_path_from_default_upstream_url(&deployable.default_upstream_url);
-    let endpoint_scheme =
-        endpoint_scheme_from_default_upstream_url(&deployable.default_upstream_url);
 
     gateway
         .patch_deployment_status(
-            &request_id,
+            &plan.request_id,
             "reconciling",
-            Some(upstream_id.clone()),
+            Some(plan.upstream_id.clone()),
             Some("Docker controller started reconciliation".to_string()),
         )
         .await?;
 
     let workload = DockerManagedWorkloadSpec {
-        request_id: request_id.clone(),
-        tenant_id: tenant_id.clone(),
-        deployable_id: deployable.id.clone(),
-        image: deployable.image.clone(),
-        desired_replicas,
-        endpoint_scheme,
-        endpoint_port,
-        endpoint_path,
+        request_id: plan.request_id.clone(),
+        tenant_id: plan.tenant_id.clone(),
+        deployable_id: plan.deployable.id.clone(),
+        image: plan.deployable.image.clone(),
+        desired_replicas: plan.desired_replicas,
+        endpoint_scheme: plan.endpoint_scheme.clone(),
+        endpoint_port: plan.endpoint_port,
+        endpoint_path: plan.endpoint_path.clone(),
     };
     let endpoints = runtime.reconcile_request(&workload).await?;
-    let upstream_enabled = desired_replicas > 0;
+    let upstream_enabled = plan.desired_replicas > 0;
     let endpoint_lifecycle = if upstream_enabled {
         "active"
     } else {
@@ -1632,22 +1641,46 @@ async fn reconcile_pending_docker_deployment_request(
 
     gateway
         .upsert_upstream(
-            &upstream_id,
-            Some(tenant_id.as_str()),
+            &plan.upstream_id,
+            Some(plan.tenant_id.as_str()),
             upstream_enabled,
             gateway_endpoints,
         )
         .await?;
 
     let message = if upstream_enabled {
-        format!("Docker controller reconciled deployment with {desired_replicas} replica(s)")
+        format!(
+            "Docker controller reconciled deployment with {} replica(s)",
+            plan.desired_replicas
+        )
     } else {
         "Docker controller disabled deployment (desired replicas is 0)".to_string()
     };
     gateway
-        .patch_deployment_status(&request_id, "ready", Some(upstream_id), Some(message))
+        .patch_deployment_status(
+            &plan.request_id,
+            "ready",
+            Some(plan.upstream_id),
+            Some(message),
+        )
         .await?;
     Ok(())
+}
+
+fn spawn_docker_deployment_request_intake_loop(
+    runtime: DockerManagedRuntime,
+    gateway: GatewayClient,
+    poll_interval: Duration,
+) {
+    tokio::spawn(async move {
+        loop {
+            if let Err(err) = reconcile_pending_docker_deployment_requests(&runtime, &gateway).await
+            {
+                warn!(error = %err, "managed docker deployment request intake failed");
+            }
+            tokio::time::sleep(poll_interval).await;
+        }
+    });
 }
 
 fn desired_replicas_for_request(request: &GatewayDeploymentRequest) -> i32 {
@@ -2631,6 +2664,19 @@ mod tests {
     use kube::core::ObjectMeta;
     use std::collections::BTreeMap;
 
+    fn test_gateway_client() -> GatewayClient {
+        GatewayClient {
+            http: reqwest::Client::new(),
+            base_url: "http://gateway.test".to_string(),
+            bearer_token: "test-token".to_string(),
+            retry_max_attempts: 3,
+            retry_base_delay: Duration::from_millis(100),
+            session_activity_ttl_secs: 300,
+            network_class: GatewayNetworkClass::External,
+            cleanup_mode: GatewayCleanupMode::DisableEndpoint,
+        }
+    }
+
     fn mk_server(
         name: &str,
         gateway: Option<McpServerGatewaySpec>,
@@ -2651,6 +2697,77 @@ mod tests {
             },
             status: None,
         }
+    }
+
+    fn mk_deployable(id: &str, url: &str) -> GatewayDeployable {
+        GatewayDeployable {
+            id: id.to_string(),
+            image: "ghcr.io/example/managed:latest".to_string(),
+            default_upstream_url: url.to_string(),
+            enabled: true,
+        }
+    }
+
+    fn mk_request(
+        id: &str,
+        tenant_id: &str,
+        deployable_id: &str,
+        desired_enabled: bool,
+        desired_replicas: i32,
+    ) -> GatewayDeploymentRequest {
+        GatewayDeploymentRequest {
+            id: id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            deployable_id: deployable_id.to_string(),
+            desired_enabled,
+            desired_replicas,
+        }
+    }
+
+    #[test]
+    fn require_gateway_registration_rejects_missing_k8s_config() {
+        let Err(err) = require_gateway_registration(None, ManagedDeploymentMode::K8s) else {
+            panic!("k8s mode should require gateway config");
+        };
+        assert!(err.to_string().contains("required for k8s mode"));
+    }
+
+    #[test]
+    fn require_gateway_registration_rejects_missing_docker_config() {
+        let Err(err) = require_gateway_registration(None, ManagedDeploymentMode::Docker) else {
+            panic!("docker mode should require gateway config");
+        };
+        assert!(err.to_string().contains("required for docker mode"));
+    }
+
+    #[test]
+    fn require_gateway_registration_accepts_present_config() {
+        let expected = test_gateway_client();
+        let got = require_gateway_registration(Some(expected.clone()), ManagedDeploymentMode::K8s)
+            .expect("present config should pass");
+        assert_eq!(got.base_url, expected.base_url);
+        assert_eq!(got.bearer_token, expected.bearer_token);
+        assert_eq!(got.network_class.as_str(), expected.network_class.as_str());
+    }
+
+    #[test]
+    fn build_managed_deployment_plan_rejects_missing_deployable() {
+        let request = mk_request("req-1", "tenant-a", "missing", true, 1);
+        let err = build_managed_deployment_plan(request, &[]).expect_err("missing deployable");
+        assert_eq!(err.request_id, "req-1");
+        assert!(err.message.contains("missing or disabled"));
+    }
+
+    #[test]
+    fn build_managed_deployment_plan_normalizes_replicas_and_extracts_endpoint_parts() {
+        let request = mk_request("req-1", "tenant-a", "dep-1", true, 0);
+        let deployables = vec![mk_deployable("dep-1", "http://managed-service:8088/mcp")];
+        let plan = build_managed_deployment_plan(request, &deployables).expect("plan");
+        assert_eq!(plan.desired_replicas, 1);
+        assert_eq!(plan.endpoint_scheme, "http");
+        assert_eq!(plan.endpoint_port, 8088);
+        assert_eq!(plan.endpoint_path, "/mcp");
+        assert!(plan.upstream_id.starts_with("managed_"));
     }
 
     #[test]
