@@ -28,6 +28,9 @@ jobs:
         with:
           cache-on-failure: true
 
+      - name: Verify CRD sync
+        run: make crd-sync-check
+
       - name: Format (rustfmt)
         run: cargo fmt --all -- --check
 

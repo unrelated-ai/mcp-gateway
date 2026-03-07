@@ -27,6 +27,7 @@
         inspector \
         ci ci-quick test-ci qa-release-gates \
         helm-validate helm-validate-optional \
+        crd-sync crd-sync-check \
         hooks-install bench help
 
 # Default target
@@ -281,6 +282,9 @@ KIND_NAMESPACE ?= mcp-gateway
 KIND_RELEASE_NAME ?= unrelated-mcp-gateway
 KIND_NAMESPACE_DELETE_TIMEOUT_SECONDS ?= 120
 
+CANONICAL_MCP_CRD ?= deploy/operator/crds/mcpservers.gateway.unrelated.ai.yaml
+HELM_OPERATOR_MCP_CRD ?= deploy/helm/unrelated-mcp-gateway-operator/crds/mcpservers.gateway.unrelated.ai.yaml
+
 ## Build adapter runtime image (default target in Dockerfile)
 docker-build-adapter:
 	docker build -t unrelated-mcp-adapter:latest .
@@ -415,7 +419,7 @@ inspector:
 # =============================================================================
 
 ## Run all CI checks (lint + test)
-ci: fmt-check clippy test-ci
+ci: fmt-check clippy crd-sync-check test-ci
 
 ## Fast CI for PRs (check + test-unit)
 ci-quick: check fmt-check test-unit
@@ -423,6 +427,18 @@ ci-quick: check fmt-check test-unit
 ## CI test command (mirrors .github/workflows/ci.yml)
 test-ci:
 	cargo test --workspace --all-targets
+
+## Sync canonical operator CRD into Helm chart copy
+crd-sync:
+	cp $(CANONICAL_MCP_CRD) $(HELM_OPERATOR_MCP_CRD)
+
+## Fail if canonical and Helm CRD copies drift
+crd-sync-check:
+	@cmp -s $(CANONICAL_MCP_CRD) $(HELM_OPERATOR_MCP_CRD) || { \
+		echo "ERROR: McpServer CRD copies are out of sync."; \
+		echo "Run: make crd-sync"; \
+		exit 1; \
+	}
 
 ## Validate Helm charts (deps + lint + render smoke)
 helm-validate:
@@ -439,8 +455,8 @@ helm-validate:
 	helm template unrelated-mcp-gateway-ui deploy/helm/unrelated-mcp-gateway-ui --set gateway.dataBase=http://localhost:27100 >/dev/null
 	helm template unrelated-mcp-gateway-stack deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml >/dev/null
 	helm template unrelated-mcp-gateway-stack deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token >/dev/null
-	helm install unrelated-mcp-gateway-smoke deploy/helm/unrelated-mcp-gateway-stack --dry-run --debug -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml >/dev/null
-	helm install unrelated-mcp-gateway-smoke deploy/helm/unrelated-mcp-gateway-stack --dry-run --debug -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token >/dev/null
+	helm upgrade --install unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway-stack --namespace mcp-gateway --create-namespace --dry-run --debug -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml >/dev/null
+	helm upgrade --install unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway-stack --namespace mcp-gateway --create-namespace --dry-run --debug -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token >/dev/null
 
 ## Validate Helm charts if helm exists (skip otherwise)
 helm-validate-optional:
@@ -543,3 +559,5 @@ help:
 	@echo "  ci             Run all CI checks"
 	@echo "  ci-quick       Fast CI for PRs"
 	@echo "  helm-validate  Run Helm deps/lint/template/dry-run checks"
+	@echo "  crd-sync       Copy canonical McpServer CRD into Helm chart"
+	@echo "  crd-sync-check Verify canonical/Helm McpServer CRDs are in sync"
