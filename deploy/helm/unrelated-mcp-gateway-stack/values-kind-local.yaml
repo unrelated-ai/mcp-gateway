@@ -7,6 +7,8 @@ gateway:
     repository: unrelated-mcp-gateway
     tag: kind
     pullPolicy: IfNotPresent
+  managedMcp:
+    backendMode: k8s
   migrations:
     image:
       repository: unrelated-mcp-gateway-migrator
@@ -28,6 +30,8 @@ operator:
     repository: unrelated-mcp-gateway-operator
     tag: kind
     pullPolicy: IfNotPresent
+  managedDeployments:
+    mode: k8s
   gateway:
     upstreamNetworkClass: external
 

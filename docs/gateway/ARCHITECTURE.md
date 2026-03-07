@@ -78,6 +78,25 @@ These are intentionally separate; topology is not a new runtime mode.
 
 `GET /status` exposes both axes as `runtimeMode` and `topology`, plus `nodeId`.
 
+### Managed deployment enforcement
+
+- `UNRELATED_GATEWAY_TOPOLOGY` tells you **what deployment shape you are running** (`none`, `operator-oss`, `controller-enterprise`). It is informational and shows up in `/status` and UI checks.
+- `UNRELATED_MANAGED_MCP_BACKEND_MODE` tells Gateway **whether it should accept managed deployment requests at all**, and for which backend (`none`, `k8s`, `docker`).
+
+Why this split matters: in older behavior, requests could be accepted even when no reconciler was running, then stay `pending` forever. The backend-mode + heartbeat checks prevent that.
+
+Managed deployment request acceptance now uses these settings:
+
+- `UNRELATED_MANAGED_MCP_BACKEND_MODE`: `none` | `k8s` | `docker`
+  - `none`: tenant create/update requests are rejected with `409` (disabled by config)
+  - `k8s`/`docker`: tenant create/update requests require a healthy reconciler heartbeat, otherwise `503`
+- `UNRELATED_MANAGED_MCP_RECONCILER_HEARTBEAT_TTL_SECS`: how old a heartbeat can be before the backend is considered unhealthy
+- `UNRELATED_MANAGED_MCP_STALE_REQUEST_TIMEOUT_SECS`: how long a request can stay `pending`/`reconciling` before stale-fail logic applies
+- `UNRELATED_MANAGED_MCP_STALE_REQUEST_SWEEP_INTERVAL_SECS`: how often stale-fail checks run
+
+Reconcilers report liveness via `POST /admin/v1/managed-mcp/reconciler-heartbeat`.
+Gateway exposes current state in `/status` under `managedMcp` (`backendMode`, `reconcilerHealthy`, `acceptingRequests`, etc.) so operators and UI can explain why requests are accepted or rejected.
+
 ## Configuration and control plane (current)
 
 The Gateway supports two storage/config modes:

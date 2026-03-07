@@ -98,6 +98,16 @@ services:
       # Dev default: allow private-network destinations so the Gateway can reach docker-compose upstreams
       # (Adapters, petstore, etc.).
       UNRELATED_GATEWAY_OUTBOUND_ALLOW_PRIVATE_NETWORKS: ${UNRELATED_GATEWAY_OUTBOUND_ALLOW_PRIVATE_NETWORKS:-1}
+      # Dev default: allow http:// upstream endpoint registration in admin/tenant APIs.
+      UNRELATED_GATEWAY_UPSTREAM_ALLOW_HTTP: ${UNRELATED_GATEWAY_UPSTREAM_ALLOW_HTTP:-1}
+      # Managed MCP backend mode:
+      # - topology is metadata/status for UI/operator context
+      # - backend mode + reconciler heartbeat gates request acceptance
+      UNRELATED_GATEWAY_TOPOLOGY: ${UNRELATED_GATEWAY_TOPOLOGY:-operator-oss}
+      UNRELATED_MANAGED_MCP_BACKEND_MODE: ${UNRELATED_MANAGED_MCP_BACKEND_MODE:-docker}
+      UNRELATED_MANAGED_MCP_RECONCILER_HEARTBEAT_TTL_SECS: ${UNRELATED_MANAGED_MCP_RECONCILER_HEARTBEAT_TTL_SECS:-20}
+      UNRELATED_MANAGED_MCP_STALE_REQUEST_TIMEOUT_SECS: ${UNRELATED_MANAGED_MCP_STALE_REQUEST_TIMEOUT_SECS:-120}
+      UNRELATED_MANAGED_MCP_STALE_REQUEST_SWEEP_INTERVAL_SECS: ${UNRELATED_MANAGED_MCP_STALE_REQUEST_SWEEP_INTERVAL_SECS:-15}
     healthcheck:
       # `gateway-runtime` is alpine (busybox), so `wget` is available.
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4001/health >/dev/null || exit 1"]
@@ -202,17 +212,67 @@ services:
 
   # Smoke test: a fresh stdio MCP server proxied via the Adapter.
   adapter_stdio_smoke:
-    image: unrelated-mcp-adapter:stdio-node
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: managed-stdio-smoke-runtime
+    image: unrelated-mcp-adapter:managed-stdio-smoke
     restart: unless-stopped
     ports:
       - "8085:8080"
     environment:
-      UNRELATED_CONFIG: /config/config.yaml
       UNRELATED_BIND: 0.0.0.0:8080
       UNRELATED_LOG: info
       UNRELATED_STARTUP_TIMEOUT: "180"
+
+  # Seed one managed deployable so the UI "Deployment" screen is usable out-of-the-box.
+  managed_mcp_seed:
+    image: curlimages/curl:8.12.1
+    depends_on:
+      gateway:
+        condition: service_healthy
+      adapter_stdio_smoke:
+        condition: service_started
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        BASE="http://gateway:4001"
+        AUTH="Authorization: Bearer ${UNRELATED_GATEWAY_ADMIN_TOKEN:-dev-admin-token}"
+        curl -fsS -X PUT "$${BASE}/admin/v1/managed-mcp/deployables" \
+          -H "$${AUTH}" \
+          -H "Content-Type: application/json" \
+          -d '{"id":"docker-stdio-smoke","displayName":"Docker Stdio Smoke","description":"Compose-managed docker deployable routed to adapter_stdio_smoke","image":"unrelated-mcp-adapter:managed-stdio-smoke","defaultUpstreamUrl":"http://adapter_stdio_smoke:8080/mcp","enabled":true}' \
+          >/dev/null
+        echo "managed deployable seed applied"
+
+  gateway_operator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: gateway-operator-runtime
+    image: unrelated-mcp-gateway-operator:local
+    depends_on:
+      gateway:
+        condition: service_healthy
+      managed_mcp_seed:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    environment:
+      OPERATOR_MANAGED_DEPLOYMENT_MODE: docker
+      OPERATOR_MANAGED_DEPLOYMENT_RECONCILER_ID: ${OPERATOR_MANAGED_DEPLOYMENT_RECONCILER_ID:-compose-docker-controller}
+      OPERATOR_MANAGED_DEPLOYMENT_HEARTBEAT_SECS: ${OPERATOR_MANAGED_DEPLOYMENT_HEARTBEAT_SECS:-5}
+      OPERATOR_DEPLOYMENT_REQUEST_POLL_SECS: ${OPERATOR_DEPLOYMENT_REQUEST_POLL_SECS:-3}
+      OPERATOR_GATEWAY_BASE_URL: http://gateway:4001
+      OPERATOR_GATEWAY_BEARER_TOKEN: ${UNRELATED_GATEWAY_ADMIN_TOKEN:-dev-admin-token}
+      OPERATOR_GATEWAY_UPSTREAM_NETWORK_CLASS: ${OPERATOR_GATEWAY_UPSTREAM_NETWORK_CLASS:-external}
+      # Override if your Compose project name differs from `mcp-gateway`.
+      OPERATOR_DOCKER_NETWORK: ${OPERATOR_DOCKER_NETWORK:-mcp-gateway_default}
+      OPERATOR_DOCKER_CONTAINER_PREFIX: ${OPERATOR_DOCKER_CONTAINER_PREFIX:-unrelated-managed}
     volumes:
-      - ./tests/fixtures/stdio-smoke.yaml:/config/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   gateway_db_data_bootstrap_v1:

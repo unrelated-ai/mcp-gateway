@@ -39,6 +39,11 @@ managedRequests:
   namespace: ""
   pollSeconds: 5
 
+managedDeployments:
+  mode: "k8s"
+  heartbeatSeconds: 5
+  reconcilerId: ""
+
 resources: {}
 
 nodeSelector: {}

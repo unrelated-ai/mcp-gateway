@@ -4176,6 +4176,7 @@ name = "unrelated-mcp-gateway-operator"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bollard",
  "chrono",
  "futures",
  "hostname",

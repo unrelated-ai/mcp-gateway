@@ -6,10 +6,10 @@ use crate::profile_http::{
 };
 use crate::serde_helpers::default_true;
 use crate::store::{
-    AdminProfile, AdminStore, AdminTenant, AdminUpstream, DataPlaneAuthMode, ManagedMcpDeployable,
-    ManagedMcpDeploymentRequest, ManagedMcpDeploymentStatus, McpProfileSettings,
-    OidcPrincipalBinding, PutProfileDataPlaneAuth, PutProfileFlags, PutProfileInput,
-    PutProfileLimits, TenantSecretMetadata, ToolSourceKind, UpstreamEndpoint,
+    AdminProfile, AdminStore, AdminTenant, AdminUpstream, DataPlaneAuthMode, ManagedMcpBackendMode,
+    ManagedMcpDeployable, ManagedMcpDeploymentRequest, ManagedMcpDeploymentStatus,
+    McpProfileSettings, OidcPrincipalBinding, PutProfileDataPlaneAuth, PutProfileFlags,
+    PutProfileInput, PutProfileLimits, TenantSecretMetadata, ToolSourceKind, UpstreamEndpoint,
     UpstreamEndpointActivity, UpstreamEndpointLifecycle, UpstreamNetworkClass,
 };
 use crate::tenant::{
@@ -143,6 +143,10 @@ pub fn router() -> Router {
         .route(
             "/admin/v1/managed-mcp/deployables",
             get(list_managed_mcp_deployables).put(put_managed_mcp_deployable),
+        )
+        .route(
+            "/admin/v1/managed-mcp/reconciler-heartbeat",
+            post(put_managed_mcp_reconciler_heartbeat),
         )
         .route(
             "/admin/v1/managed-mcp/deployments",
@@ -855,6 +859,13 @@ struct PatchManagedMcpDeploymentRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct PutManagedMcpReconcilerHeartbeatRequest {
+    mode: ManagedMcpBackendMode,
+    reconciler_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ListManagedMcpDeploymentsQuery {
     #[serde(default)]
     status: Option<String>,
@@ -1248,6 +1259,32 @@ async fn list_managed_mcp_deployables(
     };
     match store.list_managed_mcp_deployables().await {
         Ok(deployables) => Json(ManagedMcpDeployablesResponse { deployables }).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn put_managed_mcp_reconciler_heartbeat(
+    Extension(state): Extension<Arc<AdminState>>,
+    headers: HeaderMap,
+    Json(req): Json<PutManagedMcpReconcilerHeartbeatRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) = authz(&headers, state.admin_token.as_deref()) {
+        return resp.into_response();
+    }
+    let Some(store) = &state.store else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+    };
+    if matches!(req.mode, ManagedMcpBackendMode::None) {
+        return (StatusCode::BAD_REQUEST, "mode must be k8s or docker").into_response();
+    }
+    if req.reconciler_id.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "reconcilerId is required").into_response();
+    }
+    match store
+        .upsert_managed_mcp_reconciler_heartbeat(req.mode, &req.reconciler_id)
+        .await
+    {
+        Ok(()) => (StatusCode::CREATED, Json(OkResponse { ok: true })).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

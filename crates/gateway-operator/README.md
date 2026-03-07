@@ -44,6 +44,11 @@ OSS Kubernetes operator for `McpServer` custom resources.
 - `OPERATOR_SERVICE_DOMAIN_SUFFIX` (default: `svc.cluster.local`)
 - `OPERATOR_REQUEST_NAMESPACE` (default: `OPERATOR_NAMESPACE`, otherwise `default`)
 - `OPERATOR_DEPLOYMENT_REQUEST_POLL_SECS` (default: `5`)
+- `OPERATOR_MANAGED_DEPLOYMENT_MODE` (default: `k8s`, alternatives: `docker`)
+  - `k8s`: enables Managed MCP request intake + heartbeat publishing
+  - `docker`: disables this operator's request intake/heartbeat loop (reserved for non-k8s reconcilers)
+- `OPERATOR_MANAGED_DEPLOYMENT_HEARTBEAT_SECS` (default: `5`)
+- `OPERATOR_MANAGED_DEPLOYMENT_RECONCILER_ID` (optional; defaults to `<hostname>-<pid>`)
 
 ## Build
 

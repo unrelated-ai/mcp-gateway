@@ -2,11 +2,11 @@ use crate::pg_invalidation;
 use crate::store::{
     AdminProfile, AdminStore, AdminTenant, AdminUpstream, AdminUpstreamEndpoint, ApiKeyAuth,
     ApiKeyMetadata, AuditEventFilter, AuditEventRow, AuditStatsFilter, DataPlaneAuthMode,
-    ManagedMcpDeployable, ManagedMcpDeploymentRequest, ManagedMcpDeploymentStatus,
-    OidcPrincipalBinding, Profile, SessionActivityBinding, Store, TenantAuditSettings,
-    TenantSecretMetadata, TenantToolSource, ToolCallLimitRejection, ToolCallStatsByApiKey,
-    ToolCallStatsByTool, ToolSourceKind, ToolSourceSpec, Upstream, UpstreamEndpoint,
-    UpstreamEndpointActivity, UpstreamEndpointLifecycle, UpstreamNetworkClass,
+    ManagedMcpBackendMode, ManagedMcpDeployable, ManagedMcpDeploymentRequest,
+    ManagedMcpDeploymentStatus, OidcPrincipalBinding, Profile, SessionActivityBinding, Store,
+    TenantAuditSettings, TenantSecretMetadata, TenantToolSource, ToolCallLimitRejection,
+    ToolCallStatsByApiKey, ToolCallStatsByTool, ToolSourceKind, ToolSourceSpec, Upstream,
+    UpstreamEndpoint, UpstreamEndpointActivity, UpstreamEndpointLifecycle, UpstreamNetworkClass,
 };
 use crate::tool_policy::ToolPolicy;
 use async_trait::async_trait;
@@ -3085,6 +3085,93 @@ where id = $1
         Ok(res.rows_affected() > 0)
     }
 
+    async fn upsert_managed_mcp_reconciler_heartbeat(
+        &self,
+        backend_mode: ManagedMcpBackendMode,
+        reconciler_id: &str,
+    ) -> anyhow::Result<()> {
+        if matches!(backend_mode, ManagedMcpBackendMode::None) {
+            anyhow::bail!("backend_mode=none is not valid for reconciler heartbeats");
+        }
+        if reconciler_id.trim().is_empty() {
+            anyhow::bail!("reconciler_id is required");
+        }
+        sqlx::query(
+            r"
+insert into managed_mcp_reconciler_heartbeats (
+  reconciler_id,
+  backend_mode,
+  last_heartbeat_at
+)
+values ($1, $2, now())
+on conflict (reconciler_id) do update set
+  backend_mode = excluded.backend_mode,
+  last_heartbeat_at = excluded.last_heartbeat_at,
+  updated_at = now()
+",
+        )
+        .bind(reconciler_id)
+        .bind(managed_mcp_backend_mode_to_db(backend_mode))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn latest_managed_mcp_reconciler_heartbeat_unix(
+        &self,
+        backend_mode: ManagedMcpBackendMode,
+    ) -> anyhow::Result<Option<i64>> {
+        if matches!(backend_mode, ManagedMcpBackendMode::None) {
+            return Ok(None);
+        }
+        let row = sqlx::query(
+            r"
+select extract(epoch from max(last_heartbeat_at))::bigint as last_heartbeat_unix
+from managed_mcp_reconciler_heartbeats
+where backend_mode = $1
+",
+        )
+        .bind(managed_mcp_backend_mode_to_db(backend_mode))
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.try_get("last_heartbeat_unix")?)
+    }
+
+    async fn fail_stale_managed_mcp_deployment_requests(
+        &self,
+        statuses: &[ManagedMcpDeploymentStatus],
+        stale_after_secs: u64,
+        message: &str,
+    ) -> anyhow::Result<u64> {
+        if statuses.is_empty() {
+            return Ok(0);
+        }
+        let stale_after_secs = i64::try_from(stale_after_secs).unwrap_or(i64::MAX);
+        let mut qb = QueryBuilder::<Postgres>::new(
+            r"
+update managed_mcp_deployment_requests
+set status = 'failed',
+    message = ",
+        );
+        qb.push_bind(message);
+        qb.push(
+            r",
+    updated_at = now()
+where status in (",
+        );
+        {
+            let mut separated = qb.separated(", ");
+            for status in statuses {
+                separated.push_bind(managed_mcp_deployment_status_to_db(*status));
+            }
+        }
+        qb.push(") and updated_at < now() - make_interval(secs => ");
+        qb.push_bind(stale_after_secs);
+        qb.push(")");
+        let res = qb.build().execute(&self.pool).await?;
+        Ok(res.rows_affected())
+    }
+
     async fn cleanup_audit_events_for_tenant(&self, tenant_id: &str) -> anyhow::Result<u64> {
         let row = sqlx::query(
             r"
@@ -3189,6 +3276,14 @@ const fn managed_mcp_deployment_status_to_db(value: ManagedMcpDeploymentStatus) 
         ManagedMcpDeploymentStatus::Reconciling => "reconciling",
         ManagedMcpDeploymentStatus::Ready => "ready",
         ManagedMcpDeploymentStatus::Failed => "failed",
+    }
+}
+
+const fn managed_mcp_backend_mode_to_db(value: ManagedMcpBackendMode) -> &'static str {
+    match value {
+        ManagedMcpBackendMode::None => "none",
+        ManagedMcpBackendMode::K8s => "k8s",
+        ManagedMcpBackendMode::Docker => "docker",
     }
 }
 

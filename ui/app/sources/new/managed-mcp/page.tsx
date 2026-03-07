@@ -14,6 +14,15 @@ type GatewayStatusResponse =
       ok: true;
       status: {
         topology?: string;
+        managedMcp?: {
+          backendMode?: string;
+          enabled?: boolean;
+          reconcilerHealthy?: boolean;
+          acceptingRequests?: boolean;
+          heartbeatTtlSecs?: number;
+          lastHeartbeatUnix?: number | null;
+          message?: string | null;
+        };
       };
     }
   | { ok: false; error?: string; status?: number };
@@ -48,7 +57,15 @@ export default function ManagedMcpDeployPage() {
     },
   });
   const managedMcpSupported =
-    gatewayStatusQuery.data?.ok && gatewayStatusQuery.data.status.topology === "operator-oss";
+    gatewayStatusQuery.data?.ok && gatewayStatusQuery.data.status.managedMcp?.acceptingRequests === true;
+  const managedMcpStatus = gatewayStatusQuery.data?.ok
+    ? gatewayStatusQuery.data.status.managedMcp
+    : undefined;
+  const managedMcpUnavailableMessage =
+    managedMcpStatus?.message ??
+    (managedMcpStatus
+      ? "Managed deployment backend is not ready."
+      : "Gateway status does not expose managed deployment readiness.");
 
   const deployablesQuery = useQuery({
     queryKey: qk.managedMcpDeployables(),
@@ -87,7 +104,7 @@ export default function ManagedMcpDeployPage() {
   const deployMutation = useMutation({
     mutationFn: async (deployableId: string) => {
       if (!managedMcpSupported) {
-        throw new Error("Managed MCP requires Gateway topology operator-oss");
+        throw new Error(managedMcpUnavailableMessage);
       }
       const response = await tenantApi.createManagedMcpDeploymentRequest(deployableId);
       return response.request;
@@ -157,13 +174,25 @@ export default function ManagedMcpDeployPage() {
       <PageContent className="space-y-6">
         {!gatewayStatusQuery.isPending && !managedMcpSupported && (
           <section className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-200">
-            Managed MCP requires Gateway topology <strong>operator-oss</strong>. Current topology:{" "}
+            Managed deployment is unavailable. Backend mode:{" "}
+            <span className="font-mono">
+              {managedMcpStatus?.backendMode ?? "unknown"}
+            </span>
+            {managedMcpStatus ? (
+              <>
+                {" "}({managedMcpStatus.reconcilerHealthy ? "healthy" : "unhealthy"}).
+              </>
+            ) : (
+              "."
+            )}
+            {" "}Current topology:{" "}
             <span className="font-mono">
               {gatewayStatusQuery.data?.ok
                 ? (gatewayStatusQuery.data.status.topology ?? "unknown")
                 : "unavailable"}
             </span>
-            .
+            .{" "}
+            {managedMcpUnavailableMessage}
           </section>
         )}
 

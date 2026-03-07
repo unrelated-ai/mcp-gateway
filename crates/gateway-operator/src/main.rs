@@ -1,4 +1,11 @@
 use anyhow::{Context as _, anyhow};
+use bollard::Docker;
+use bollard::models::{
+    ContainerCreateBody, ContainerStateStatusEnum, ContainerSummaryStateEnum, HostConfig,
+};
+use bollard::query_parameters::{
+    CreateContainerOptionsBuilder, ListContainersOptionsBuilder, RemoveContainerOptionsBuilder,
+};
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 use futures::StreamExt as _;
 use k8s_openapi::api::apps::v1::Deployment;
@@ -12,7 +19,7 @@ use reqwest::Method;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal as _;
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,6 +43,10 @@ const MIN_GATEWAY_RETRY_BASE_DELAY_MS: u64 = 50;
 const DEFAULT_GATEWAY_SESSION_ACTIVITY_TTL_SECS: u64 = 300;
 const DEFAULT_GATEWAY_UPSTREAM_NETWORK_CLASS: &str = "cluster-internal-managed";
 const DEFAULT_GATEWAY_CLEANUP_MODE: &str = "disable-endpoint";
+const DEFAULT_MANAGED_DEPLOYMENT_MODE: &str = "k8s";
+const DEFAULT_RECONCILER_HEARTBEAT_INTERVAL_SECS: u64 = 5;
+const DEFAULT_DOCKER_NETWORK: &str = "bridge";
+const DEFAULT_DOCKER_CONTAINER_PREFIX: &str = "unrelated-managed";
 const DEFAULT_LEADER_ELECTION_LEASE_NAME: &str = "unrelated-mcp-gateway-operator";
 const DEFAULT_LEADER_ELECTION_LEASE_NAMESPACE: &str = "default";
 const DEFAULT_LEADER_ELECTION_LEASE_DURATION_SECS: i32 = 30;
@@ -55,6 +66,9 @@ const ENDPOINT_ID_MAX_LEN: usize = 40;
 const LABEL_MANAGED_REQUEST: &str = "gateway.unrelated.ai/managed-request";
 const LABEL_DEPLOYABLE_ID: &str = "gateway.unrelated.ai/deployable-id";
 const LABEL_TENANT_ID: &str = "gateway.unrelated.ai/tenant-id";
+const LABEL_MANAGED_REQUEST_ID: &str = "gateway.unrelated.ai/managed-request-id";
+const LABEL_MANAGED_REPLICA_INDEX: &str = "gateway.unrelated.ai/managed-replica-index";
+const LABEL_MANAGED_MODE: &str = "gateway.unrelated.ai/managed-mode";
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
@@ -205,6 +219,21 @@ enum GatewayCleanupMode {
     DeleteEndpoint,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManagedDeploymentMode {
+    K8s,
+    Docker,
+}
+
+impl ManagedDeploymentMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::K8s => "k8s",
+            Self::Docker => "docker",
+        }
+    }
+}
+
 #[derive(Clone)]
 struct GatewayClient {
     http: reqwest::Client,
@@ -266,6 +295,13 @@ struct GatewayPatchDeploymentRequest {
     message: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GatewayReconcilerHeartbeatRequest<'a> {
+    mode: &'a str,
+    reconciler_id: &'a str,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GatewaySessionActivityResponse {
@@ -312,12 +348,312 @@ struct GatewayDeploymentRequest {
     desired_replicas: i32,
 }
 
+#[derive(Debug, Clone)]
+struct ManagedDockerEndpoint {
+    endpoint_id: String,
+    endpoint_url: String,
+}
+
+#[derive(Debug, Clone)]
+struct DockerManagedWorkloadSpec {
+    request_id: String,
+    tenant_id: String,
+    deployable_id: String,
+    image: String,
+    desired_replicas: i32,
+    endpoint_scheme: String,
+    endpoint_port: i32,
+    endpoint_path: String,
+}
+
+#[derive(Debug, Clone)]
+struct DockerManagedContainer {
+    id: String,
+    name: String,
+    image: Option<String>,
+    running: bool,
+    replica_index: Option<u32>,
+}
+
+#[derive(Clone)]
+struct DockerManagedRuntime {
+    docker: Docker,
+    network: String,
+    container_prefix: String,
+}
+
 const fn default_request_desired_enabled() -> bool {
     true
 }
 
 const fn default_request_desired_replicas() -> i32 {
     1
+}
+
+impl DockerManagedRuntime {
+    fn from_env() -> anyhow::Result<Self> {
+        let docker = Docker::connect_with_local_defaults()
+            .context("connect to local Docker Engine (unix socket)")?;
+        Ok(Self {
+            docker,
+            network: docker_network_from_env(),
+            container_prefix: docker_container_prefix_from_env(),
+        })
+    }
+
+    async fn reconcile_request(
+        &self,
+        spec: &DockerManagedWorkloadSpec,
+    ) -> anyhow::Result<Vec<ManagedDockerEndpoint>> {
+        let desired_replicas = spec.desired_replicas.max(0);
+        let mut existing_by_replica: HashMap<u32, DockerManagedContainer> = HashMap::new();
+        let mut stale = Vec::new();
+
+        for container in self.list_request_containers(&spec.request_id).await? {
+            if let Some(replica_index) = container.replica_index {
+                if existing_by_replica
+                    .insert(replica_index, container.clone())
+                    .is_some()
+                {
+                    stale.push(container);
+                }
+            } else {
+                stale.push(container);
+            }
+        }
+        for stale_container in stale {
+            self.remove_container(&stale_container).await?;
+        }
+
+        let mut endpoints = Vec::new();
+        let desired_replicas_u32 = u32::try_from(desired_replicas).unwrap_or(0);
+        for replica in 0..desired_replicas_u32 {
+            let container_name = docker_container_name_for_request(
+                &self.container_prefix,
+                &spec.request_id,
+                replica,
+            );
+            let existing = existing_by_replica.remove(&replica);
+            self.ensure_replica_container(spec, replica, &container_name, existing)
+                .await?;
+
+            endpoints.push(ManagedDockerEndpoint {
+                endpoint_id: docker_endpoint_id_for_request(&spec.request_id, replica),
+                endpoint_url: format!(
+                    "{}://{}:{}{}",
+                    spec.endpoint_scheme, container_name, spec.endpoint_port, spec.endpoint_path
+                ),
+            });
+        }
+
+        for extra_container in existing_by_replica.into_values() {
+            self.remove_container(&extra_container).await?;
+        }
+        endpoints.sort_by(|a, b| a.endpoint_id.cmp(&b.endpoint_id));
+        Ok(endpoints)
+    }
+
+    async fn list_request_containers(
+        &self,
+        request_id: &str,
+    ) -> anyhow::Result<Vec<DockerManagedContainer>> {
+        let mut filters = HashMap::new();
+        filters.insert(
+            "label".to_string(),
+            vec![
+                format!(
+                    "{LABEL_MANAGED_MODE}={}",
+                    ManagedDeploymentMode::Docker.as_str()
+                ),
+                format!("{LABEL_MANAGED_REQUEST_ID}={request_id}"),
+            ],
+        );
+        let summaries = self
+            .docker
+            .list_containers(Some(
+                ListContainersOptionsBuilder::new()
+                    .all(true)
+                    .filters(&filters)
+                    .build(),
+            ))
+            .await
+            .with_context(|| {
+                format!("list Docker containers for managed request '{request_id}' failed")
+            })?;
+
+        let mut containers = Vec::with_capacity(summaries.len());
+        for summary in summaries {
+            let name = summary
+                .names
+                .as_ref()
+                .and_then(|names| names.first())
+                .map(|n| n.trim_start_matches('/').to_string())
+                .unwrap_or_else(|| "unknown-container".to_string());
+            let id = summary.id.unwrap_or_else(|| name.clone());
+            let replica_index = summary
+                .labels
+                .as_ref()
+                .and_then(|labels| labels.get(LABEL_MANAGED_REPLICA_INDEX))
+                .and_then(|v| v.parse::<u32>().ok());
+            containers.push(DockerManagedContainer {
+                id,
+                name,
+                image: summary.image,
+                running: summary.state == Some(ContainerSummaryStateEnum::RUNNING),
+                replica_index,
+            });
+        }
+        Ok(containers)
+    }
+
+    async fn ensure_replica_container(
+        &self,
+        spec: &DockerManagedWorkloadSpec,
+        replica: u32,
+        container_name: &str,
+        existing: Option<DockerManagedContainer>,
+    ) -> anyhow::Result<()> {
+        if let Some(existing) = existing {
+            let name_matches = existing.name == container_name;
+            let image_matches = existing.image.as_deref() == Some(spec.image.as_str());
+            if !name_matches || !image_matches {
+                self.remove_container(&existing).await?;
+                self.create_replica_container(spec, replica, container_name)
+                    .await?;
+                return Ok(());
+            }
+            self.ensure_running(&existing).await?;
+            return Ok(());
+        }
+
+        self.create_replica_container(spec, replica, container_name)
+            .await?;
+        Ok(())
+    }
+
+    async fn create_replica_container(
+        &self,
+        spec: &DockerManagedWorkloadSpec,
+        replica: u32,
+        container_name: &str,
+    ) -> anyhow::Result<()> {
+        let mut labels = HashMap::new();
+        labels.insert(LABEL_MANAGED_REQUEST.to_string(), "true".to_string());
+        labels.insert(
+            LABEL_MANAGED_MODE.to_string(),
+            ManagedDeploymentMode::Docker.as_str().to_string(),
+        );
+        labels.insert(
+            LABEL_MANAGED_REQUEST_ID.to_string(),
+            spec.request_id.to_string(),
+        );
+        labels.insert(LABEL_MANAGED_REPLICA_INDEX.to_string(), replica.to_string());
+        labels.insert(
+            LABEL_DEPLOYABLE_ID.to_string(),
+            spec.deployable_id.to_string(),
+        );
+        labels.insert(LABEL_TENANT_ID.to_string(), spec.tenant_id.to_string());
+
+        let config = ContainerCreateBody {
+            image: Some(spec.image.clone()),
+            labels: Some(labels),
+            host_config: Some(HostConfig {
+                network_mode: Some(self.network.clone()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        self.docker
+            .create_container(
+                Some(
+                    CreateContainerOptionsBuilder::new()
+                        .name(container_name)
+                        .build(),
+                ),
+                config,
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "create Docker container '{container_name}' for request '{}' failed (network='{}')",
+                    spec.request_id, self.network
+                )
+            })?;
+
+        self.docker
+            .start_container(container_name, None)
+            .await
+            .with_context(|| {
+                format!(
+                    "start Docker container '{container_name}' for request '{}' failed",
+                    spec.request_id
+                )
+            })?;
+        self.verify_running(container_name).await?;
+        Ok(())
+    }
+
+    async fn ensure_running(&self, container: &DockerManagedContainer) -> anyhow::Result<()> {
+        if !container.running {
+            self.docker
+                .start_container(&container.id, None)
+                .await
+                .with_context(|| format!("start Docker container '{}' failed", container.name))?;
+        }
+        self.verify_running(&container.id).await?;
+        Ok(())
+    }
+
+    async fn remove_container(&self, container: &DockerManagedContainer) -> anyhow::Result<()> {
+        let res = self
+            .docker
+            .remove_container(
+                &container.id,
+                Some(RemoveContainerOptionsBuilder::new().force(true).build()),
+            )
+            .await;
+        match res {
+            Ok(()) => Ok(()),
+            Err(err) if err.to_string().contains("No such container") => Ok(()),
+            Err(err) => Err(err)
+                .with_context(|| format!("remove Docker container '{}' failed", container.name)),
+        }
+    }
+
+    async fn verify_running(&self, container_name_or_id: &str) -> anyhow::Result<()> {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let inspected = self
+            .docker
+            .inspect_container(container_name_or_id, None)
+            .await
+            .with_context(|| format!("inspect Docker container '{container_name_or_id}' failed"))?;
+        let Some(state) = inspected.state else {
+            return Err(anyhow!(
+                "container '{container_name_or_id}' has no runtime state after start"
+            ));
+        };
+        if state.status == Some(ContainerStateStatusEnum::RUNNING) {
+            return Ok(());
+        }
+        let status = state
+            .status
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let exit_code = state
+            .exit_code
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "n/a".to_string());
+        let runtime_error = state.error.unwrap_or_default();
+        if runtime_error.is_empty() {
+            return Err(anyhow!(
+                "container '{container_name_or_id}' is not running (status={status}, exitCode={exit_code})"
+            ));
+        }
+        Err(anyhow!(
+            "container '{container_name_or_id}' is not running (status={status}, exitCode={exit_code}, error={runtime_error})"
+        ))
+    }
 }
 
 impl GatewayClient {
@@ -415,17 +751,33 @@ impl GatewayClient {
         &self,
         request: GatewayUpsertEndpointRequest<'_>,
     ) -> anyhow::Result<()> {
-        let body = GatewayPutUpstreamRequest {
-            id: request.upstream_id.to_string(),
-            tenant_id: request.tenant_id.map(std::string::ToString::to_string),
-            enabled: request.enabled,
-            network_class: self.network_class.as_str(),
-            endpoints: vec![GatewayPutEndpoint {
+        self.upsert_upstream(
+            request.upstream_id,
+            request.tenant_id,
+            request.enabled,
+            vec![GatewayPutEndpoint {
                 id: request.endpoint_id.to_string(),
                 url: request.endpoint_url.to_string(),
                 enabled: request.enabled,
                 lifecycle: request.lifecycle,
             }],
+        )
+        .await
+    }
+
+    async fn upsert_upstream(
+        &self,
+        upstream_id: &str,
+        tenant_id: Option<&str>,
+        enabled: bool,
+        endpoints: Vec<GatewayPutEndpoint>,
+    ) -> anyhow::Result<()> {
+        let body = GatewayPutUpstreamRequest {
+            id: upstream_id.to_string(),
+            tenant_id: tenant_id.map(std::string::ToString::to_string),
+            enabled,
+            network_class: self.network_class.as_str(),
+            endpoints,
         };
         self.send_json(Method::POST, "/admin/v1/upstreams", Some(&body))
             .await?;
@@ -543,6 +895,24 @@ impl GatewayClient {
         Ok(())
     }
 
+    async fn publish_reconciler_heartbeat(
+        &self,
+        mode: ManagedDeploymentMode,
+        reconciler_id: &str,
+    ) -> anyhow::Result<()> {
+        let body = GatewayReconcilerHeartbeatRequest {
+            mode: mode.as_str(),
+            reconciler_id,
+        };
+        self.send_json(
+            Method::POST,
+            "/admin/v1/managed-mcp/reconciler-heartbeat",
+            Some(&body),
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn send_json<T: Serialize>(
         &self,
         method: Method,
@@ -639,9 +1009,47 @@ impl GatewayClient {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_tracing();
-    let client = Client::try_default().await.context("init kube client")?;
     let gateway = GatewayClient::from_env().context("load gateway registration config")?;
+    let managed_deployment_mode =
+        managed_deployment_mode_from_env().context("load managed deployment mode")?;
+    let reconciler_id = reconciler_id_from_env();
+    let heartbeat_interval = Duration::from_secs(reconciler_heartbeat_interval_secs_from_env());
+    info!(
+        managed_deployment_mode = managed_deployment_mode.as_str(),
+        reconciler_id = %reconciler_id,
+        heartbeat_interval_secs = heartbeat_interval.as_secs(),
+        "managed deployment mode configured"
+    );
 
+    match managed_deployment_mode {
+        ManagedDeploymentMode::K8s => {
+            run_k8s_operator(
+                gateway,
+                managed_deployment_mode,
+                reconciler_id,
+                heartbeat_interval,
+            )
+            .await
+        }
+        ManagedDeploymentMode::Docker => {
+            run_docker_operator(
+                gateway,
+                managed_deployment_mode,
+                reconciler_id,
+                heartbeat_interval,
+            )
+            .await
+        }
+    }
+}
+
+async fn run_k8s_operator(
+    gateway: Option<GatewayClient>,
+    managed_deployment_mode: ManagedDeploymentMode,
+    reconciler_id: String,
+    heartbeat_interval: Duration,
+) -> anyhow::Result<()> {
+    let client = Client::try_default().await.context("init kube client")?;
     ensure_crd_installed(client.clone()).await?;
 
     let leader_cfg = load_leader_election_config();
@@ -688,16 +1096,17 @@ async fn main() -> anyhow::Result<()> {
             .filter(|s| !s.is_empty())
             .or_else(|| namespace.clone())
             .unwrap_or_else(|| "default".to_string());
-        let poll_secs = std::env::var("OPERATOR_DEPLOYMENT_REQUEST_POLL_SECS")
-            .ok()
-            .and_then(|v| v.trim().parse::<u64>().ok())
-            .unwrap_or(5)
-            .max(1);
         spawn_deployment_request_intake_loop(
             client.clone(),
-            gateway,
+            gateway.clone(),
             request_namespace,
-            Duration::from_secs(poll_secs),
+            managed_request_poll_interval_from_env(),
+        );
+        spawn_reconciler_heartbeat_loop(
+            gateway,
+            managed_deployment_mode,
+            reconciler_id,
+            heartbeat_interval,
         );
     }
 
@@ -720,6 +1129,41 @@ async fn main() -> anyhow::Result<()> {
         })
         .await;
 
+    Ok(())
+}
+
+async fn run_docker_operator(
+    gateway: Option<GatewayClient>,
+    managed_deployment_mode: ManagedDeploymentMode,
+    reconciler_id: String,
+    heartbeat_interval: Duration,
+) -> anyhow::Result<()> {
+    let gateway = gateway.ok_or_else(|| {
+        anyhow!(
+            "gateway registration is required for docker mode (set OPERATOR_GATEWAY_BASE_URL and OPERATOR_GATEWAY_BEARER_TOKEN)"
+        )
+    })?;
+    let runtime = DockerManagedRuntime::from_env().context("load Docker runtime config")?;
+    let poll_interval = managed_request_poll_interval_from_env();
+
+    info!(
+        docker_network = %runtime.network,
+        container_prefix = %runtime.container_prefix,
+        poll_interval_secs = poll_interval.as_secs(),
+        "starting docker managed deployment controller"
+    );
+
+    spawn_docker_deployment_request_intake_loop(runtime, gateway.clone(), poll_interval);
+    spawn_reconciler_heartbeat_loop(
+        gateway,
+        managed_deployment_mode,
+        reconciler_id,
+        heartbeat_interval,
+    );
+
+    tokio::signal::ctrl_c()
+        .await
+        .context("wait for shutdown signal")?;
     Ok(())
 }
 
@@ -899,6 +1343,84 @@ fn lease_expired(spec: &LeaseSpec, now: DateTime<Utc>) -> bool {
     now > renew_at.with_timezone(&Utc) + ChronoDuration::seconds(duration)
 }
 
+fn managed_deployment_mode_from_env() -> anyhow::Result<ManagedDeploymentMode> {
+    let raw = std::env::var("OPERATOR_MANAGED_DEPLOYMENT_MODE")
+        .ok()
+        .unwrap_or_else(|| DEFAULT_MANAGED_DEPLOYMENT_MODE.to_string());
+    parse_managed_deployment_mode(&raw).ok_or_else(|| {
+        anyhow!(
+            "unsupported OPERATOR_MANAGED_DEPLOYMENT_MODE value '{}'",
+            raw.trim()
+        )
+    })
+}
+
+fn parse_managed_deployment_mode(raw: &str) -> Option<ManagedDeploymentMode> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "k8s" => Some(ManagedDeploymentMode::K8s),
+        "docker" => Some(ManagedDeploymentMode::Docker),
+        _ => None,
+    }
+}
+
+fn reconciler_id_from_env() -> String {
+    std::env::var("OPERATOR_MANAGED_DEPLOYMENT_RECONCILER_ID")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            format!(
+                "{}-{}",
+                hostname::get()
+                    .ok()
+                    .and_then(|h| h.into_string().ok())
+                    .unwrap_or_else(|| "unknown-host".to_string()),
+                std::process::id()
+            )
+        })
+}
+
+fn reconciler_heartbeat_interval_secs_from_env() -> u64 {
+    std::env::var("OPERATOR_MANAGED_DEPLOYMENT_HEARTBEAT_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_RECONCILER_HEARTBEAT_INTERVAL_SECS)
+        .max(1)
+}
+
+fn managed_request_poll_interval_from_env() -> Duration {
+    let poll_secs = std::env::var("OPERATOR_DEPLOYMENT_REQUEST_POLL_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(5)
+        .max(1);
+    Duration::from_secs(poll_secs)
+}
+
+fn spawn_reconciler_heartbeat_loop(
+    gateway: GatewayClient,
+    mode: ManagedDeploymentMode,
+    reconciler_id: String,
+    interval: Duration,
+) {
+    tokio::spawn(async move {
+        loop {
+            if let Err(err) = gateway
+                .publish_reconciler_heartbeat(mode, &reconciler_id)
+                .await
+            {
+                warn!(
+                    error = %err,
+                    reconciler_id = %reconciler_id,
+                    mode = mode.as_str(),
+                    "failed to publish managed deployment reconciler heartbeat"
+                );
+            }
+            tokio::time::sleep(interval).await;
+        }
+    });
+}
+
 fn spawn_deployment_request_intake_loop(
     client: Client,
     gateway: GatewayClient,
@@ -989,6 +1511,145 @@ async fn reconcile_pending_deployment_requests(
     Ok(())
 }
 
+fn spawn_docker_deployment_request_intake_loop(
+    runtime: DockerManagedRuntime,
+    gateway: GatewayClient,
+    poll_interval: Duration,
+) {
+    tokio::spawn(async move {
+        loop {
+            if let Err(err) = reconcile_pending_docker_deployment_requests(&runtime, &gateway).await
+            {
+                warn!(error = %err, "managed docker deployment request intake failed");
+            }
+            tokio::time::sleep(poll_interval).await;
+        }
+    });
+}
+
+async fn reconcile_pending_docker_deployment_requests(
+    runtime: &DockerManagedRuntime,
+    gateway: &GatewayClient,
+) -> anyhow::Result<()> {
+    let deployables = gateway.list_deployables().await?;
+    let requests = gateway
+        .list_pending_deployment_requests(DEFAULT_PENDING_DEPLOYMENT_REQUEST_LIMIT)
+        .await?;
+    if requests.is_empty() {
+        return Ok(());
+    }
+
+    for request in requests {
+        let request_id = request.id.clone();
+        if let Err(err) =
+            reconcile_pending_docker_deployment_request(runtime, gateway, &deployables, request)
+                .await
+        {
+            warn!(
+                request_id = %request_id,
+                error = %err,
+                "managed docker deployment request reconciliation failed"
+            );
+            let _ = gateway
+                .patch_deployment_status(&request_id, "failed", None, Some(err.to_string()))
+                .await;
+        }
+    }
+    Ok(())
+}
+
+async fn reconcile_pending_docker_deployment_request(
+    runtime: &DockerManagedRuntime,
+    gateway: &GatewayClient,
+    deployables: &[GatewayDeployable],
+    request: GatewayDeploymentRequest,
+) -> anyhow::Result<()> {
+    let desired_replicas = desired_replicas_for_request(&request);
+    let request_id = request.id;
+    let tenant_id = request.tenant_id;
+    let deployable_id = request.deployable_id;
+
+    let Some(deployable) = deployables.iter().find(|d| d.id == deployable_id) else {
+        gateway
+            .patch_deployment_status(
+                &request_id,
+                "failed",
+                None,
+                Some(format!(
+                    "deployable '{deployable_id}' is missing or disabled"
+                )),
+            )
+            .await?;
+        return Ok(());
+    };
+
+    let upstream_id = sanitize_identifier(&format!("managed_{tenant_id}_{request_id}"));
+    let upstream_id = if upstream_id.is_empty() {
+        format!("managed_{request_id}")
+    } else {
+        upstream_id
+    };
+    let endpoint_port = service_port_from_default_upstream_url(&deployable.default_upstream_url);
+    let endpoint_path = endpoint_path_from_default_upstream_url(&deployable.default_upstream_url);
+    let endpoint_scheme =
+        endpoint_scheme_from_default_upstream_url(&deployable.default_upstream_url);
+
+    gateway
+        .patch_deployment_status(
+            &request_id,
+            "reconciling",
+            Some(upstream_id.clone()),
+            Some("Docker controller started reconciliation".to_string()),
+        )
+        .await?;
+
+    let workload = DockerManagedWorkloadSpec {
+        request_id: request_id.clone(),
+        tenant_id: tenant_id.clone(),
+        deployable_id: deployable.id.clone(),
+        image: deployable.image.clone(),
+        desired_replicas,
+        endpoint_scheme,
+        endpoint_port,
+        endpoint_path,
+    };
+    let endpoints = runtime.reconcile_request(&workload).await?;
+    let upstream_enabled = desired_replicas > 0;
+    let endpoint_lifecycle = if upstream_enabled {
+        "active"
+    } else {
+        "disabled"
+    };
+    let gateway_endpoints: Vec<GatewayPutEndpoint> = endpoints
+        .into_iter()
+        .map(|ep| GatewayPutEndpoint {
+            id: ep.endpoint_id,
+            url: ep.endpoint_url,
+            enabled: upstream_enabled,
+            lifecycle: endpoint_lifecycle,
+        })
+        .collect();
+
+    gateway
+        .upsert_upstream(
+            &upstream_id,
+            Some(tenant_id.as_str()),
+            upstream_enabled,
+            gateway_endpoints,
+        )
+        .await?;
+
+    let message = if upstream_enabled {
+        format!("Docker controller reconciled deployment with {desired_replicas} replica(s)")
+    } else {
+        "Docker controller disabled deployment (desired replicas is 0)".to_string()
+    };
+    gateway
+        .patch_deployment_status(&request_id, "ready", Some(upstream_id), Some(message))
+        .await?;
+    Ok(())
+}
+
 fn desired_replicas_for_request(request: &GatewayDeploymentRequest) -> i32 {
     if !request.desired_enabled {
         return 0;
@@ -1022,6 +1683,71 @@ fn endpoint_path_from_default_upstream_url(url: &str) -> String {
     } else {
         format!("/{path}")
     }
+}
+
+fn endpoint_scheme_from_default_upstream_url(url: &str) -> String {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return DEFAULT_ENDPOINT_SCHEME.to_string();
+    };
+    match parsed.scheme() {
+        "http" | "https" => parsed.scheme().to_string(),
+        _ => DEFAULT_ENDPOINT_SCHEME.to_string(),
+    }
+}
+
+fn docker_network_from_env() -> String {
+    std::env::var("OPERATOR_DOCKER_NETWORK")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_DOCKER_NETWORK.to_string())
+}
+
+fn docker_container_prefix_from_env() -> String {
+    std::env::var("OPERATOR_DOCKER_CONTAINER_PREFIX")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(|s| sanitize_dns_label(&s))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_DOCKER_CONTAINER_PREFIX.to_string())
+}
+
+fn docker_container_name_for_request(prefix: &str, request_id: &str, replica: u32) -> String {
+    let suffix: String = request_id
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .take(MCPSERVER_NAME_SUFFIX_LEN)
+        .collect();
+    let suffix = if suffix.is_empty() {
+        "request".to_string()
+    } else {
+        suffix.to_ascii_lowercase()
+    };
+    truncate_dns_label(&format!(
+        "{}-{}-r{}",
+        sanitize_dns_label(prefix),
+        suffix,
+        replica
+    ))
+}
+
+fn docker_endpoint_id_for_request(request_id: &str, replica: u32) -> String {
+    let suffix: String = request_id
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .take(12)
+        .collect();
+    let suffix = if suffix.is_empty() {
+        "request".to_string()
+    } else {
+        suffix.to_ascii_lowercase()
+    };
+    let mut endpoint_id = format!("docker-{suffix}-r{replica}");
+    if endpoint_id.len() > ENDPOINT_ID_MAX_LEN {
+        endpoint_id.truncate(ENDPOINT_ID_MAX_LEN);
+    }
+    endpoint_id.trim_matches('-').to_string()
 }
 
 fn service_port_from_default_upstream_url(url: &str) -> i32 {
@@ -2076,5 +2802,22 @@ mod tests {
             desired_replicas: 3,
         };
         assert_eq!(desired_replicas_for_request(&enabled_many), 3);
+    }
+
+    #[test]
+    fn parse_managed_deployment_mode_accepts_supported_values() {
+        assert_eq!(
+            parse_managed_deployment_mode("k8s"),
+            Some(ManagedDeploymentMode::K8s)
+        );
+        assert_eq!(
+            parse_managed_deployment_mode("docker"),
+            Some(ManagedDeploymentMode::Docker)
+        );
+        assert_eq!(
+            parse_managed_deployment_mode(" K8S "),
+            Some(ManagedDeploymentMode::K8s)
+        );
+        assert_eq!(parse_managed_deployment_mode("other"), None);
     }
 }

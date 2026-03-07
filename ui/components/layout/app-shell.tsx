@@ -24,6 +24,7 @@ type NavItem = {
   href: string;
   label: string;
   icon: typeof GridIcon;
+  beta?: boolean;
   extraActivePrefixes?: string[];
   excludeActivePrefixes?: string[];
 };
@@ -40,6 +41,7 @@ const navItems: NavItem[] = [
     href: "/sources/deployment",
     label: "Deployment",
     icon: ServerIconStack,
+    beta: true,
     extraActivePrefixes: ["/sources/new/managed-mcp"],
   },
   { href: "/api-keys", label: "API Keys", icon: KeyIcon },
@@ -98,7 +100,14 @@ export function AppShell({ children }: AppShellProps) {
                 <item.icon
                   className={`w-5 h-5 ${isActive ? "text-violet-400" : "text-zinc-500"}`}
                 />
-                {item.label}
+                <span className="flex items-center gap-2">
+                  <span>{item.label}</span>
+                  {item.beta ? (
+                    <span className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
+                      beta
+                    </span>
+                  ) : null}
+                </span>
               </Link>
             );
           })}

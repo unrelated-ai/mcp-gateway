@@ -65,6 +65,14 @@ spec:
               value: {{ default .Release.Namespace .Values.managedRequests.namespace | quote }}
             - name: OPERATOR_DEPLOYMENT_REQUEST_POLL_SECS
               value: {{ .Values.managedRequests.pollSeconds | quote }}
+            - name: OPERATOR_MANAGED_DEPLOYMENT_MODE
+              value: {{ .Values.managedDeployments.mode | quote }}
+            - name: OPERATOR_MANAGED_DEPLOYMENT_HEARTBEAT_SECS
+              value: {{ .Values.managedDeployments.heartbeatSeconds | quote }}
+            {{- if .Values.managedDeployments.reconcilerId }}
+            - name: OPERATOR_MANAGED_DEPLOYMENT_RECONCILER_ID
+              value: {{ .Values.managedDeployments.reconcilerId | quote }}
+            {{- end }}
           resources:
 {{ toYaml .Values.resources | indent 12 }}
       nodeSelector:

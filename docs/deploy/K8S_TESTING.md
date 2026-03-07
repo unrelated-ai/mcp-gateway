@@ -103,7 +103,10 @@ Then open `http://localhost:3000`.
 
 ## Managed MCP testing
 
-Managed MCP requires operator-backed topology (`operator-oss`).
+Managed MCP requires both:
+
+- topology metadata `operator-oss`
+- managed backend enforcement mode `k8s` with healthy reconciler heartbeat
 
 Check Gateway topology:
 
@@ -111,7 +114,10 @@ Check Gateway topology:
 kubectl -n mcp-gateway run status-check --image=curlimages/curl:8.12.1 --rm -i --restart=Never --command -- sh -c 'curl -sS http://unrelated-mcp-gateway-admin:4001/status'
 ```
 
-You should see `"topology":"operator-oss"` in the JSON payload.
+You should see:
+
+- `"topology":"operator-oss"`
+- `"managedMcp":{"backendMode":"k8s","reconcilerHealthy":true,"acceptingRequests":true,...}`
 
 For `kind-local` deploys, two Managed MCP deployables are seeded automatically:
 

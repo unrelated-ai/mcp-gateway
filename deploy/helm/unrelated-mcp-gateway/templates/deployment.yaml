@@ -90,6 +90,14 @@ spec:
               value: {{ .Values.session.ttlSeconds | quote }}
             - name: UNRELATED_GATEWAY_OUTBOUND_ALLOW_PRIVATE_NETWORKS
               value: {{ ternary "1" "0" .Values.outboundAllowPrivateNetworks | quote }}
+            - name: UNRELATED_MANAGED_MCP_BACKEND_MODE
+              value: {{ .Values.managedMcp.backendMode | quote }}
+            - name: UNRELATED_MANAGED_MCP_RECONCILER_HEARTBEAT_TTL_SECS
+              value: {{ .Values.managedMcp.reconcilerHeartbeatTtlSeconds | quote }}
+            - name: UNRELATED_MANAGED_MCP_STALE_REQUEST_TIMEOUT_SECS
+              value: {{ .Values.managedMcp.staleRequestTimeoutSeconds | quote }}
+            - name: UNRELATED_MANAGED_MCP_STALE_REQUEST_SWEEP_INTERVAL_SECS
+              value: {{ .Values.managedMcp.staleRequestSweepIntervalSeconds | quote }}
             {{- if .Values.topology }}
             - name: UNRELATED_GATEWAY_TOPOLOGY
               value: {{ .Values.topology | quote }}

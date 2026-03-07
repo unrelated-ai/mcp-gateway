@@ -8,11 +8,15 @@ operator:
   gateway:
     baseUrl: http://unrelated-mcp-gateway-admin:4001
     bearerToken: ""
+  managedDeployments:
+    mode: k8s
 
 gateway:
   enabled: true
   fullnameOverride: unrelated-mcp-gateway
   topology: operator-oss
+  managedMcp:
+    backendMode: k8s
   database:
     existingSecret:
       name: ""

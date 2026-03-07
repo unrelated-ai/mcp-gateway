@@ -16,6 +16,7 @@ mod catalog;
 mod config;
 mod contracts;
 mod endpoint_cache;
+mod managed_mcp;
 mod mcp;
 mod oidc;
 mod outbound_safety;
@@ -93,11 +94,14 @@ struct AppState {
     runtime_mode: &'static str,
     topology: String,
     node_id: String,
+    admin_store: Option<Arc<dyn store::AdminStore>>,
+    managed_mcp: managed_mcp::ManagedMcpRuntimeConfig,
 }
 
 struct PlaneAppsInputs {
     mcp_state: Arc<mcp::McpState>,
     admin_store: Option<Arc<dyn store::AdminStore>>,
+    managed_mcp: managed_mcp::ManagedMcpRuntimeConfig,
     session_secret: Vec<u8>,
     shared_source_ids: Arc<std::collections::HashSet<String>>,
     oidc_issuer: Option<String>,
@@ -129,6 +133,7 @@ struct StatusResponse {
     runtime_mode: &'static str,
     topology: String,
     node_id: String,
+    managed_mcp: managed_mcp::ManagedMcpBackendStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     oidc_issuer: Option<String>,
     oidc_configured: bool,
@@ -148,6 +153,7 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
     validate_config_guardrails(&args, &config)?;
     let profile_count = config.profiles.len();
     let (runtime_mode, topology, node_id) = runtime_mode_topology_node_id(&args);
+    let managed_mcp_cfg = managed_mcp::ManagedMcpRuntimeConfig::from_env();
     let session_secrets = load_session_secrets();
     let session_ttl = load_session_ttl();
     let shared_source_ids: Arc<std::collections::HashSet<String>> =
@@ -213,6 +219,11 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
         let ttl_secs = pg_store::upstream_session_activity_ttl_secs_from_env();
         pg_store::spawn_upstream_session_activity_cleanup_task(pg, ct.clone(), ttl_secs);
     }
+    managed_mcp::spawn_stale_request_sweeper_task(
+        admin_store.clone(),
+        managed_mcp_cfg.clone(),
+        ct.clone(),
+    );
 
     start_mode3_ha_tasks(invalidation.clone(), ct.clone()).await?;
     start_tool_contract_invalidator(&mcp_state, ct.clone());
@@ -223,6 +234,7 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
     } = build_plane_apps(PlaneAppsInputs {
         mcp_state,
         admin_store,
+        managed_mcp: managed_mcp_cfg,
         session_secret: session_secrets[0].clone(),
         shared_source_ids,
         oidc_issuer,
@@ -291,6 +303,7 @@ fn build_plane_apps(inputs: PlaneAppsInputs) -> PlaneApps {
 
     let tenant_state = Arc::new(tenant::TenantState {
         store: admin_state.store.clone(),
+        managed_mcp: inputs.managed_mcp.clone(),
         signer: tenant_token::TenantSigner::new(inputs.session_secret),
         shared_source_ids: inputs.shared_source_ids,
         mcp_state: inputs.mcp_state.clone(),
@@ -307,6 +320,8 @@ fn build_plane_apps(inputs: PlaneAppsInputs) -> PlaneApps {
         runtime_mode: inputs.runtime_mode,
         topology: inputs.topology,
         node_id: inputs.node_id,
+        admin_store: admin_state.store.clone(),
+        managed_mcp: inputs.managed_mcp,
     });
 
     let data_app = mcp::router(inputs.mcp_state).route("/health", get(health));
@@ -732,6 +747,9 @@ async fn ready() -> &'static str {
 }
 
 async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
+    let managed_mcp =
+        managed_mcp::managed_mcp_backend_status(state.admin_store.clone(), &state.managed_mcp)
+            .await;
     Json(StatusResponse {
         version: state.version,
         license: LICENSE,
@@ -741,6 +759,7 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
         runtime_mode: state.runtime_mode,
         topology: state.topology.clone(),
         node_id: state.node_id.clone(),
+        managed_mcp,
         oidc_issuer: state.oidc_issuer.clone(),
         oidc_configured: state.oidc_issuer.is_some(),
     })

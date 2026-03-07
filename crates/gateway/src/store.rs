@@ -815,6 +815,37 @@ pub struct ManagedMcpDeployable {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ManagedMcpBackendMode {
+    None,
+    K8s,
+    Docker,
+}
+
+impl ManagedMcpBackendMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::K8s => "k8s",
+            Self::Docker => "docker",
+        }
+    }
+
+    pub const fn is_enabled(self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "k8s" => Some(Self::K8s),
+            "docker" => Some(Self::Docker),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ManagedMcpDeploymentStatus {
     Pending,
@@ -1160,6 +1191,30 @@ pub trait AdminStore: Send + Sync {
         _message: Option<&str>,
     ) -> anyhow::Result<bool> {
         anyhow::bail!("managed MCP deployment status updates are not supported by this store")
+    }
+
+    async fn upsert_managed_mcp_reconciler_heartbeat(
+        &self,
+        _backend_mode: ManagedMcpBackendMode,
+        _reconciler_id: &str,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("managed MCP reconciler heartbeats are not supported by this store")
+    }
+
+    async fn latest_managed_mcp_reconciler_heartbeat_unix(
+        &self,
+        _backend_mode: ManagedMcpBackendMode,
+    ) -> anyhow::Result<Option<i64>> {
+        Ok(None)
+    }
+
+    async fn fail_stale_managed_mcp_deployment_requests(
+        &self,
+        _statuses: &[ManagedMcpDeploymentStatus],
+        _stale_after_secs: u64,
+        _message: &str,
+    ) -> anyhow::Result<u64> {
+        anyhow::bail!("managed MCP stale deployment cleanup is not supported by this store")
     }
 }
 

@@ -92,10 +92,19 @@ This profile enables bundled Postgres and wires Gateway DB URL for local-style u
 
 ## Managed MCP requirement
 
-Managed MCP deployment requests require the operator control loop to reconcile them.
+Managed MCP deployment requests require a configured backend mode and healthy reconciler heartbeat.
 
-- If Gateway runs in Mode 3 **without** the operator, managed deployment requests will not advance to ready.
-- For operator-backed installs, set topology to `operator-oss` (chart value `gateway.topology` / env `UNRELATED_GATEWAY_TOPOLOGY`).
+- `UNRELATED_GATEWAY_TOPOLOGY` (`gateway.topology`) remains status/metadata only.
+- Enforcement is controlled by Gateway managed settings:
+  - `gateway.managedMcp.backendMode` -> `UNRELATED_MANAGED_MCP_BACKEND_MODE` (`none|k8s|docker`)
+  - `gateway.managedMcp.reconcilerHeartbeatTtlSeconds` -> `UNRELATED_MANAGED_MCP_RECONCILER_HEARTBEAT_TTL_SECS`
+  - `gateway.managedMcp.staleRequestTimeoutSeconds` -> `UNRELATED_MANAGED_MCP_STALE_REQUEST_TIMEOUT_SECS`
+  - `gateway.managedMcp.staleRequestSweepIntervalSeconds` -> `UNRELATED_MANAGED_MCP_STALE_REQUEST_SWEEP_INTERVAL_SECS`
+- Operator-backed installs should run:
+  - `operator.managedDeployments.mode: k8s`
+  - `gateway.managedMcp.backendMode: k8s`
+
+If Gateway runs in Mode 3 without a healthy reconciler heartbeat for the configured mode, tenant managed deployment create/update calls fail fast instead of staying pending forever.
 
 ## Test unmerged changes on kind (local images)
 

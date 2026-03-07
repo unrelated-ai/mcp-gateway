@@ -1,4 +1,5 @@
 use crate::audit::{AuditActor, AuditError, HttpAuditEvent};
+use crate::managed_mcp::{ManagedMcpRuntimeConfig, ManagedMcpWriteGuard, managed_mcp_write_guard};
 use crate::profile_http::{
     DataPlaneAuthSettings, DataPlaneLimitsSettings, NullableString, NullableU64,
     default_data_plane_auth_mode, resolve_nullable_u64, validate_tool_allowlist,
@@ -43,6 +44,7 @@ const MAX_MANAGED_MCP_REPLICAS: i32 = 50;
 #[derive(Clone)]
 pub struct TenantState {
     pub store: Option<Arc<dyn AdminStore>>,
+    pub managed_mcp: ManagedMcpRuntimeConfig,
     pub signer: TenantSigner,
     pub shared_source_ids: Arc<std::collections::HashSet<String>>,
     /// Shared MCP data-plane state (used for profile surface probing).
@@ -496,6 +498,12 @@ async fn create_managed_mcp_deployment_request(
     if req.deployable_id.trim().is_empty() {
         return (StatusCode::BAD_REQUEST, "deployableId is required").into_response();
     }
+    match managed_mcp_write_guard(state.store.clone(), &state.managed_mcp).await {
+        ManagedMcpWriteGuard::Allow => {}
+        ManagedMcpWriteGuard::Reject { status, message } => {
+            return (status, message).into_response();
+        }
+    }
     match store
         .create_managed_mcp_deployment_request(&tenant_id, &req.deployable_id)
         .await
@@ -589,6 +597,12 @@ async fn patch_managed_mcp_deployment_request(
             "at least one of enabled or replicas is required",
         )
             .into_response();
+    }
+    match managed_mcp_write_guard(state.store.clone(), &state.managed_mcp).await {
+        ManagedMcpWriteGuard::Allow => {}
+        ManagedMcpWriteGuard::Reject { status, message } => {
+            return (status, message).into_response();
+        }
     }
 
     let Some(existing) = (match store

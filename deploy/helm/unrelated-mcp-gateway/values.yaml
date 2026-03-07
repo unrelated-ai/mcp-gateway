@@ -113,6 +113,11 @@ outboundAllowPrivateNetworks: false
 logLevel: info
 topology: ""
 nodeId: ""
+managedMcp:
+  backendMode: "none"
+  reconcilerHeartbeatTtlSeconds: 30
+  staleRequestTimeoutSeconds: 300
+  staleRequestSweepIntervalSeconds: 30
 
 controlPlaneOidc:
   enabled: false

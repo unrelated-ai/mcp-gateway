@@ -108,6 +108,14 @@ EXPOSE 8080
 ENTRYPOINT ["/app/unrelated-mcp-adapter"]
 
 # -----------------------------------------------------------------------------
+# Stage 2b: Self-contained managed MCP stdio smoke image
+# -----------------------------------------------------------------------------
+FROM stdio-node AS managed-stdio-smoke-runtime
+
+COPY tests/fixtures/stdio-smoke.yaml /config/config.yaml
+ENV UNRELATED_CONFIG=/config/config.yaml
+
+# -----------------------------------------------------------------------------
 # Stage 3: Gateway runtime
 # -----------------------------------------------------------------------------
 FROM alpine:3.20 AS gateway-runtime
