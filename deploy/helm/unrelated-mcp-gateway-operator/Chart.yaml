@@ -1,0 +1,6 @@
+apiVersion: v2
+name: unrelated-mcp-gateway-operator
+description: OSS Kubernetes operator for unrelated MCP Gateway managed servers.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

@@ -1,0 +1,55 @@
+{{- if .Values.migrations.enabled }}
+{{- $dbSecretName := .Values.database.existingSecret.name | default "" -}}
+{{- $dbSecretKey := .Values.database.existingSecret.key | default "UNRELATED_GATEWAY_DATABASE_URL" -}}
+{{- $postgresHost := .Values.postgres.fullnameOverride | default "unrelated-mcp-postgres" -}}
+{{- $autoDatabaseUrl := "" -}}
+{{- if and .Values.postgres.enabled (eq $dbSecretName "") (not .Values.database.url) (eq (.Values.postgres.auth.existingSecret.name | default "") "") -}}
+{{- $autoDatabaseUrl = printf "postgres://%s:%s@%s:%v/%s?sslmode=disable" .Values.postgres.auth.username .Values.postgres.auth.password $postgresHost (.Values.postgres.service.port | int) .Values.postgres.auth.database -}}
+{{- end -}}
+{{- $resolvedDatabaseUrl := .Values.database.url | default $autoDatabaseUrl -}}
+{{- if and (eq $dbSecretName "") (not $resolvedDatabaseUrl) -}}
+{{- fail "Migrations require database.existingSecret.name or database.url. For bundled mode, enable postgres.enabled and set postgres.auth values (without postgres.auth.existingSecret)." -}}
+{{- end -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-migrate-r%d" (include "unrelated-mcp-gateway.fullname" .) .Release.Revision | trunc 63 | trimSuffix "-" }}
+  labels:
+{{ include "unrelated-mcp-gateway.labels" . | indent 4 }}
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+{{- if .Values.migrations.ttlSecondsAfterFinished }}
+  ttlSecondsAfterFinished: {{ .Values.migrations.ttlSecondsAfterFinished }}
+{{- end }}
+  template:
+    metadata:
+      labels:
+{{ include "unrelated-mcp-gateway.selectorLabels" . | indent 8 }}
+    spec:
+      # Use default SA; migration job does not require Kubernetes API permissions.
+      restartPolicy: OnFailure
+      containers:
+        - name: migrator
+          image: "{{ .Values.migrations.image.repository }}:{{ .Values.migrations.image.tag }}"
+          imagePullPolicy: {{ .Values.migrations.image.pullPolicy }}
+{{- with .Values.migrations.command }}
+          command:
+{{ toYaml . | indent 12 }}
+{{- end }}
+{{- with .Values.migrations.args }}
+          args:
+{{ toYaml . | indent 12 }}
+{{- end }}
+          env:
+            - name: DATABASE_URL
+{{- if $dbSecretName }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $dbSecretName | quote }}
+                  key: {{ $dbSecretKey | quote }}
+{{- else }}
+              value: {{ $resolvedDatabaseUrl | quote }}
+{{- end }}
+          resources:
+{{ toYaml .Values.migrations.resources | indent 12 }}
+{{- end }}

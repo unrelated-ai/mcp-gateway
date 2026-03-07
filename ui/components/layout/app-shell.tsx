@@ -8,6 +8,7 @@ import {
   GridIcon,
   KeyIcon,
   LockIcon,
+  ServerIconStack,
   SettingsCogIcon,
   ShieldIcon,
   SourcesDbIcon,
@@ -19,9 +20,30 @@ interface AppShellProps {
   children: ReactNode;
 }
 
-const navItems = [
+type NavItem = {
+  href: string;
+  label: string;
+  icon: typeof GridIcon;
+  beta?: boolean;
+  extraActivePrefixes?: string[];
+  excludeActivePrefixes?: string[];
+};
+
+const navItems: NavItem[] = [
   { href: "/profiles", label: "Profiles", icon: GridIcon },
-  { href: "/sources", label: "Sources", icon: SourcesDbIcon },
+  {
+    href: "/sources",
+    label: "Sources",
+    icon: SourcesDbIcon,
+    excludeActivePrefixes: ["/sources/deployment"],
+  },
+  {
+    href: "/sources/deployment",
+    label: "Deployment",
+    icon: ServerIconStack,
+    beta: true,
+    extraActivePrefixes: ["/sources/new/managed-mcp"],
+  },
   { href: "/api-keys", label: "API Keys", icon: KeyIcon },
   { href: "/secrets", label: "Secrets", icon: ShieldIcon },
   { href: "/audit", label: "Audit", icon: ChartIcon },
@@ -53,7 +75,14 @@ export function AppShell({ children }: AppShellProps) {
         {/* Navigation */}
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
           {navItems.map((item) => {
-            const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
+            const matchesPrefix = pathname === item.href || pathname.startsWith(item.href + "/");
+            const matchesExtra = (item.extraActivePrefixes ?? []).some(
+              (prefix) => pathname === prefix || pathname.startsWith(prefix + "/"),
+            );
+            const isExcluded = (item.excludeActivePrefixes ?? []).some(
+              (prefix) => pathname === prefix || pathname.startsWith(prefix + "/"),
+            );
+            const isActive = (matchesPrefix || matchesExtra) && !isExcluded;
             return (
               <Link
                 key={item.href}
@@ -71,7 +100,14 @@ export function AppShell({ children }: AppShellProps) {
                 <item.icon
                   className={`w-5 h-5 ${isActive ? "text-violet-400" : "text-zinc-500"}`}
                 />
-                {item.label}
+                <span className="flex items-center gap-2">
+                  <span>{item.label}</span>
+                  {item.beta ? (
+                    <span className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
+                      beta
+                    </span>
+                  ) : null}
+                </span>
               </Link>
             );
           })}

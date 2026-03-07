@@ -1,0 +1,57 @@
+{{- if and .Values.enabled (gt (len .Values.deployables) 0) -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-seed-r%d" (include "unrelated-mcp-gateway-managed-fixtures.fullname" .) .Release.Revision | trunc 63 | trimSuffix "-" }}
+  labels:
+{{ include "unrelated-mcp-gateway-managed-fixtures.labels" . | indent 4 }}
+spec:
+  backoffLimit: {{ .Values.backoffLimit }}
+{{- if .Values.ttlSecondsAfterFinished }}
+  ttlSecondsAfterFinished: {{ .Values.ttlSecondsAfterFinished }}
+{{- end }}
+  template:
+    metadata:
+      labels:
+{{ include "unrelated-mcp-gateway-managed-fixtures.labels" . | indent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: seed-managed-mcp-deployables
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              if [ -z "${ADMIN_TOKEN}" ]; then
+                echo "managed fixtures requires auth.adminToken.value"
+                exit 1
+              fi
+
+              ADMIN_BASE={{ .Values.gateway.adminBaseUrl | quote }}
+              echo "Waiting for ${ADMIN_BASE}/status..."
+              attempts=0
+              until curl -fsS "${ADMIN_BASE}/status" >/dev/null 2>&1; do
+                attempts=$((attempts + 1))
+                if [ "${attempts}" -ge {{ .Values.wait.maxAttempts }} ]; then
+                  echo "Gateway admin did not become ready in time"
+                  exit 1
+                fi
+                sleep {{ .Values.wait.sleepSeconds }}
+              done
+
+{{- range $idx, $deployable := .Values.deployables }}
+              cat <<'JSON' >/tmp/deployable-{{ $idx }}.json
+{{ toJson $deployable | nindent 14 }}
+              JSON
+              curl -fsS -X PUT "${ADMIN_BASE}/admin/v1/managed-mcp/deployables" \
+                -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+                -H "Content-Type: application/json" \
+                --data-binary @/tmp/deployable-{{ $idx }}.json
+{{- end }}
+          env:
+            - name: ADMIN_TOKEN
+              value: {{ .Values.auth.adminToken.value | quote }}
+{{- end }}

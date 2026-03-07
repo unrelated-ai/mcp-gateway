@@ -28,6 +28,9 @@ jobs:
         with:
           cache-on-failure: true
 
+      - name: Verify CRD sync
+        run: make crd-sync-check
+
       - name: Format (rustfmt)
         run: cargo fmt --all -- --check
 
@@ -36,3 +39,64 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --all-targets
+
+  helm:
+    name: helm (lint, template)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Helm version
+        run: helm version --short
+
+      - name: Build chart dependencies
+        run: |
+          set -euo pipefail
+          helm dependency build deploy/helm/unrelated-mcp-gateway
+          helm dependency build deploy/helm/unrelated-mcp-gateway-stack
+
+      - name: Helm lint
+        run: |
+          set -euo pipefail
+          helm lint deploy/helm/unrelated-mcp-postgres
+          helm lint deploy/helm/unrelated-mcp-gateway-operator
+          helm lint deploy/helm/unrelated-mcp-gateway \
+            --set database.url='postgres://postgres:postgres@db:5432/gateway?sslmode=disable' \
+            --set auth.adminToken.value=ci-admin-token \
+            --set session.secret.value=ci-session-secret \
+            --set session.secretKeys.value=ci-secret-keys
+          helm lint deploy/helm/unrelated-mcp-gateway-ui \
+            --set gateway.dataBase=http://localhost:27100
+          helm lint deploy/helm/unrelated-mcp-gateway-stack \
+            -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml
+          helm lint deploy/helm/unrelated-mcp-gateway-stack \
+            -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml \
+            --set gatewayui.gateway.dataBase=https://gateway.example.com \
+            --set operator.gateway.bearerToken=ci-token
+          helm lint deploy/helm/unrelated-mcp-gateway-stack \
+            -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml \
+            -f deploy/helm/unrelated-mcp-gateway-stack/values-kind-local.yaml
+
+      - name: Helm template
+        run: |
+          set -euo pipefail
+          helm template unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway \
+            --set database.url='postgres://postgres:postgres@db:5432/gateway?sslmode=disable' \
+            --set auth.adminToken.value=ci-admin-token \
+            --set session.secret.value=ci-session-secret \
+            --set session.secretKeys.value=ci-secret-keys >/dev/null
+          helm template unrelated-mcp-gateway-ui deploy/helm/unrelated-mcp-gateway-ui \
+            --set gateway.dataBase=http://localhost:27100 >/dev/null
+          helm template unrelated-mcp-gateway-stack deploy/helm/unrelated-mcp-gateway-stack \
+            -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml >/dev/null
+          helm template unrelated-mcp-gateway-stack deploy/helm/unrelated-mcp-gateway-stack \
+            -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml \
+            --set gatewayui.gateway.dataBase=https://gateway.example.com \
+            --set operator.gateway.bearerToken=ci-token >/dev/null
+          helm template unrelated-mcp-gateway-stack deploy/helm/unrelated-mcp-gateway-stack \
+            -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml \
+            -f deploy/helm/unrelated-mcp-gateway-stack/values-kind-local.yaml >/dev/null

@@ -9,6 +9,7 @@
 !Cargo.lock
 !crates/
 !crates/**
+!tests/fixtures/stdio-smoke.yaml
 
 # --- Defense-in-depth: never include these even under allowed paths ---
 **/target/

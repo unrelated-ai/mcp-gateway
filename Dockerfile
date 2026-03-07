@@ -51,24 +51,27 @@ RUN mkdir -p /config
 # Create dummy source files to build dependencies (and satisfy workspace members).
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    mkdir -p crates/adapter/src crates/env/src crates/gateway/src crates/gateway-cli/src crates/http-tools/src crates/openapi-tools/src crates/test-support/src crates/tool-transforms/src && \
+    mkdir -p crates/adapter/src crates/env/src crates/gateway/src crates/gateway-cli/src crates/gateway-operator/src crates/http-tools/src crates/openapi-tools/src crates/test-support/src crates/tool-transforms/src && \
     echo "fn main() {}" > crates/adapter/src/main.rs && \
     echo "pub fn _dummy() {}" > crates/env/src/lib.rs && \
     echo "fn main() {}" > crates/gateway/src/main.rs && \
     echo "fn main() {}" > crates/gateway-cli/src/main.rs && \
+    echo "fn main() {}" > crates/gateway-operator/src/main.rs && \
     echo "pub fn _dummy() {}" > crates/http-tools/src/lib.rs && \
     echo "pub fn _dummy() {}" > crates/openapi-tools/src/lib.rs && \
     echo "pub fn _dummy() {}" > crates/test-support/src/lib.rs && \
     echo "pub fn _dummy() {}" > crates/tool-transforms/src/lib.rs && \
     cargo build --release --target "${TARGET}" -p unrelated-mcp-adapter --bin unrelated-mcp-adapter && \
     cargo build --release --target "${TARGET}" -p unrelated-mcp-gateway --bin unrelated-mcp-gateway && \
-    rm -rf crates/adapter/src crates/env/src crates/gateway/src crates/gateway-cli/src crates/http-tools/src crates/openapi-tools/src crates/test-support/src crates/tool-transforms/src
+    cargo build --release --target "${TARGET}" -p unrelated-mcp-gateway-operator --bin unrelated-mcp-gateway-operator && \
+    rm -rf crates/adapter/src crates/env/src crates/gateway/src crates/gateway-cli/src crates/gateway-operator/src crates/http-tools/src crates/openapi-tools/src crates/test-support/src crates/tool-transforms/src
 
 # Copy actual source code
 COPY crates/adapter/src ./crates/adapter/src
 COPY crates/env/src ./crates/env/src
 COPY crates/gateway/src ./crates/gateway/src
 COPY crates/gateway-cli/src ./crates/gateway-cli/src
+COPY crates/gateway-operator/src ./crates/gateway-operator/src
 COPY crates/http-tools/src ./crates/http-tools/src
 COPY crates/openapi-tools/src ./crates/openapi-tools/src
 COPY crates/test-support/src ./crates/test-support/src
@@ -83,6 +86,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     touch crates/gateway/src/main.rs && cargo build --release --target "${TARGET}" -p unrelated-mcp-gateway --bin unrelated-mcp-gateway
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    touch crates/gateway-operator/src/main.rs && cargo build --release --target "${TARGET}" -p unrelated-mcp-gateway-operator --bin unrelated-mcp-gateway-operator
 
 # -----------------------------------------------------------------------------
 # Stage 2: Stdio integration image (adds extra runtimes; used for local testing)
@@ -100,6 +106,14 @@ COPY --from=builder /app/target/${TARGET}/release/unrelated-mcp-adapter /app/unr
 ENV UNRELATED_BIND=0.0.0.0:8080
 EXPOSE 8080
 ENTRYPOINT ["/app/unrelated-mcp-adapter"]
+
+# -----------------------------------------------------------------------------
+# Stage 2b: Self-contained managed MCP stdio smoke image
+# -----------------------------------------------------------------------------
+FROM stdio-node AS managed-stdio-smoke-runtime
+
+COPY tests/fixtures/stdio-smoke.yaml /config/config.yaml
+ENV UNRELATED_CONFIG=/config/config.yaml
 
 # -----------------------------------------------------------------------------
 # Stage 3: Gateway runtime
@@ -123,11 +137,26 @@ EXPOSE 4001
 ENTRYPOINT ["/app/unrelated-mcp-gateway"]
 
 # -----------------------------------------------------------------------------
-# Stage 4: Gateway migrator (dbmate + baked migrations)
+# Stage 4: Gateway operator runtime
 # -----------------------------------------------------------------------------
-# FROM amacneil/dbmate:2.30.0 AS gateway-migrator
-# NOTE: temporary using the forked version until they fix security issues.
-FROM ghcr.io/unrelated-ai/dbmate:main AS gateway-migrator
+FROM alpine:3.20 AS gateway-operator-runtime
+
+ARG TARGET=x86_64-unknown-linux-musl
+
+RUN apk add --no-cache ca-certificates
+
+WORKDIR /app
+
+COPY --from=builder /app/target/${TARGET}/release/unrelated-mcp-gateway-operator /app/unrelated-mcp-gateway-operator
+
+ENTRYPOINT ["/app/unrelated-mcp-gateway-operator"]
+
+# -----------------------------------------------------------------------------
+# Stage 5: Gateway migrator (dbmate + baked migrations)
+# -----------------------------------------------------------------------------
+FROM amacneil/dbmate:2.31.0 AS gateway-migrator
+
+RUN apk upgrade --no-cache zlib
 
 WORKDIR /db
 
@@ -139,7 +168,7 @@ ENTRYPOINT ["/usr/local/bin/dbmate"]
 CMD ["up"]
 
 # -----------------------------------------------------------------------------
-# Stage 5: Adapter runtime (final, minimal static; default)
+# Stage 6: Adapter runtime (final, minimal static; default)
 # -----------------------------------------------------------------------------
 FROM scratch AS runtime
 

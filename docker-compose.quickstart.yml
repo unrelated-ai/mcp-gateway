@@ -51,6 +51,14 @@ services:
       UNRELATED_GATEWAY_BOOTSTRAP_ENABLED: "1"
       # Mode 3 tenant secret encryption keyring (dev default; override for real deployments).
       UNRELATED_GATEWAY_SECRET_KEYS: ${UNRELATED_GATEWAY_SECRET_KEYS:-dev-secret-keys}
+      # Quickstart intentionally keeps managed deployments disabled (feature is beta).
+      UNRELATED_GATEWAY_TOPOLOGY: ${UNRELATED_GATEWAY_TOPOLOGY:-none}
+      UNRELATED_MANAGED_MCP_BACKEND_MODE: ${UNRELATED_MANAGED_MCP_BACKEND_MODE:-none}
+      # Optional knobs for local/non-TLS tool-source onboarding:
+      # - set to 1 if you need to register http:// upstreams
+      # - set to 1 if the Gateway should call private-network destinations
+      UNRELATED_GATEWAY_UPSTREAM_ALLOW_HTTP: ${UNRELATED_GATEWAY_UPSTREAM_ALLOW_HTTP:-0}
+      UNRELATED_GATEWAY_OUTBOUND_ALLOW_PRIVATE_NETWORKS: ${UNRELATED_GATEWAY_OUTBOUND_ALLOW_PRIVATE_NETWORKS:-0}
     healthcheck:
       # Release images are alpine (busybox), so `wget` is available.
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4001/health >/dev/null || exit 1"]

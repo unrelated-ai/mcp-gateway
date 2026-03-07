@@ -1,0 +1,51 @@
+image:
+  repository: ghcr.io/unrelated-ai/unrelated-mcp-gateway-operator
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+serviceAccount:
+  create: true
+  name: ""
+
+leaderElection:
+  enabled: true
+  leaseName: unrelated-mcp-gateway-operator
+  leaseNamespace: ""
+  leaseDurationSeconds: 30
+  renewIntervalSeconds: 10
+  retryIntervalSeconds: 5
+
+watch:
+  namespace: ""
+  labelSelector: ""
+
+gateway:
+  baseUrl: ""
+  bearerToken: ""
+  timeoutSeconds: 15
+  retryMaxAttempts: 5
+  retryBaseDelayMs: 500
+  sessionActivityTtlSeconds: 300
+  upstreamNetworkClass: "cluster-internal-managed"
+  cleanupMode: "disable-endpoint"
+
+serviceEndpoint:
+  scheme: "http"
+  domainSuffix: "svc.cluster.local"
+
+managedRequests:
+  namespace: ""
+  pollSeconds: 5
+
+managedDeployments:
+  mode: "k8s"
+  heartbeatSeconds: 5
+  reconcilerId: ""
+
+resources: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -16,6 +16,7 @@ mod catalog;
 mod config;
 mod contracts;
 mod endpoint_cache;
+mod managed_mcp;
 mod mcp;
 mod oidc;
 mod outbound_safety;
@@ -34,9 +35,12 @@ mod timeouts;
 mod tool_policy;
 mod tools_cache;
 mod transport_limits;
+mod upstream_validation;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const LICENSE: &str = env!("CARGO_PKG_LICENSE");
+const DEFAULT_CONTROL_PLANE_SCOPE_READ: &str = "gateway.operator.read";
+const DEFAULT_CONTROL_PLANE_SCOPE_WRITE: &str = "gateway.operator.write";
 
 /// CLI arguments for the gateway.
 #[derive(Parser, Debug, Clone)]
@@ -88,6 +92,35 @@ struct AppState {
     config_loaded: bool,
     profile_count: usize,
     oidc_issuer: Option<String>,
+    runtime_mode: &'static str,
+    topology: String,
+    node_id: String,
+    admin_store: Option<Arc<dyn store::AdminStore>>,
+    managed_mcp: managed_mcp::ManagedMcpRuntimeConfig,
+}
+
+struct PlaneAppsInputs {
+    mcp_state: Arc<mcp::McpState>,
+    admin_store: Option<Arc<dyn store::AdminStore>>,
+    managed_mcp: managed_mcp::ManagedMcpRuntimeConfig,
+    session_secret: Vec<u8>,
+    shared_source_ids: Arc<std::collections::HashSet<String>>,
+    oidc_issuer: Option<String>,
+    audit: Arc<dyn audit::AuditSink>,
+    invalidation: Arc<pg_invalidation::InvalidationDispatcher>,
+    control_plane_oidc: Option<oidc::OidcValidator>,
+    control_plane_scope_read: String,
+    control_plane_scope_write: String,
+    config_loaded: bool,
+    profile_count: usize,
+    runtime_mode: &'static str,
+    topology: String,
+    node_id: String,
+}
+
+struct PlaneApps {
+    data_app: Router,
+    admin_app: Router,
 }
 
 #[derive(Serialize)]
@@ -98,6 +131,10 @@ struct StatusResponse {
     uptime_secs: u64,
     config_loaded: bool,
     profile_count: usize,
+    runtime_mode: &'static str,
+    topology: String,
+    node_id: String,
+    managed_mcp: managed_mcp::ManagedMcpBackendStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     oidc_issuer: Option<String>,
     oidc_configured: bool,
@@ -112,10 +149,13 @@ async fn main() -> anyhow::Result<()> {
     Box::pin(run(args)).await
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run(args: CliArgs) -> anyhow::Result<()> {
     let (config, config_loaded) = load_config(&args).await?;
     validate_config_guardrails(&args, &config)?;
     let profile_count = config.profiles.len();
+    let (runtime_mode, topology, node_id) = runtime_mode_topology_node_id(&args);
+    let managed_mcp_cfg = managed_mcp::ManagedMcpRuntimeConfig::from_env();
     let session_secrets = load_session_secrets();
     let session_ttl = load_session_ttl();
     let shared_source_ids: Arc<std::collections::HashSet<String>> =
@@ -123,22 +163,38 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
 
     let catalog = Arc::new(catalog::SharedCatalog::from_config(&config).await?);
 
-    let (store, admin_store, pg_pool, pg_store) = build_store(&args, config).await?;
+    let (store, admin_store, pg_pool, pg_store_handle) = build_store(&args, config).await?;
 
     // Graceful shutdown coordination for all long-lived tasks (servers + streams).
     let ct = CancellationToken::new();
     let audit = build_audit_sink(pg_pool.clone(), &ct);
 
     let contracts = Arc::new(contracts::ContractTracker::new());
-    let contract_fanout =
-        build_contract_fanout(pg_pool.clone(), contracts.clone(), ct.clone()).await?;
+    let contract_fanout = build_contract_fanout(
+        pg_pool.clone(),
+        contracts.clone(),
+        ct.clone(),
+        node_id.clone(),
+    )
+    .await?;
 
     audit_retention::spawn_audit_retention_task(pg_pool.clone(), ct.clone());
 
     let http = build_no_redirect_http_client("upstream HTTP client")?;
     let oidc_http = build_no_redirect_http_client("OIDC HTTP client")?;
-    let oidc = oidc::OidcValidator::from_env(oidc_http).await?;
+    let oidc = oidc::OidcValidator::from_env(oidc_http.clone()).await?;
     let oidc_issuer = oidc.as_ref().map(|o| o.issuer().to_string());
+    let control_plane_oidc =
+        oidc::OidcValidator::from_env_prefixed(oidc_http, "UNRELATED_GATEWAY_CONTROL_PLANE_OIDC")
+            .await?;
+    let control_plane_scope_read = load_control_plane_scope(
+        "UNRELATED_GATEWAY_CONTROL_PLANE_SCOPE_READ",
+        DEFAULT_CONTROL_PLANE_SCOPE_READ,
+    );
+    let control_plane_scope_write = load_control_plane_scope(
+        "UNRELATED_GATEWAY_CONTROL_PLANE_SCOPE_WRITE",
+        DEFAULT_CONTROL_PLANE_SCOPE_WRITE,
+    );
 
     let mcp_state = Arc::new(mcp::McpState {
         store: store.clone(),
@@ -160,59 +216,44 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
 
     let invalidation = build_invalidation_dispatcher(pg_pool.clone(), &mcp_state);
 
-    wire_store_invalidation_publisher(pg_store, invalidation.clone());
+    wire_store_invalidation_publisher(pg_store_handle.clone(), invalidation.clone());
+    if let Some(pg) = pg_store_handle {
+        let ttl_secs = pg_store::upstream_session_activity_ttl_secs_from_env();
+        pg_store::spawn_upstream_session_activity_cleanup_task(pg, ct.clone(), ttl_secs);
+    }
+    managed_mcp::spawn_stale_request_sweeper_task(
+        admin_store.clone(),
+        managed_mcp_cfg.clone(),
+        ct.clone(),
+    );
 
     start_mode3_ha_tasks(invalidation.clone(), ct.clone()).await?;
     start_tool_contract_invalidator(&mcp_state, ct.clone());
 
-    let admin_state = Arc::new(admin::AdminState {
-        store: admin_store,
-        admin_token: std::env::var("UNRELATED_GATEWAY_ADMIN_TOKEN").ok(),
-        bootstrap_enabled: env_truthy("UNRELATED_GATEWAY_BOOTSTRAP_ENABLED"),
-        tenant_signer: tenant_token::TenantSigner::new(session_secrets[0].clone()),
-        shared_source_ids: shared_source_ids.clone(),
-        oidc_issuer: oidc_issuer.clone(),
-        audit: audit.clone(),
-        invalidation: invalidation.clone(),
-    });
-
-    let tenant_state = Arc::new(tenant::TenantState {
-        store: admin_state.store.clone(),
-        signer: tenant_token::TenantSigner::new(session_secrets[0].clone()),
+    let PlaneApps {
+        data_app,
+        admin_app,
+    } = build_plane_apps(PlaneAppsInputs {
+        mcp_state,
+        admin_store,
+        managed_mcp: managed_mcp_cfg,
+        session_secret: session_secrets[0].clone(),
         shared_source_ids,
-        mcp_state: mcp_state.clone(),
+        oidc_issuer,
         audit,
         invalidation,
+        control_plane_oidc,
+        control_plane_scope_read,
+        control_plane_scope_write,
+        config_loaded,
+        profile_count,
+        runtime_mode,
+        topology,
+        node_id,
     });
 
     let data_bind = parse_socket_addr(&args.bind, "bind")?;
     let admin_bind = parse_socket_addr(&args.admin_bind, "admin-bind")?;
-
-    let state = Arc::new(AppState {
-        start_time: Instant::now(),
-        version: VERSION,
-        config_loaded,
-        profile_count,
-        oidc_issuer,
-    });
-
-    let data_app = mcp::router(mcp_state).route("/health", get(health));
-
-    // Make the admin routes compatible with the admin app's state type for `merge`.
-    // Admin routes don't need `AppState`, but `merge` requires both routers to be missing
-    // the same state type.
-    let admin_routes = admin::router()
-        .layer(axum::Extension(admin_state))
-        .with_state::<Arc<AppState>>(());
-    let tenant_routes = tenant::router(tenant_state).with_state::<Arc<AppState>>(());
-
-    let admin_app = Router::new()
-        .route("/health", get(health))
-        .route("/ready", get(ready))
-        .route("/status", get(status))
-        .merge(admin_routes)
-        .merge(tenant_routes)
-        .with_state(state);
 
     let (data_listener, _data_addr) = bind_and_log(data_bind, "data", "bind").await?;
     let (admin_listener, _admin_addr) =
@@ -231,6 +272,82 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
 
     tracing::info!("Gateway shut down gracefully");
     Ok(())
+}
+
+fn runtime_mode_topology_node_id(args: &CliArgs) -> (&'static str, String, String) {
+    let runtime_mode = if args.database_url.is_some() {
+        "mode3"
+    } else {
+        "mode1"
+    };
+    let topology = configured_topology();
+    let node_id = std::env::var("UNRELATED_GATEWAY_NODE_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    (runtime_mode, topology, node_id)
+}
+
+fn build_plane_apps(inputs: PlaneAppsInputs) -> PlaneApps {
+    let admin_state = Arc::new(admin::AdminState {
+        store: inputs.admin_store,
+        admin_token: std::env::var("UNRELATED_GATEWAY_ADMIN_TOKEN").ok(),
+        control_plane_oidc: inputs.control_plane_oidc,
+        control_plane_scope_read: inputs.control_plane_scope_read,
+        control_plane_scope_write: inputs.control_plane_scope_write,
+        bootstrap_enabled: env_truthy("UNRELATED_GATEWAY_BOOTSTRAP_ENABLED"),
+        tenant_signer: tenant_token::TenantSigner::new(inputs.session_secret.clone()),
+        shared_source_ids: inputs.shared_source_ids.clone(),
+        oidc_issuer: inputs.oidc_issuer.clone(),
+        audit: inputs.audit.clone(),
+        invalidation: inputs.invalidation.clone(),
+    });
+
+    let tenant_state = Arc::new(tenant::TenantState {
+        store: admin_state.store.clone(),
+        managed_mcp: inputs.managed_mcp.clone(),
+        signer: tenant_token::TenantSigner::new(inputs.session_secret),
+        shared_source_ids: inputs.shared_source_ids,
+        mcp_state: inputs.mcp_state.clone(),
+        audit: inputs.audit,
+        invalidation: inputs.invalidation,
+    });
+
+    let state = Arc::new(AppState {
+        start_time: Instant::now(),
+        version: VERSION,
+        config_loaded: inputs.config_loaded,
+        profile_count: inputs.profile_count,
+        oidc_issuer: inputs.oidc_issuer,
+        runtime_mode: inputs.runtime_mode,
+        topology: inputs.topology,
+        node_id: inputs.node_id,
+        admin_store: admin_state.store.clone(),
+        managed_mcp: inputs.managed_mcp,
+    });
+
+    let data_app = mcp::router(inputs.mcp_state).route("/health", get(health));
+
+    // Make the admin routes compatible with the admin app's state type for `merge`.
+    // Admin routes don't need `AppState`, but `merge` requires both routers to be missing
+    // the same state type.
+    let admin_routes = admin::router()
+        .layer(axum::Extension(admin_state))
+        .with_state::<Arc<AppState>>(());
+    let tenant_routes = tenant::router(tenant_state).with_state::<Arc<AppState>>(());
+
+    let admin_app = Router::new()
+        .route("/health", get(health))
+        .route("/ready", get(ready))
+        .route("/status", get(status))
+        .merge(admin_routes)
+        .merge(tenant_routes)
+        .with_state(state);
+
+    PlaneApps {
+        data_app,
+        admin_app,
+    }
 }
 
 fn build_no_redirect_http_client(label: &'static str) -> anyhow::Result<reqwest::Client> {
@@ -431,15 +548,12 @@ async fn build_contract_fanout(
     pg_pool: Option<sqlx::PgPool>,
     contracts: Arc<contracts::ContractTracker>,
     shutdown: CancellationToken,
+    node_id: String,
 ) -> anyhow::Result<Option<Arc<pg_fanout::PgContractFanout>>> {
     let Some(pool) = pg_pool else {
         return Ok(None);
     };
 
-    let node_id = std::env::var("UNRELATED_GATEWAY_NODE_ID")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let fanout = Arc::new(pg_fanout::PgContractFanout::new(pool, node_id));
     fanout
         .start_listener(contracts, shutdown)
@@ -546,6 +660,14 @@ fn load_session_ttl() -> Duration {
     Duration::from_secs(secs.max(1))
 }
 
+fn load_control_plane_scope(var_name: &str, default_value: &str) -> String {
+    std::env::var(var_name)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| default_value.to_string())
+}
+
 async fn build_store(
     args: &CliArgs,
     config: config::GatewayConfig,
@@ -627,15 +749,39 @@ async fn ready() -> &'static str {
 }
 
 async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
+    let managed_mcp =
+        managed_mcp::managed_mcp_backend_status(state.admin_store.clone(), &state.managed_mcp)
+            .await;
     Json(StatusResponse {
         version: state.version,
         license: LICENSE,
         uptime_secs: state.start_time.elapsed().as_secs(),
         config_loaded: state.config_loaded,
         profile_count: state.profile_count,
+        runtime_mode: state.runtime_mode,
+        topology: state.topology.clone(),
+        node_id: state.node_id.clone(),
+        managed_mcp,
         oidc_issuer: state.oidc_issuer.clone(),
         oidc_configured: state.oidc_issuer.is_some(),
     })
+}
+
+fn configured_topology() -> String {
+    let raw = std::env::var("UNRELATED_GATEWAY_TOPOLOGY")
+        .ok()
+        .unwrap_or_else(|| "none".to_string());
+    let normalized = raw.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "none" | "operator-oss" | "controller-enterprise" => normalized,
+        _ => {
+            tracing::warn!(
+                topology = %raw,
+                "invalid UNRELATED_GATEWAY_TOPOLOGY value; falling back to 'none'"
+            );
+            "none".to_string()
+        }
+    }
 }
 
 /// Initialize logging based on the log level string.

@@ -1,0 +1,48 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $hasIngressPeers := or .Values.networkPolicy.allowSameNamespace (gt (len .Values.networkPolicy.additionalIngressFrom) 0) -}}
+{{- $hasCustomEgress := gt (len .Values.networkPolicy.additionalEgressTo) 0 -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "unrelated-mcp-gateway-ui.fullname" . }}
+  labels:
+{{ include "unrelated-mcp-gateway-ui.labels" . | indent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+{{ include "unrelated-mcp-gateway-ui.selectorLabels" . | indent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  {{- if $hasIngressPeers }}
+  ingress:
+    {{- if .Values.networkPolicy.allowSameNamespace }}
+    - from:
+        - podSelector: {}
+    {{- end }}
+    {{- if gt (len .Values.networkPolicy.additionalIngressFrom) 0 }}
+    - from:
+{{ toYaml .Values.networkPolicy.additionalIngressFrom | indent 8 }}
+    {{- end }}
+  {{- else }}
+  ingress: []
+  {{- end }}
+  {{- if .Values.networkPolicy.allowAllEgress }}
+  egress:
+    - {}
+  {{- else if or .Values.networkPolicy.allowDnsEgress $hasCustomEgress }}
+  egress:
+    {{- if .Values.networkPolicy.allowDnsEgress }}
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+    {{- if $hasCustomEgress }}
+{{ toYaml .Values.networkPolicy.additionalEgressTo | indent 4 }}
+    {{- end }}
+  {{- else }}
+  egress: []
+  {{- end }}
+{{- end }}

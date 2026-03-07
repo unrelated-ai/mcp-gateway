@@ -1,0 +1,33 @@
+{{- if .Values.adminIngress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "unrelated-mcp-gateway.adminServiceName" . }}
+  labels:
+{{ include "unrelated-mcp-gateway.labels" . | indent 4 }}
+{{- with .Values.adminIngress.annotations }}
+  annotations:
+{{ toYaml . | indent 4 }}
+{{- end }}
+spec:
+  {{- if .Values.adminIngress.className }}
+  ingressClassName: {{ .Values.adminIngress.className | quote }}
+  {{- end }}
+  rules:
+    - {{- if .Values.adminIngress.host }}
+      host: {{ .Values.adminIngress.host | quote }}
+      {{- end }}
+      http:
+        paths:
+          - path: {{ .Values.adminIngress.path | quote }}
+            pathType: {{ .Values.adminIngress.pathType }}
+            backend:
+              service:
+                name: {{ include "unrelated-mcp-gateway.adminServiceName" . }}
+                port:
+                  number: {{ .Values.service.admin.port }}
+  {{- with .Values.adminIngress.tls }}
+  tls:
+{{ toYaml . | indent 4 }}
+  {{- end }}
+{{- end }}

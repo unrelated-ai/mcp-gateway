@@ -1,0 +1,75 @@
+global:
+  domainSuffix: svc.cluster.local
+  ingressClassName: ""
+
+operator:
+  enabled: true
+  fullnameOverride: unrelated-mcp-gateway-operator
+  gateway:
+    baseUrl: http://unrelated-mcp-gateway-admin:4001
+    bearerToken: ""
+  managedDeployments:
+    mode: k8s
+
+gateway:
+  enabled: true
+  fullnameOverride: unrelated-mcp-gateway
+  topology: operator-oss
+  managedMcp:
+    backendMode: k8s
+  database:
+    existingSecret:
+      name: ""
+      key: UNRELATED_GATEWAY_DATABASE_URL
+    url: ""
+  auth:
+    adminToken:
+      existingSecret:
+        name: ""
+        key: UNRELATED_GATEWAY_ADMIN_TOKEN
+      value: ""
+  session:
+    secret:
+      existingSecret:
+        name: ""
+        key: UNRELATED_GATEWAY_SESSION_SECRET
+      value: ""
+    secretKeys:
+      existingSecret:
+        name: ""
+        key: UNRELATED_GATEWAY_SECRET_KEYS
+      value: ""
+  postgres:
+    enabled: false
+  ingress:
+    enabled: false
+  adminIngress:
+    enabled: false
+
+gatewayui:
+  enabled: true
+  fullnameOverride: unrelated-mcp-gateway-ui
+  gateway:
+    adminBase: http://unrelated-mcp-gateway-admin:4001
+    dataBase: ""
+  ingress:
+    enabled: false
+
+postgres:
+  enabled: false
+  fullnameOverride: unrelated-mcp-gateway-stack-postgres
+  auth:
+    username: postgres
+    password: postgres
+    database: gateway
+  service:
+    port: 5432
+
+managedFixtures:
+  enabled: false
+  gateway:
+    adminBaseUrl: http://unrelated-mcp-gateway-admin:4001
+  auth:
+    adminToken:
+      value: ""
+  deployables: []

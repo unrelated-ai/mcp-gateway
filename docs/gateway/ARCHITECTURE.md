@@ -67,6 +67,36 @@ Related docs:
 - Adapter outbound auth config: `docs/adapter/config/AUTH.md`
 - Outbound HTTP safety (SSRF hardening for gateway-native tool sources **and upstream MCP endpoints**): `docs/gateway/OUTBOUND_HTTP_SAFETY.md`
 
+## Runtime mode vs topology
+
+Gateway reports architecture using two independent axes:
+
+- **Runtime mode**: storage/runtime behavior (`mode1`, `mode3`)
+- **Deployment topology**: orchestration shape (`none`, `operator-oss`, `controller-enterprise`)
+
+These are intentionally separate; topology is not a new runtime mode.
+
+`GET /status` exposes both axes as `runtimeMode` and `topology`, plus `nodeId`.
+
+### Managed deployment enforcement
+
+- `UNRELATED_GATEWAY_TOPOLOGY` tells you **what deployment shape you are running** (`none`, `operator-oss`, `controller-enterprise`). It is informational and shows up in `/status` and UI checks.
+- `UNRELATED_MANAGED_MCP_BACKEND_MODE` tells Gateway **whether it should accept managed deployment requests at all**, and for which backend (`none`, `k8s`, `docker`).
+
+Why this split matters: in older behavior, requests could be accepted even when no reconciler was running, then stay `pending` forever. The backend-mode + heartbeat checks prevent that.
+
+Managed deployment request acceptance now uses these settings:
+
+- `UNRELATED_MANAGED_MCP_BACKEND_MODE`: `none` | `k8s` | `docker`
+  - `none`: tenant create/update requests are rejected with `409` (disabled by config)
+  - `k8s`/`docker`: tenant create/update requests require a healthy reconciler heartbeat, otherwise `503`
+- `UNRELATED_MANAGED_MCP_RECONCILER_HEARTBEAT_TTL_SECS`: how old a heartbeat can be before the backend is considered unhealthy
+- `UNRELATED_MANAGED_MCP_STALE_REQUEST_TIMEOUT_SECS`: how long a request can stay `pending`/`reconciling` before stale-fail logic applies
+- `UNRELATED_MANAGED_MCP_STALE_REQUEST_SWEEP_INTERVAL_SECS`: how often stale-fail checks run
+
+Reconcilers report liveness via `POST /admin/v1/managed-mcp/reconciler-heartbeat`.
+Gateway exposes current state in `/status` under `managedMcp` (`backendMode`, `reconcilerHealthy`, `acceptingRequests`, etc.) so operators and UI can explain why requests are accepted or rejected.
+
 ## Configuration and control plane (current)
 
 The Gateway supports two storage/config modes:
@@ -92,7 +122,17 @@ This makes it easy to expose the data plane publicly while keeping admin/ops pri
 
 ### Control plane auth (current)
 
-- Admin API auth (current): `Authorization: Bearer <token>` where the token comes from env/config (e.g. `UNRELATED_GATEWAY_ADMIN_TOKEN`).
+- Admin API auth supports two machine-auth paths:
+  - Static compatibility token: `Authorization: Bearer <token>` with `UNRELATED_GATEWAY_ADMIN_TOKEN`.
+  - OIDC/JWT machine identity: separate control-plane config via
+    - `UNRELATED_GATEWAY_CONTROL_PLANE_OIDC_ISSUER`
+    - `UNRELATED_GATEWAY_CONTROL_PLANE_OIDC_AUDIENCE` (comma-separated, optional)
+    - `UNRELATED_GATEWAY_CONTROL_PLANE_OIDC_JWKS_URI` (optional override)
+    - `UNRELATED_GATEWAY_CONTROL_PLANE_OIDC_LEEWAY_SECS` (optional, default `60`)
+    - `UNRELATED_GATEWAY_CONTROL_PLANE_OIDC_JWKS_REFRESH_SECS` (optional, default `600`)
+  - Required scopes:
+    - read routes (`GET`/`HEAD`/`OPTIONS`): `UNRELATED_GATEWAY_CONTROL_PLANE_SCOPE_READ` (default `gateway.operator.read`) or write scope
+    - mutation routes (`POST`/`PUT`/`PATCH`/`DELETE`): `UNRELATED_GATEWAY_CONTROL_PLANE_SCOPE_WRITE` (default `gateway.operator.write`)
 - Tenant API auth (Mode 3): `Authorization: Bearer <tenant_token>` where the tenant token is issued by the admin API (`POST /admin/v1/tenant-tokens`).
 - Data plane auth (implemented):
   - Per-profile `dataPlaneAuth` policy (Mode 3): `disabled` | `apiKeyInitializeOnly` | `apiKeyEveryRequest` | `jwtEveryRequest`

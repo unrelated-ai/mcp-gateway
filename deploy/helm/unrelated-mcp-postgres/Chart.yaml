@@ -1,0 +1,6 @@
+apiVersion: v2
+name: unrelated-mcp-postgres
+description: Optional bundled Postgres for MCP Gateway Helm deployments.
+type: application
+version: 0.1.0
+appVersion: "16"

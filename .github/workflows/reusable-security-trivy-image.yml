@@ -59,7 +59,7 @@ jobs:
         run: docker build -f "${{ inputs.dockerfile }}" --target "${{ inputs.docker_target }}" -t "${{ inputs.image_ref }}" "${{ inputs.context }}"
 
       - name: Trivy scan
-        uses: aquasecurity/trivy-action@0.20.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: ${{ inputs.image_ref }}
           format: ${{ inputs.format }}

@@ -1,0 +1,30 @@
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: postgres
+  tag: "16-alpine"
+  pullPolicy: IfNotPresent
+
+auth:
+  username: postgres
+  password: postgres
+  database: gateway
+  existingSecret:
+    name: ""
+    usernameKey: POSTGRES_USER
+    passwordKey: POSTGRES_PASSWORD
+    databaseKey: POSTGRES_DB
+
+service:
+  port: 5432
+
+persistence:
+  enabled: true
+  size: 8Gi
+  storageClassName: ""
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

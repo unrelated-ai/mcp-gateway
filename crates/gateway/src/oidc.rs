@@ -61,7 +61,24 @@ impl OidcValidator {
     /// - `UNRELATED_GATEWAY_OIDC_LEEWAY_SECS` (default: 60)
     /// - `UNRELATED_GATEWAY_OIDC_JWKS_REFRESH_SECS` (default: 600)
     pub async fn from_env(http: reqwest::Client) -> anyhow::Result<Option<Self>> {
-        let issuer = std::env::var("UNRELATED_GATEWAY_OIDC_ISSUER")
+        Self::from_env_prefixed(http, "UNRELATED_GATEWAY_OIDC").await
+    }
+
+    /// Load OIDC config from env vars using a custom prefix.
+    ///
+    /// Example: prefix `UNRELATED_GATEWAY_CONTROL_PLANE_OIDC` expects:
+    /// - `UNRELATED_GATEWAY_CONTROL_PLANE_OIDC_ISSUER`
+    /// - `UNRELATED_GATEWAY_CONTROL_PLANE_OIDC_AUDIENCE`
+    /// - `UNRELATED_GATEWAY_CONTROL_PLANE_OIDC_JWKS_URI`
+    /// - `UNRELATED_GATEWAY_CONTROL_PLANE_OIDC_LEEWAY_SECS`
+    /// - `UNRELATED_GATEWAY_CONTROL_PLANE_OIDC_JWKS_REFRESH_SECS`
+    pub async fn from_env_prefixed(
+        http: reqwest::Client,
+        prefix: &str,
+    ) -> anyhow::Result<Option<Self>> {
+        let key = |suffix: &str| format!("{prefix}_{suffix}");
+
+        let issuer = std::env::var(key("ISSUER"))
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
@@ -70,9 +87,7 @@ impl OidcValidator {
             return Ok(None);
         };
 
-        let audiences = std::env::var("UNRELATED_GATEWAY_OIDC_AUDIENCE")
-            .ok()
-            .unwrap_or_default();
+        let audiences = std::env::var(key("AUDIENCE")).ok().unwrap_or_default();
         let audiences: Vec<String> = audiences
             .split(',')
             .map(str::trim)
@@ -80,16 +95,16 @@ impl OidcValidator {
             .map(str::to_string)
             .collect();
 
-        let leeway_secs = std::env::var("UNRELATED_GATEWAY_OIDC_LEEWAY_SECS")
+        let leeway_secs = std::env::var(key("LEEWAY_SECS"))
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(60);
-        let jwks_refresh_secs = std::env::var("UNRELATED_GATEWAY_OIDC_JWKS_REFRESH_SECS")
+        let jwks_refresh_secs = std::env::var(key("JWKS_REFRESH_SECS"))
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(600);
 
-        let jwks_uri_override = std::env::var("UNRELATED_GATEWAY_OIDC_JWKS_URI")
+        let jwks_uri_override = std::env::var(key("JWKS_URI"))
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());

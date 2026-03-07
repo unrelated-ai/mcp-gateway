@@ -52,6 +52,25 @@ Notes:
 - matching is **case-insensitive**
 - hosts must match exactly (no wildcards today)
 
+## Class-aware policy for upstream MCP endpoints
+
+Upstream endpoints now carry a network class:
+
+- `external` (default)
+- `cluster-internal-managed`
+
+Policy behavior:
+
+- `external` keeps the strict default posture (private/link-local ranges blocked unless the global override is explicitly enabled).
+- `cluster-internal-managed` is intended for operator-managed in-cluster workloads and allows private-network targets without changing the global default for tenant-managed external sources.
+
+Assignment guards:
+
+- Tenant APIs cannot set `cluster-internal-managed`.
+- Admin API accepts `cluster-internal-managed` for authenticated control-plane callers.
+  - OIDC machine identities with control-plane write authorization are supported.
+  - Static admin token auth is also supported for OSS operator deployments.
+
 ## Redirects and body limits
 
 Gateway defaults are intentionally strict:
@@ -63,9 +82,11 @@ Gateway defaults are intentionally strict:
 
 For upstream MCP endpoint URLs (Streamable HTTP), the Gateway prefers **TLS by default**:
 
-- upstream endpoint URLs must use **`https://`**
-- `http://` is rejected unless an explicit dev override is set:
+- `external` upstream endpoint URLs must use **`https://`**
+- for `external`, `http://` is rejected unless an explicit dev override is set:
   - `UNRELATED_GATEWAY_UPSTREAM_ALLOW_HTTP=1`
+- `cluster-internal-managed` upstream endpoint URLs may use `http://` or `https://`
+  (intended for operator-managed in-cluster service URLs).
 
 This is enforced both:
 

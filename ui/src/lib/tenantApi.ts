@@ -15,10 +15,57 @@ export type Upstream = {
   id: string;
   owner: "tenant" | "global" | string;
   enabled: boolean;
-  endpoints: { id: string; url: string; enabled: boolean; auth?: AuthConfig | null }[];
+  networkClass: UpstreamNetworkClass;
+  endpoints: {
+    id: string;
+    url: string;
+    enabled: boolean;
+    lifecycle: UpstreamEndpointLifecycle;
+    auth?: AuthConfig | null;
+  }[];
 };
 
 export type ListUpstreamsResponse = { upstreams: Upstream[] };
+
+export type UpstreamEndpointLifecycle = "active" | "draining" | "disabled";
+export type UpstreamNetworkClass = "external" | "cluster-internal-managed";
+
+export type UpstreamEndpointActivity = {
+  endpointId: string;
+  activeSessions: number;
+  lastSeenUnix: number | null;
+};
+
+export type UpstreamSessionActivity = {
+  upstreamId: string;
+  ttlSecs: number;
+  generatedAtUnix: number;
+  endpoints: UpstreamEndpointActivity[];
+};
+
+export type ManagedMcpDeployable = {
+  id: string;
+  displayName: string;
+  description?: string | null;
+  image: string;
+  defaultUpstreamUrl: string;
+  enabled: boolean;
+};
+
+export type ManagedMcpDeploymentStatus = "pending" | "reconciling" | "ready" | "failed";
+
+export type ManagedMcpDeploymentRequest = {
+  id: string;
+  tenantId: string;
+  deployableId: string;
+  desiredEnabled: boolean;
+  desiredReplicas: number;
+  status: ManagedMcpDeploymentStatus;
+  upstreamId?: string | null;
+  message?: string | null;
+  createdAtUnix: number;
+  updatedAtUnix: number;
+};
 
 export type AuthConfig =
   | { type: "none" }
@@ -84,13 +131,124 @@ export async function getUpstream(id: string): Promise<Upstream> {
 
 export async function putUpstream(
   id: string,
-  body: { enabled: boolean; endpoints: { id: string; url: string; auth?: AuthConfig }[] },
+  body: {
+    enabled: boolean;
+    endpoints: {
+      id: string;
+      url: string;
+      enabled?: boolean;
+      lifecycle?: UpstreamEndpointLifecycle;
+      auth?: AuthConfig;
+    }[];
+  },
 ): Promise<unknown> {
   return await tenantFetchJson(`/api/tenant/upstreams/${encodeURIComponent(id)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+export async function patchUpstreamEndpoint(
+  upstreamId: string,
+  endpointId: string,
+  body: { enabled?: boolean; lifecycle?: UpstreamEndpointLifecycle },
+): Promise<unknown> {
+  return await tenantFetchJson(
+    `/api/tenant/upstreams/${encodeURIComponent(upstreamId)}/endpoints/${encodeURIComponent(endpointId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export async function deleteUpstreamEndpoint(
+  upstreamId: string,
+  endpointId: string,
+): Promise<void> {
+  await tenantFetchJson(
+    `/api/tenant/upstreams/${encodeURIComponent(upstreamId)}/endpoints/${encodeURIComponent(endpointId)}`,
+    {
+      method: "DELETE",
+    },
+  );
+}
+
+export async function getUpstreamSessionActivity(
+  upstreamId: string,
+  ttlSecs?: number,
+): Promise<UpstreamSessionActivity> {
+  const sp = new URLSearchParams();
+  if (ttlSecs != null) sp.set("ttlSecs", String(ttlSecs));
+  const qs = sp.toString();
+  return await tenantFetchJson<UpstreamSessionActivity>(
+    `/api/tenant/upstreams/${encodeURIComponent(upstreamId)}/session-activity${qs ? `?${qs}` : ""}`,
+    {
+      cache: "no-store",
+    },
+  );
+}
+
+export async function listManagedMcpDeployables(): Promise<{
+  deployables: ManagedMcpDeployable[];
+}> {
+  return await tenantFetchJson<{ deployables: ManagedMcpDeployable[] }>(
+    "/api/tenant/managed-mcp/deployables",
+    {
+      cache: "no-store",
+    },
+  );
+}
+
+export async function createManagedMcpDeploymentRequest(
+  deployableId: string,
+): Promise<{ request: ManagedMcpDeploymentRequest }> {
+  return await tenantFetchJson<{ request: ManagedMcpDeploymentRequest }>(
+    "/api/tenant/managed-mcp/deployments",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deployableId }),
+    },
+  );
+}
+
+export async function listManagedMcpDeploymentRequests(): Promise<{
+  requests: ManagedMcpDeploymentRequest[];
+}> {
+  return await tenantFetchJson<{ requests: ManagedMcpDeploymentRequest[] }>(
+    "/api/tenant/managed-mcp/deployments",
+    {
+      cache: "no-store",
+    },
+  );
+}
+
+export async function getManagedMcpDeploymentRequest(
+  requestId: string,
+): Promise<{ request: ManagedMcpDeploymentRequest }> {
+  return await tenantFetchJson<{ request: ManagedMcpDeploymentRequest }>(
+    `/api/tenant/managed-mcp/deployments/${encodeURIComponent(requestId)}`,
+    {
+      cache: "no-store",
+    },
+  );
+}
+
+export async function updateManagedMcpDeploymentRequest(
+  requestId: string,
+  body: { enabled?: boolean; replicas?: number },
+): Promise<{ request: ManagedMcpDeploymentRequest }> {
+  return await tenantFetchJson<{ request: ManagedMcpDeploymentRequest }>(
+    `/api/tenant/managed-mcp/deployments/${encodeURIComponent(requestId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
 }
 
 export async function deleteUpstream(id: string): Promise<void> {

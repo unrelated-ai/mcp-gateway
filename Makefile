@@ -19,9 +19,15 @@
         clean clean-all \
         docker-build-all docker-build-adapter docker-build-adapter-stdio-node \
         docker-run-adapter docker-build-gateway docker-build-gateway-migrator \
+        docker-build-gateway-operator docker-build-ui \
+        kind-local-build-managed-mcp-images kind-local-build-images \
+        kind-local-load-managed-mcp-images kind-local-load-images \
+        kind-local-deploy kind-local-refresh kind-local-reset \
         up down logs status \
         inspector \
-        ci ci-quick test-ci \
+        ci ci-quick test-ci qa-release-gates \
+        helm-validate helm-validate-optional \
+        crd-sync crd-sync-check \
         hooks-install bench help
 
 # Default target
@@ -116,6 +122,16 @@ test-integration-gateway:
 	cargo test -p unrelated-mcp-gateway --tests -- --nocapture --test-threads=1 && \
 	cargo test -p unrelated-mcp-gateway --tests -- --ignored --nocapture --test-threads=1
 
+## Cross-milestone OSS release gates (gateway + operator + UI + compatibility)
+qa-release-gates:
+	cargo check -p unrelated-mcp-gateway
+	cargo test -p unrelated-mcp-gateway --test integration_tenant_api -- --ignored --nocapture --test-threads=1
+	cargo test -p unrelated-mcp-gateway --test integration_mode1_config -- --nocapture --test-threads=1
+	cargo check -p unrelated-mcp-gateway-operator
+	cargo test -p unrelated-mcp-gateway-operator
+	cd ui && npm run lint && npm run build
+	$(MAKE) helm-validate-optional
+
 # =============================================================================
 # Code Quality Targets
 # =============================================================================
@@ -152,12 +168,14 @@ security-audit:
 security-trivy:
 	docker build -t local/unrelated-mcp-adapter:pr .
 	docker build --target gateway-runtime -t local/unrelated-mcp-gateway:pr .
+	docker build --target gateway-operator-runtime -t local/unrelated-mcp-gateway-operator:pr .
 	docker build --target gateway-migrator -t local/unrelated-mcp-gateway-migrator:pr .
 	docker build -f ui/Dockerfile -t local/unrelated-mcp-gateway-ui:pr ui
-	trivy image --format table --exit-code 1 --vuln-type os,library --severity CRITICAL,HIGH local/unrelated-mcp-adapter:pr
-	trivy image --format table --exit-code 1 --vuln-type os,library --severity CRITICAL,HIGH local/unrelated-mcp-gateway:pr
-	trivy image --format table --exit-code 1 --vuln-type os,library --severity CRITICAL,HIGH local/unrelated-mcp-gateway-migrator:pr
-	trivy image --format table --exit-code 1 --vuln-type os,library --severity CRITICAL,HIGH local/unrelated-mcp-gateway-ui:pr
+	trivy image --format table --exit-code 1 --pkg-types os,library --severity CRITICAL,HIGH local/unrelated-mcp-adapter:pr
+	trivy image --format table --exit-code 1 --pkg-types os,library --severity CRITICAL,HIGH local/unrelated-mcp-gateway:pr
+	trivy image --format table --exit-code 1 --pkg-types os,library --severity CRITICAL,HIGH local/unrelated-mcp-gateway-operator:pr
+	trivy image --format table --exit-code 1 --pkg-types os,library --severity CRITICAL,HIGH local/unrelated-mcp-gateway-migrator:pr
+	trivy image --format table --exit-code 1 --pkg-types os,library --severity CRITICAL,HIGH local/unrelated-mcp-gateway-ui:pr
 
 # =============================================================================
 # Documentation
@@ -260,6 +278,15 @@ clean-all: clean
 # Docker
 # =============================================================================
 
+KIND_CLUSTER_NAME ?= kind
+KIND_IMAGE_TAG ?= kind
+KIND_NAMESPACE ?= mcp-gateway
+KIND_RELEASE_NAME ?= unrelated-mcp-gateway
+KIND_NAMESPACE_DELETE_TIMEOUT_SECONDS ?= 120
+
+CANONICAL_MCP_CRD ?= deploy/operator/crds/mcpservers.gateway.unrelated.ai.yaml
+HELM_OPERATOR_MCP_CRD ?= deploy/helm/unrelated-mcp-gateway-operator/crds/mcpservers.gateway.unrelated.ai.yaml
+
 ## Build adapter runtime image (default target in Dockerfile)
 docker-build-adapter:
 	docker build -t unrelated-mcp-adapter:latest .
@@ -285,6 +312,81 @@ docker-build-gateway:
 ## Build Gateway migrator image (dbmate + baked migrations)
 docker-build-gateway-migrator:
 	docker build --target gateway-migrator -t unrelated-mcp-gateway-migrator:latest .
+
+## Build Gateway operator image (runtime)
+docker-build-gateway-operator:
+	docker build --target gateway-operator-runtime -t unrelated-mcp-gateway-operator:latest .
+
+## Build Gateway UI image
+docker-build-ui:
+	docker build -t unrelated-mcp-gateway-ui:latest ui
+
+## Build managed MCP fixture images for kind (stdio smoke + aggregation)
+kind-local-build-managed-mcp-images:
+	docker build --target stdio-node -t unrelated-mcp-adapter:stdio-node .
+	docker build -f tests/fixtures/managed-images/stdio-aggregation.Dockerfile -t unrelated-mcp-managed-stdio-aggregation:$(KIND_IMAGE_TAG) .
+	docker build -f tests/fixtures/managed-images/stdio-smoke.Dockerfile -t unrelated-mcp-managed-stdio-smoke:$(KIND_IMAGE_TAG) .
+
+## Build local images for kind from current workspace
+kind-local-build-images: kind-local-build-managed-mcp-images
+	docker build --target gateway-runtime -t unrelated-mcp-gateway:$(KIND_IMAGE_TAG) .
+	docker build --target gateway-migrator -t unrelated-mcp-gateway-migrator:$(KIND_IMAGE_TAG) .
+	docker build --target gateway-operator-runtime -t unrelated-mcp-gateway-operator:$(KIND_IMAGE_TAG) .
+	docker build -t unrelated-mcp-gateway-ui:$(KIND_IMAGE_TAG) ui
+
+## Load managed MCP fixture images into kind
+kind-local-load-managed-mcp-images:
+	kind load docker-image unrelated-mcp-managed-stdio-aggregation:$(KIND_IMAGE_TAG) --name $(KIND_CLUSTER_NAME)
+	kind load docker-image unrelated-mcp-managed-stdio-smoke:$(KIND_IMAGE_TAG) --name $(KIND_CLUSTER_NAME)
+
+## Load locally built images into kind
+kind-local-load-images: kind-local-load-managed-mcp-images
+	kind load docker-image unrelated-mcp-gateway:$(KIND_IMAGE_TAG) --name $(KIND_CLUSTER_NAME)
+	kind load docker-image unrelated-mcp-gateway-migrator:$(KIND_IMAGE_TAG) --name $(KIND_CLUSTER_NAME)
+	kind load docker-image unrelated-mcp-gateway-operator:$(KIND_IMAGE_TAG) --name $(KIND_CLUSTER_NAME)
+	kind load docker-image unrelated-mcp-gateway-ui:$(KIND_IMAGE_TAG) --name $(KIND_CLUSTER_NAME)
+
+## Deploy Helm stack to kind with local images (dev profile)
+kind-local-deploy:
+	kubectl create namespace $(KIND_NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
+	helm dependency build deploy/helm/unrelated-mcp-gateway
+	helm dependency build deploy/helm/unrelated-mcp-gateway-stack
+	helm upgrade --install $(KIND_RELEASE_NAME) deploy/helm/unrelated-mcp-gateway-stack \
+		--namespace $(KIND_NAMESPACE) \
+		-f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml \
+		-f deploy/helm/unrelated-mcp-gateway-stack/values-kind-local.yaml \
+		--set gateway.image.tag=$(KIND_IMAGE_TAG) \
+		--set gateway.migrations.image.tag=$(KIND_IMAGE_TAG) \
+		--set gatewayui.image.tag=$(KIND_IMAGE_TAG) \
+		--set operator.image.tag=$(KIND_IMAGE_TAG)
+
+## Rebuild + load + deploy local images to kind
+kind-local-refresh: kind-local-build-images kind-local-load-images kind-local-deploy
+
+## Fully reset kind namespace/release and redeploy fresh (also restarts core deployments)
+kind-local-reset:
+	helm uninstall $(KIND_RELEASE_NAME) -n $(KIND_NAMESPACE) --ignore-not-found
+	kubectl delete namespace $(KIND_NAMESPACE) --ignore-not-found --wait=false
+	@echo "Waiting up to $(KIND_NAMESPACE_DELETE_TIMEOUT_SECONDS)s for namespace $(KIND_NAMESPACE) deletion..."
+	@elapsed=0; \
+	while kubectl get namespace $(KIND_NAMESPACE) >/dev/null 2>&1; do \
+		kubectl -n $(KIND_NAMESPACE) get mcpservers.gateway.unrelated.ai -o name 2>/dev/null | while read -r name; do \
+			[ -n "$$name" ] || continue; \
+			kubectl -n $(KIND_NAMESPACE) patch "$$name" --type=merge -p '{"metadata":{"finalizers":[]}}' >/dev/null 2>&1 || true; \
+		done; \
+		if [ $$elapsed -ge $(KIND_NAMESPACE_DELETE_TIMEOUT_SECONDS) ]; then \
+			echo "Namespace $(KIND_NAMESPACE) is still terminating after $(KIND_NAMESPACE_DELETE_TIMEOUT_SECONDS)s."; \
+			echo "Check finalizers with: kubectl get namespace $(KIND_NAMESPACE) -o yaml"; \
+			exit 1; \
+		fi; \
+		sleep 2; \
+		elapsed=$$((elapsed + 2)); \
+	done
+	$(MAKE) kind-local-refresh
+	kubectl -n $(KIND_NAMESPACE) rollout restart deploy/unrelated-mcp-gateway deploy/unrelated-mcp-gateway-ui deploy/unrelated-mcp-gateway-operator
+	kubectl -n $(KIND_NAMESPACE) rollout status deploy/unrelated-mcp-gateway
+	kubectl -n $(KIND_NAMESPACE) rollout status deploy/unrelated-mcp-gateway-ui
+	kubectl -n $(KIND_NAMESPACE) rollout status deploy/unrelated-mcp-gateway-operator
 
 ## Start services with docker-compose
 up:
@@ -319,7 +421,7 @@ inspector:
 # =============================================================================
 
 ## Run all CI checks (lint + test)
-ci: fmt-check clippy test-ci
+ci: fmt-check clippy crd-sync-check test-ci
 
 ## Fast CI for PRs (check + test-unit)
 ci-quick: check fmt-check test-unit
@@ -327,6 +429,44 @@ ci-quick: check fmt-check test-unit
 ## CI test command (mirrors .github/workflows/ci.yml)
 test-ci:
 	cargo test --workspace --all-targets
+
+## Sync canonical operator CRD into Helm chart copy
+crd-sync:
+	cp $(CANONICAL_MCP_CRD) $(HELM_OPERATOR_MCP_CRD)
+
+## Fail if canonical and Helm CRD copies drift
+crd-sync-check:
+	@cmp -s $(CANONICAL_MCP_CRD) $(HELM_OPERATOR_MCP_CRD) || { \
+		echo "ERROR: McpServer CRD copies are out of sync."; \
+		echo "Run: make crd-sync"; \
+		exit 1; \
+	}
+
+## Validate Helm charts (deps + lint + render smoke)
+helm-validate:
+	@command -v helm >/dev/null 2>&1 || { echo "ERROR: helm is not installed"; exit 1; }
+	helm dependency build deploy/helm/unrelated-mcp-gateway
+	helm dependency build deploy/helm/unrelated-mcp-gateway-stack
+	helm lint deploy/helm/unrelated-mcp-postgres
+	helm lint deploy/helm/unrelated-mcp-gateway-operator
+	helm lint deploy/helm/unrelated-mcp-gateway --set database.url='postgres://postgres:postgres@db:5432/gateway?sslmode=disable' --set auth.adminToken.value=dev-admin-token --set session.secret.value=dev-session-secret --set session.secretKeys.value=dev-secret-keys
+	helm lint deploy/helm/unrelated-mcp-gateway-ui --set gateway.dataBase=http://localhost:27100
+	helm lint deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml
+	helm lint deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token
+	helm template unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway --set database.url='postgres://postgres:postgres@db:5432/gateway?sslmode=disable' --set auth.adminToken.value=dev-admin-token --set session.secret.value=dev-session-secret --set session.secretKeys.value=dev-secret-keys >/dev/null
+	helm template unrelated-mcp-gateway-ui deploy/helm/unrelated-mcp-gateway-ui --set gateway.dataBase=http://localhost:27100 >/dev/null
+	helm template unrelated-mcp-gateway-stack deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml >/dev/null
+	helm template unrelated-mcp-gateway-stack deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token >/dev/null
+	helm upgrade --install unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway-stack --namespace mcp-gateway --create-namespace --dry-run --debug -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml >/dev/null
+	helm upgrade --install unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway-stack --namespace mcp-gateway --create-namespace --dry-run --debug -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token >/dev/null
+
+## Validate Helm charts if helm exists (skip otherwise)
+helm-validate-optional:
+	@if command -v helm >/dev/null 2>&1; then \
+		$(MAKE) helm-validate; \
+	else \
+		echo "Skipping helm-validate (helm not installed)."; \
+	fi
 
 ## Install repo githooks (pre-push)
 hooks-install:
@@ -364,6 +504,7 @@ help:
 	@echo "  test-gateway         Run gateway tests"
 	@echo "  test-cli             Run gateway CLI tests"
 	@echo "  test-integration     Run integration tests (requires Docker)"
+	@echo "  qa-release-gates     Run OSS release gate suite (gateway/operator/ui)"
 	@echo ""
 	@echo "Code Quality:"
 	@echo "  fmt            Format code"
@@ -396,7 +537,16 @@ help:
 	@echo "  docker-build-adapter-stdio-node Build adapter stdio-node image"
 	@echo "  docker-build-gateway           Build gateway Docker image"
 	@echo "  docker-build-gateway-migrator  Build gateway migrator Docker image"
+	@echo "  docker-build-gateway-operator  Build gateway operator Docker image"
+	@echo "  docker-build-ui                Build gateway UI Docker image"
 	@echo "  docker-build-all               Build all images used by docker-compose"
+	@echo "  kind-local-build-managed-mcp-images Build managed MCP fixture images for kind"
+	@echo "  kind-local-build-images        Build gateway/ui/operator/migrator images for kind"
+	@echo "  kind-local-load-managed-mcp-images Load managed MCP fixture images into kind"
+	@echo "  kind-local-load-images         Load local kind images into kind cluster"
+	@echo "  kind-local-deploy              Helm deploy to kind with local image overrides"
+	@echo "  kind-local-refresh             Build + load + deploy local kind stack"
+	@echo "  kind-local-reset               Full clean reset + refresh + rollout restart/status"
 	@echo "  docker-run-adapter            Run adapter in Docker container (standalone)"
 	@echo "  up                            Start docker-compose stack"
 	@echo "  up-reset                      Reset compose DB (delete all tenants/config)"
@@ -410,3 +560,6 @@ help:
 	@echo "CI:"
 	@echo "  ci             Run all CI checks"
 	@echo "  ci-quick       Fast CI for PRs"
+	@echo "  helm-validate  Run Helm deps/lint/template/dry-run checks"
+	@echo "  crd-sync       Copy canonical McpServer CRD into Helm chart"
+	@echo "  crd-sync-check Verify canonical/Helm McpServer CRDs are in sync"

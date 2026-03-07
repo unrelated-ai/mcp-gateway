@@ -43,6 +43,23 @@ jobs:
       tag_prefix: gateway-v
       docker_target: gateway-runtime
 
+  mcp_gateway_operator:
+    # Gateway operator releases: operator-vX.Y.Z
+    if: startsWith(github.ref, 'refs/tags/operator-v')
+    uses: ./.github/workflows/docker-release.yml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      image_name: ghcr.io/${{ github.repository_owner }}/mcp-gateway-operator
+      dockerfile: ./Dockerfile
+      context: .
+      cargo_pkg: unrelated-mcp-gateway-operator
+      binary_name: unrelated-mcp-gateway-operator
+      tag_prefix: operator-v
+      docker_target: gateway-operator-runtime
+
   mcp_gateway_migrator:
     # Gateway migrator releases: gateway-vX.Y.Z (must match gateway version)
     if: startsWith(github.ref, 'refs/tags/gateway-v')

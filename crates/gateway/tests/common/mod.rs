@@ -109,6 +109,15 @@ pub fn spawn_gateway(
     admin_token: Option<&str>,
     session_secret: &str,
 ) -> anyhow::Result<SpawnedGateway> {
+    spawn_gateway_with_env(database_url, admin_token, session_secret, &[])
+}
+
+pub fn spawn_gateway_with_env(
+    database_url: &str,
+    admin_token: Option<&str>,
+    session_secret: &str,
+    extra_env: &[(&str, &str)],
+) -> anyhow::Result<SpawnedGateway> {
     let bin = env!("CARGO_BIN_EXE_unrelated-mcp-gateway");
     let mut cmd = Command::new(bin);
     cmd.arg("--bind")
@@ -133,6 +142,9 @@ pub fn spawn_gateway(
         .env("UNRELATED_GATEWAY_BOOTSTRAP_ENABLED", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    for (key, value) in extra_env {
+        cmd.env(key, value);
+    }
     if let Some(admin_token) = admin_token {
         cmd.env("UNRELATED_GATEWAY_ADMIN_TOKEN", admin_token);
     }

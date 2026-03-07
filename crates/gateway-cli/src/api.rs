@@ -123,6 +123,23 @@ pub enum DataPlaneAuthMode {
     JwtEveryRequest,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum UpstreamEndpointLifecycle {
+    #[default]
+    Active,
+    Draining,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum UpstreamNetworkClass {
+    #[default]
+    External,
+    ClusterInternalManaged,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DataPlaneAuthSettings {
@@ -261,6 +278,7 @@ impl ApiClient {
         &self,
         id: &str,
         enabled: bool,
+        network_class: UpstreamNetworkClass,
         endpoints: Vec<PutEndpoint>,
     ) -> anyhow::Result<()> {
         let url = self.url("/admin/v1/upstreams")?;
@@ -268,6 +286,7 @@ impl ApiClient {
             .json(&PutUpstreamRequest {
                 id,
                 enabled,
+                network_class,
                 endpoints,
             })
             .send()
@@ -686,6 +705,7 @@ struct PutTenantRequest<'a> {
 struct PutUpstreamRequest<'a> {
     id: &'a str,
     enabled: bool,
+    network_class: UpstreamNetworkClass,
     endpoints: Vec<PutEndpoint>,
 }
 
@@ -694,6 +714,8 @@ struct PutUpstreamRequest<'a> {
 pub struct PutEndpoint {
     pub id: String,
     pub url: String,
+    pub enabled: bool,
+    pub lifecycle: UpstreamEndpointLifecycle,
 }
 
 #[derive(Debug, Serialize)]
@@ -745,6 +767,7 @@ pub struct UpstreamEndpoint {
     pub id: String,
     pub url: String,
     pub enabled: bool,
+    pub lifecycle: UpstreamEndpointLifecycle,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -752,6 +775,7 @@ pub struct UpstreamEndpoint {
 pub struct Upstream {
     pub id: String,
     pub enabled: bool,
+    pub network_class: UpstreamNetworkClass,
     pub endpoints: Vec<UpstreamEndpoint>,
 }
 

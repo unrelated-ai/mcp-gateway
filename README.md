@@ -8,6 +8,7 @@ MCP infrastructure for turning existing systems into MCP servers and serving the
 [![Security RustSec](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-rustsec.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-rustsec.yml)
 [![Security Adapter](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-adapter.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-adapter.yml)
 [![Security Gateway](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-gateway.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-gateway.yml)
+[![Security Operator](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-operator.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-operator.yml)
 [![Security Migrator](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-migrator.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-migrator.yml)
 [![Security UI](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-ui.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-ui.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)

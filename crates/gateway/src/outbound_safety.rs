@@ -1,3 +1,4 @@
+use crate::store::UpstreamNetworkClass;
 use unrelated_http_tools::safety::OutboundHttpSafety;
 
 /// Outbound HTTP safety policy for the Gateway.
@@ -27,6 +28,21 @@ pub fn gateway_outbound_http_safety() -> OutboundHttpSafety {
         safety.allowed_hosts = Some(set);
     }
 
+    safety
+}
+
+/// Resolve outbound safety by upstream network class.
+///
+/// `cluster-internal-managed` is reserved for operator-managed cluster workloads and allows private
+/// network targets without relaxing the global default for regular external upstreams.
+#[must_use]
+pub fn gateway_outbound_http_safety_for_class(
+    network_class: UpstreamNetworkClass,
+) -> OutboundHttpSafety {
+    let mut safety = gateway_outbound_http_safety();
+    if matches!(network_class, UpstreamNetworkClass::ClusterInternalManaged) {
+        safety.allow_private_networks = true;
+    }
     safety
 }
 
@@ -82,6 +98,27 @@ pub fn check_upstream_https_policy(url: &str) -> Result<(), String> {
         }
         other => Err(format!(
             "unsupported upstream URL scheme '{other}' (expected https)"
+        )),
+    }
+}
+
+/// Enforce upstream endpoint URL scheme policy by network class.
+///
+/// - `external`: strict HTTPS policy (with existing dev override behavior)
+/// - `cluster-internal-managed`: allow `http://` or `https://` because these endpoints are
+///   operator-managed in-cluster service URLs.
+pub fn check_upstream_scheme_policy_for_class(
+    network_class: UpstreamNetworkClass,
+    url: &str,
+) -> Result<(), String> {
+    if matches!(network_class, UpstreamNetworkClass::External) {
+        return check_upstream_https_policy(url);
+    }
+    let u = reqwest::Url::parse(url).map_err(|e| format!("invalid URL: {e}"))?;
+    match u.scheme() {
+        "http" | "https" => Ok(()),
+        other => Err(format!(
+            "unsupported upstream URL scheme '{other}' (expected http or https)"
         )),
     }
 }

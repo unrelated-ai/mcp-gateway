@@ -481,3 +481,51 @@ async fn mode3_pg_profile_aggregates_two_upstreams_and_prefixes_on_collision() -
 
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers)"]
+async fn admin_static_token_can_set_cluster_internal_managed_network_class() -> anyhow::Result<()> {
+    // Postgres
+    let pg = GenericImage::new("postgres", "16-alpine")
+        .with_exposed_port(5432.tcp())
+        .with_env_var("POSTGRES_PASSWORD", "postgres")
+        .with_env_var("POSTGRES_USER", "postgres")
+        .with_env_var("POSTGRES_DB", "gateway")
+        .start()
+        .await
+        .context("start postgres container")?;
+    let host = pg.get_host().await?.to_string();
+    let port = pg.get_host_port_ipv4(5432).await?;
+    let database_url =
+        format!("postgres://postgres:postgres@{host}:{port}/gateway?sslmode=disable");
+    wait_pg_ready(&database_url, Duration::from_secs(30)).await?;
+    apply_dbmate_migrations(&database_url).await?;
+
+    // Gateway (Mode 3, static admin token auth).
+    let gw = spawn_gateway(&database_url, Some(ADMIN_TOKEN), SESSION_SECRET)?;
+    let admin_base = gw.admin_base.clone();
+    let _gateway_child = KillOnDrop(gw.child);
+    wait_http_ok(&format!("{admin_base}/health"), Duration::from_secs(20)).await?;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{admin_base}/admin/v1/upstreams"))
+        .header("Authorization", format!("Bearer {ADMIN_TOKEN}"))
+        .json(&json!({
+            "id": "u-managed",
+            "enabled": true,
+            "networkClass": "cluster-internal-managed",
+            "endpoints": [{ "id": "e1", "url": "https://example.com/mcp" }]
+        }))
+        .send()
+        .await
+        .context("admin POST /admin/v1/upstreams with cluster-internal-managed")?;
+
+    anyhow::ensure!(
+        resp.status() == reqwest::StatusCode::CREATED,
+        "expected 201, got {}",
+        resp.status()
+    );
+
+    Ok(())
+}

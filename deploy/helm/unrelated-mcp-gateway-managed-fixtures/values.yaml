@@ -1,0 +1,25 @@
+enabled: false
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: curlimages/curl
+  tag: "8.12.1"
+  pullPolicy: IfNotPresent
+
+gateway:
+  adminBaseUrl: http://unrelated-mcp-gateway-admin:4001
+
+auth:
+  adminToken:
+    value: ""
+
+wait:
+  maxAttempts: 60
+  sleepSeconds: 2
+
+backoffLimit: 3
+ttlSecondsAfterFinished: 3600
+
+deployables: []

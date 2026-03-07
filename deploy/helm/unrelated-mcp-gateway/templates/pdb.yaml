@@ -1,0 +1,13 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "unrelated-mcp-gateway.fullname" . }}
+  labels:
+{{ include "unrelated-mcp-gateway.labels" . | indent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+{{ include "unrelated-mcp-gateway.selectorLabels" . | indent 6 }}
+{{- end }}
