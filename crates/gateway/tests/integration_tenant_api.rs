@@ -8,7 +8,7 @@ use axum::{
 };
 use common::mcp::McpSession;
 use common::pg::{apply_dbmate_migrations, wait_pg_ready};
-use common::{KillOnDrop, pick_unused_port, spawn_gateway, wait_http_ok};
+use common::{KillOnDrop, pick_unused_port, spawn_gateway, spawn_gateway_with_env, wait_http_ok};
 use rmcp::model::{
     ClientJsonRpcMessage, ClientRequest, ErrorData, InitializeResult, JsonObject, JsonRpcError,
     JsonRpcRequest, JsonRpcResponse, JsonRpcVersion2_0, ListToolsResult, ServerCapabilities,
@@ -1285,13 +1285,30 @@ async fn tenant_managed_mcp_deployables_and_requests_are_scoped() -> anyhow::Res
     wait_pg_ready(&database_url, Duration::from_secs(30)).await?;
     apply_dbmate_migrations(&database_url).await?;
 
-    // Gateway (Mode 3)
-    let gw = spawn_gateway(&database_url, Some(ADMIN_TOKEN), SESSION_SECRET)?;
+    // Gateway (Mode 3) with managed backend enabled for request create/patch coverage.
+    let gw = spawn_gateway_with_env(
+        &database_url,
+        Some(ADMIN_TOKEN),
+        SESSION_SECRET,
+        &[
+            ("UNRELATED_MANAGED_MCP_BACKEND_MODE", "k8s"),
+            ("UNRELATED_MANAGED_MCP_RECONCILER_HEARTBEAT_TTL_SECS", "900"),
+        ],
+    )?;
     let admin_base = gw.admin_base.clone();
     let _gateway_child = KillOnDrop(gw.child);
     wait_http_ok(&format!("{admin_base}/health"), Duration::from_secs(20)).await?;
 
     let client = reqwest::Client::new();
+
+    // Publish an in-test heartbeat so managed write-guard is healthy.
+    let _ = admin_post(
+        &client,
+        &admin_base,
+        "/admin/v1/managed-mcp/reconciler-heartbeat",
+        json!({ "mode": "k8s", "reconcilerId": "tenant-api-it" }),
+    )
+    .await?;
 
     // Two tenants.
     let _ = admin_post(
