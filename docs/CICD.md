@@ -25,6 +25,7 @@ Published images:
 
 - `ghcr.io/unrelated-ai/mcp-adapter`
 - `ghcr.io/unrelated-ai/mcp-gateway`
+- `ghcr.io/unrelated-ai/mcp-gateway-operator`
 - `ghcr.io/unrelated-ai/mcp-gateway-migrator`
 - `ghcr.io/unrelated-ai/mcp-gateway-ui`
 
@@ -32,7 +33,7 @@ All published runtime images are minimal and contain a **static** binary (or mig
 
 ## Release guard (Cargo.toml is the source of truth)
 
-On tag pushes (e.g. `adapter-v0.2.5` or `gateway-v0.8.0`), the release workflow verifies that the tag version
+On tag pushes (e.g. `adapter-v0.2.5`, `gateway-v0.8.0`, or `operator-v0.1.0`), the release workflow verifies that the tag version
 matches the crate version resolved by `cargo metadata` for the target package. If it doesn’t
 match, the release fails (no image is pushed).
 
@@ -65,6 +66,21 @@ On `gateway-v*` tags, the release workflow publishes:
 - Gateway admin CLI release assets:
   - `unrelated-gateway-admin-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz`
   - `unrelated-gateway-admin-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz.sha256`
+
+## Gateway Operator releases (`operator-vX.Y.Z`)
+
+On `operator-v*` tags, the release workflow publishes:
+
+- Gateway Operator image: `ghcr.io/unrelated-ai/mcp-gateway-operator`
+
+Tagging semantics match other runtime images:
+
+- Stable (`operator-vX.Y.Z`): `:X.Y.Z`, `:latest`, `:sha-<short>`
+- Pre-release (`operator-vX.Y.Z-rc.N`): `:X.Y.Z-rc.N`, `:sha-<short>`
+
+This is a single operator image used for both runtime modes; behavior is selected at runtime via:
+
+- `OPERATOR_MANAGED_DEPLOYMENT_MODE=k8s|docker`
 
 ## Web UI releases (`ui-vX.Y.Z`)
 
@@ -145,6 +161,20 @@ UI releases are tag-driven (similar to the Rust components):
 ```bash
 git tag ui-vX.Y.Z
 git push origin ui-vX.Y.Z
+```
+
+### Gateway Operator release (`operator-vX.Y.Z`)
+
+1) Bump versions / notes:
+
+- Update `crates/gateway-operator/Cargo.toml` `version = "X.Y.Z"`
+- Update `CHANGELOG.md`
+
+2) Tag and push:
+
+```bash
+git tag operator-vX.Y.Z
+git push origin operator-vX.Y.Z
 ```
 
 ### Notes

@@ -51,6 +51,12 @@ OSS Kubernetes operator for `McpServer` custom resources.
 - `OPERATOR_MANAGED_DEPLOYMENT_HEARTBEAT_SECS` (default: `5`)
 - `OPERATOR_MANAGED_DEPLOYMENT_RECONCILER_ID` (optional; defaults to `<hostname>-<pid>`)
 
+## Image and release tags
+
+- Single runtime image for both operator modes: `ghcr.io/unrelated-ai/mcp-gateway-operator`
+- Runtime behavior is selected by `OPERATOR_MANAGED_DEPLOYMENT_MODE` (`k8s` or `docker`).
+- Release tags are `operator-vX.Y.Z` (and pre-release tags like `operator-vX.Y.Z-rc.N`).
+
 ## Build
 
 ```bash

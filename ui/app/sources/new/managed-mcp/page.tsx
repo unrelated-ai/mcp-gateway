@@ -57,7 +57,8 @@ export default function ManagedMcpDeployPage() {
     },
   });
   const managedMcpSupported =
-    gatewayStatusQuery.data?.ok && gatewayStatusQuery.data.status.managedMcp?.acceptingRequests === true;
+    gatewayStatusQuery.data?.ok &&
+    gatewayStatusQuery.data.status.managedMcp?.acceptingRequests === true;
   const managedMcpStatus = gatewayStatusQuery.data?.ok
     ? gatewayStatusQuery.data.status.managedMcp
     : undefined;
@@ -175,24 +176,19 @@ export default function ManagedMcpDeployPage() {
         {!gatewayStatusQuery.isPending && !managedMcpSupported && (
           <section className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-200">
             Managed deployment is unavailable. Backend mode:{" "}
-            <span className="font-mono">
-              {managedMcpStatus?.backendMode ?? "unknown"}
-            </span>
+            <span className="font-mono">{managedMcpStatus?.backendMode ?? "unknown"}</span>
             {managedMcpStatus ? (
-              <>
-                {" "}({managedMcpStatus.reconcilerHealthy ? "healthy" : "unhealthy"}).
-              </>
+              <> ({managedMcpStatus.reconcilerHealthy ? "healthy" : "unhealthy"}).</>
             ) : (
               "."
-            )}
-            {" "}Current topology:{" "}
+            )}{" "}
+            Current topology:{" "}
             <span className="font-mono">
               {gatewayStatusQuery.data?.ok
                 ? (gatewayStatusQuery.data.status.topology ?? "unknown")
                 : "unavailable"}
             </span>
-            .{" "}
-            {managedMcpUnavailableMessage}
+            . {managedMcpUnavailableMessage}
           </section>
         )}
 

@@ -1,0 +1,19 @@
+name: security-trivy-operator
+
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "25 6 * * 1" # Mondays 06:25 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  trivy_operator:
+    uses: ./.github/workflows/reusable-security-trivy-image.yml
+    with:
+      image_ref: local/unrelated-mcp-gateway-operator:pr
+      dockerfile: Dockerfile
+      context: .
+      docker_target: gateway-operator-runtime
