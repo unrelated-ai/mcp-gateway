@@ -2,6 +2,78 @@
 
 This repository is newly public. Earlier internal iteration notes are intentionally omitted.
 
+## 2026-03-07
+
+Release versions:
+
+- Adapter: `0.11.0`
+- Gateway: `0.11.0`
+- Gateway admin CLI: `0.11.0`
+- Gateway Operator: `0.11.0`
+- Tenant-level Web UI: `0.7.0`
+- Helm charts updated: `unrelated-mcp-gateway`, `unrelated-mcp-gateway-ui`, `unrelated-mcp-gateway-operator`, `unrelated-mcp-gateway-stack`, `unrelated-mcp-gateway-managed-fixtures`, `unrelated-mcp-postgres`
+
+### Gateway + admin API + CLI (0.11.0)
+
+- Added Managed MCP control-plane APIs and persistence for:
+  - deployable catalog entries
+  - deployment requests (`pending`/`reconciling`/`ready`/`failed`) with desired-state fields
+  - reconciler heartbeat signaling
+- Added backend readiness enforcement for managed deployments:
+  - `UNRELATED_MANAGED_MCP_BACKEND_MODE` (`none|k8s|docker`)
+  - reconciler heartbeat TTL checks and stale-request sweeper
+  - fail-fast behavior when managed deployment backend is unavailable
+- Added upstream network/lifecycle controls:
+  - upstream `networkClass` (`external` / `cluster-internal-managed`)
+  - endpoint lifecycle states (`active` / `draining`) and targeted endpoint update APIs
+  - upstream session activity tracking APIs to support safe endpoint rollout/drain decisions
+- Hardened managed/external boundary behavior:
+  - tenant APIs cannot self-assign `cluster-internal-managed`
+  - control-plane-authenticated callers can assign managed network class for operator-managed upstreams
+- Extended CLI upstream UX to surface and set network class/lifecycle-aware endpoint data.
+
+### Gateway Operator (0.11.0)
+
+- Introduced OSS Gateway Operator runtime for `McpServer` reconciliation:
+  - manages Kubernetes `Deployment` + `Service` resources
+  - registers and updates Gateway upstream wiring
+  - handles endpoint lifecycle transitions and cleanup (`disable-endpoint` or `delete-endpoint`)
+- Added rollout behavior for endpoint replacement:
+  - mark old endpoint `draining`
+  - wait for in-flight session activity to clear (or timeout policy)
+  - finalize by disable/delete and support explicit rollback trigger
+- Added finalizer-based idempotent cleanup and optional leader election via Kubernetes Leases.
+- Added managed deployment intake support for both `k8s` and `docker` backend modes plus reconciler heartbeat publishing.
+
+### Web UI (0.7.0)
+
+- Added Managed MCP tenant flows:
+  - deployable catalog listing
+  - managed deployment request/create/update flow
+  - dedicated “Managed MCP” source onboarding page
+- Added managed upstream visibility:
+  - deployment metadata/status in sources list and upstream detail pages
+  - lifecycle-oriented upstream endpoint presentation and session activity awareness
+- Added/expanded tenant-facing API routes for managed deployables/deployments, endpoint lifecycle operations, and session activity queries.
+
+### Helm and deployment packaging
+
+- Expanded Helm packaging for operator, gateway, UI, stack umbrella chart, optional Postgres, and managed fixture seeding.
+- Added dev/prod/kind-local value profiles and documented local image workflows for testing unmerged Gateway/UI/Operator changes.
+- Synced Operator CRD into Helm packaging and added repo guardrails to prevent CRD drift.
+
+### CI/CD and security (0.11.0 line)
+
+- Gateway-tagged releases (`gateway-vX.Y.Z`) now publish the operator image with the same `X.Y.Z` version line as gateway/migrator.
+- Added dedicated operator Trivy workflow and updated reusable Trivy image workflow wiring.
+- Hardened Docker/CI release pipeline details and refreshed release documentation for the multi-component tag model.
+
+### Migration notes (0.11.0 line)
+
+- Run Gateway DB migrations before rolling out `0.11.0` components (new managed deployment + heartbeat tables/columns).
+- Managed deployment requests now require an enabled backend mode and healthy reconciler heartbeat; misconfigured setups fail fast instead of remaining pending indefinitely.
+- For operator-managed in-cluster upstreams, use `networkClass=cluster-internal-managed`; tenant-facing APIs remain restricted to `external`.
+
 ## 2026-02-14
 
 Release versions:

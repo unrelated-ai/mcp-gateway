@@ -55,7 +55,8 @@ OSS Kubernetes operator for `McpServer` custom resources.
 
 - Single runtime image for both operator modes: `ghcr.io/unrelated-ai/mcp-gateway-operator`
 - Runtime behavior is selected by `OPERATOR_MANAGED_DEPLOYMENT_MODE` (`k8s` or `docker`).
-- Release tags are `operator-vX.Y.Z` (and pre-release tags like `operator-vX.Y.Z-rc.N`).
+- Operator image releases are driven by Gateway tags: `gateway-vX.Y.Z` (and pre-release tags like `gateway-vX.Y.Z-rc.N`).
+- The operator crate version is expected to match the Gateway version for each Gateway-tagged release.
 
 ## Build
 

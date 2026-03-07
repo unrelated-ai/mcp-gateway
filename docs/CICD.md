@@ -14,10 +14,11 @@ This repo is a monorepo. CI is generic; releases are tag-driven.
 
 ## Release tag convention
 
-Use component-scoped tags:
+Use these release tags:
 
-- **Stable**: `<component>-vX.Y.Z` (example: `adapter-v3.5.2`)
-- **Pre-release**: `<component>-vX.Y.Z-rc.N` (example: `adapter-v3.6.0-rc.1`)
+- **Adapter**: `adapter-vX.Y.Z` (or `adapter-vX.Y.Z-rc.N`)
+- **Gateway line**: `gateway-vX.Y.Z` (or `gateway-vX.Y.Z-rc.N`) for gateway + migrator + operator + gateway CLI assets
+- **Web UI**: `ui-vX.Y.Z` (or `ui-vX.Y.Z-rc.N`)
 
 ## Published image + tags
 
@@ -33,7 +34,7 @@ All published runtime images are minimal and contain a **static** binary (or mig
 
 ## Release guard (Cargo.toml is the source of truth)
 
-On tag pushes (e.g. `adapter-v0.2.5`, `gateway-v0.8.0`, or `operator-v0.1.0`), the release workflow verifies that the tag version
+On tag pushes (e.g. `adapter-v0.2.5`, `gateway-v0.8.0`, or `ui-v0.6.0`), the release workflow verifies that the tag version
 matches the crate version resolved by `cargo metadata` for the target package. If it doesn’t
 match, the release fails (no image is pushed).
 
@@ -63,20 +64,10 @@ On `gateway-v*` tags, the release workflow publishes:
 
 - Gateway runtime image: `ghcr.io/unrelated-ai/mcp-gateway`
 - Gateway migrator image: `ghcr.io/unrelated-ai/mcp-gateway-migrator`
+- Gateway operator image: `ghcr.io/unrelated-ai/mcp-gateway-operator` (same `X.Y.Z` as the gateway tag)
 - Gateway admin CLI release assets:
   - `unrelated-gateway-admin-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz`
   - `unrelated-gateway-admin-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz.sha256`
-
-## Gateway Operator releases (`operator-vX.Y.Z`)
-
-On `operator-v*` tags, the release workflow publishes:
-
-- Gateway Operator image: `ghcr.io/unrelated-ai/mcp-gateway-operator`
-
-Tagging semantics match other runtime images:
-
-- Stable (`operator-vX.Y.Z`): `:X.Y.Z`, `:latest`, `:sha-<short>`
-- Pre-release (`operator-vX.Y.Z-rc.N`): `:X.Y.Z-rc.N`, `:sha-<short>`
 
 This is a single operator image used for both runtime modes; behavior is selected at runtime via:
 
@@ -121,7 +112,7 @@ make test-integration
 - Update `crates/adapter/Cargo.toml` `version = "X.Y.Z"`
 - Update `CHANGELOG.md`
 
-2) Tag and push:
+1) Tag and push:
 
 ```bash
 git tag adapter-vX.Y.Z
@@ -134,9 +125,10 @@ git push origin adapter-vX.Y.Z
 
 - Update `crates/gateway/Cargo.toml` `version = "X.Y.Z"`
 - Update `crates/gateway-cli/Cargo.toml` `version = "X.Y.Z"` (CLI is released with the Gateway tag)
+- Update `crates/gateway-operator/Cargo.toml` `version = "X.Y.Z"` (Operator image is released with the Gateway tag)
 - Update `CHANGELOG.md`
 
-2) Tag and push:
+1) Tag and push:
 
 ```bash
 git tag gateway-vX.Y.Z
@@ -156,25 +148,11 @@ UI releases are tag-driven (similar to the Rust components):
 - Update `ui/package-lock.json` to the same version
 - Update `CHANGELOG.md`
 
-2) Tag and push:
+1) Tag and push:
 
 ```bash
 git tag ui-vX.Y.Z
 git push origin ui-vX.Y.Z
-```
-
-### Gateway Operator release (`operator-vX.Y.Z`)
-
-1) Bump versions / notes:
-
-- Update `crates/gateway-operator/Cargo.toml` `version = "X.Y.Z"`
-- Update `CHANGELOG.md`
-
-2) Tag and push:
-
-```bash
-git tag operator-vX.Y.Z
-git push origin operator-vX.Y.Z
 ```
 
 ### Notes

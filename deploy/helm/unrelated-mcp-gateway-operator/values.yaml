@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/unrelated-ai/unrelated-mcp-gateway-operator
-  tag: "latest"
+  tag: "0.11.0"
   pullPolicy: IfNotPresent
 
 replicaCount: 1
