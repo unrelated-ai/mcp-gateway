@@ -168,12 +168,14 @@ security-audit:
 security-trivy:
 	docker build -t local/unrelated-mcp-adapter:pr .
 	docker build --target gateway-runtime -t local/unrelated-mcp-gateway:pr .
+	docker build --target gateway-operator-runtime -t local/unrelated-mcp-gateway-operator:pr .
 	docker build --target gateway-migrator -t local/unrelated-mcp-gateway-migrator:pr .
 	docker build -f ui/Dockerfile -t local/unrelated-mcp-gateway-ui:pr ui
-	trivy image --format table --exit-code 1 --vuln-type os,library --severity CRITICAL,HIGH local/unrelated-mcp-adapter:pr
-	trivy image --format table --exit-code 1 --vuln-type os,library --severity CRITICAL,HIGH local/unrelated-mcp-gateway:pr
-	trivy image --format table --exit-code 1 --vuln-type os,library --severity CRITICAL,HIGH local/unrelated-mcp-gateway-migrator:pr
-	trivy image --format table --exit-code 1 --vuln-type os,library --severity CRITICAL,HIGH local/unrelated-mcp-gateway-ui:pr
+	trivy image --format table --exit-code 1 --pkg-types os,library --severity CRITICAL,HIGH local/unrelated-mcp-adapter:pr
+	trivy image --format table --exit-code 1 --pkg-types os,library --severity CRITICAL,HIGH local/unrelated-mcp-gateway:pr
+	trivy image --format table --exit-code 1 --pkg-types os,library --severity CRITICAL,HIGH local/unrelated-mcp-gateway-operator:pr
+	trivy image --format table --exit-code 1 --pkg-types os,library --severity CRITICAL,HIGH local/unrelated-mcp-gateway-migrator:pr
+	trivy image --format table --exit-code 1 --pkg-types os,library --severity CRITICAL,HIGH local/unrelated-mcp-gateway-ui:pr
 
 # =============================================================================
 # Documentation

@@ -154,9 +154,9 @@ ENTRYPOINT ["/app/unrelated-mcp-gateway-operator"]
 # -----------------------------------------------------------------------------
 # Stage 5: Gateway migrator (dbmate + baked migrations)
 # -----------------------------------------------------------------------------
-# FROM amacneil/dbmate:2.30.0 AS gateway-migrator
-# NOTE: temporary using the forked version until they fix security issues.
-FROM ghcr.io/unrelated-ai/dbmate:main AS gateway-migrator
+FROM amacneil/dbmate:2.31.0 AS gateway-migrator
+
+RUN apk upgrade --no-cache zlib
 
 WORKDIR /db
 
