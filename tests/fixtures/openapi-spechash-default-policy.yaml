@@ -10,8 +10,6 @@ adapter:
   logLevel: info
   openapiProbe: false
 
-imports: []
-
 servers:
   mini:
     type: openapi

@@ -1,4 +1,3 @@
-imports: []
 servers:
   petstore:
     type: openapi

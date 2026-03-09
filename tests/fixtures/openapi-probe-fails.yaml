@@ -14,8 +14,6 @@ adapter:
   logLevel: info
   # rely on default openapiProbe=true (per docs) to test probe behavior
 
-imports: []
-
 servers:
   mini:
     type: openapi

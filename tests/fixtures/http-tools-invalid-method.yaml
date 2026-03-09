@@ -7,8 +7,6 @@ adapter:
   bind: 127.0.0.1:19085
   logLevel: info
 
-imports: []
-
 servers:
   httpbin:
     type: http

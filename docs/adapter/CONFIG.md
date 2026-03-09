@@ -1,46 +1,43 @@
 # Configuration
 
-The adapter supports two configuration styles:
+The adapter uses a single configuration style: a **unified config file**.
 
-1) **Unified config file** (recommended): YAML (default) or JSON (when the file extension is `.json`)
-2) **Legacy MCP JSON imports** (via `imports:` or `--mcp-config`)
+- YAML is recommended.
+- JSON also works when the file extension is `.json`.
 
-This document is the entry point for configuration docs. For a complete field-by-field reference, follow the links below.
+This page is the entry point. For complete field-by-field docs, use the links below.
 
-## Top-level structure (unified config)
+## Top-level structure
 
 ```yaml
-adapter: {}   # process-level settings (bind/log/timeouts/restarts)
-imports: []   # load-time includes (e.g. legacy MCP JSON)
+adapter: {}   # process settings (bind/log/timeouts/restarts)
 servers: {}   # runtime backends (stdio/openapi/http)
 ```
 
 See:
 
 - [`config/ADAPTER.md`](config/ADAPTER.md)
-- [`config/IMPORTS.md`](config/IMPORTS.md)
 - [`config/SERVERS_STDIO.md`](config/SERVERS_STDIO.md)
 - [`config/SERVERS_HTTP.md`](config/SERVERS_HTTP.md)
 - [`config/SERVERS_OPENAPI.md`](config/SERVERS_OPENAPI.md)
+- Legacy import migration notes: [`config/IMPORTS.md`](config/IMPORTS.md)
 
 ## CLI + environment variables
 
-The adapter is also configurable via CLI flags (and environment variables for those flags).
+You can also set adapter options with CLI flags (and matching environment variables).
 
-- Run `unrelated-mcp-adapter --help` to see the full list.
-- `--print-effective-config` prints the fully resolved configuration and exits.
+- Run `unrelated-mcp-adapter --help` for the full list.
+- `--print-effective-config` prints the resolved config and exits.
 
 See: [`config/ENV_AND_PRECEDENCE.md`](config/ENV_AND_PRECEDENCE.md)
 
 ## Common topics
 
-- **Auth blocks**: shared `auth:` schema is used by `http` and `openapi` backends.
+- **Auth blocks**: the same `auth:` shape is used by `http` and `openapi` servers.
   - See: [`config/AUTH.md`](config/AUTH.md)
-- **Environment expansion**: strings can contain `${VAR}` (missing vars fail startup).
+- **Environment expansion**: strings can use `${VAR}`. Missing variables fail startup.
   - See: [`config/ENV_AND_PRECEDENCE.md`](config/ENV_AND_PRECEDENCE.md)
 
 ## Source of truth
 
-For implementation details, see:
-
-- [`crates/adapter/src/config.rs`](../../crates/adapter/src/config.rs) (config schema, parsing, env expansion, precedence)
+- [`crates/adapter/src/config.rs`](../../crates/adapter/src/config.rs) (schema, parsing, env expansion, precedence)

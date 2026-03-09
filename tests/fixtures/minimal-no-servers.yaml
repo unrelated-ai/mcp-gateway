@@ -7,8 +7,6 @@ adapter:
   bind: 127.0.0.1:19080
   logLevel: info
 
-imports: []
-
 servers: {}
 
 

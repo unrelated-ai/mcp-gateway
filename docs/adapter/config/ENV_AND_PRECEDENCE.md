@@ -39,4 +39,4 @@ adapter:
 ## Useful CLI flags
 
 - `--help`: list all flags and their env var bindings.
-- `--print-effective-config`: prints the fully resolved config (after imports + env expansion + overrides).
+- `--print-effective-config`: prints the fully resolved config (after env expansion + overrides).

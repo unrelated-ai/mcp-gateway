@@ -21,7 +21,7 @@ Notes:
 
 ## High-level architecture
 
-- **Config loader** ([`crates/adapter/src/config.rs`](../../crates/adapter/src/config.rs)): reads unified config (YAML/JSON) + legacy MCP JSON imports, expands `${ENV}` values, applies CLI/ENV overrides.
+- **Config loader** ([`crates/adapter/src/config.rs`](../../crates/adapter/src/config.rs)): reads unified config (YAML/JSON), expands `${ENV}` values, and applies CLI/ENV overrides.
 - **Backends** ([`crates/adapter/src/supervisor.rs`](../../crates/adapter/src/supervisor.rs), [`crates/adapter/src/openapi.rs`](../../crates/adapter/src/openapi.rs), [`crates/adapter/src/http_backend.rs`](../../crates/adapter/src/http_backend.rs)): implement a shared `Backend` trait.
 - **Aggregator** ([`crates/adapter/src/aggregator.rs`](../../crates/adapter/src/aggregator.rs)): merges tools/resources/prompts across all backends, handles collisions, provides routing.
 - **MCP server handler** ([`crates/adapter/src/mcp_server.rs`](../../crates/adapter/src/mcp_server.rs)): implements MCP methods (`tools/*`, `resources/*`, `prompts/*`) using the aggregator and backends.
@@ -67,7 +67,6 @@ mcp-gateway/
 Top-level keys:
 
 - **`adapter`**: process settings (bind/log/timeouts/restarts)
-- **`imports`**: load-time includes (e.g. legacy MCP JSON files)
 - **`servers`**: runtime backends (`stdio` / `openapi` / `http`)
 
 Example:
@@ -86,11 +85,6 @@ adapter:
   restartBackoff:
     minMs: 250
     maxMs: 30000
-
-imports:
-  - type: mcp-json
-    path: ~/.config/claude/claude_desktop_config.json
-    prefix: legacy
 
 servers:
   filesystem:

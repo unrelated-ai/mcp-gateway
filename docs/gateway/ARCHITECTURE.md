@@ -189,7 +189,8 @@ Current implementation notes (Gateway session token):
   - The first secret mints new tokens; all are accepted for verification.
   - For single-secret setups, `UNRELATED_GATEWAY_SESSION_SECRET` is also accepted as a fallback.
   - If neither env var is set, the Gateway generates an ephemeral secret at startup (not HA-safe).
-- **Legacy compatibility**: the Gateway still accepts the old `v1.<b64(payload)>.<b64(hmac)>` format for migration.
+- **Legacy compatibility removed**: old `v1.<b64(payload)>.<b64(hmac)>` session tokens are rejected.
+  - Only PASETO `v4.local` session tokens are accepted.
 
 ### Flow (example)
 

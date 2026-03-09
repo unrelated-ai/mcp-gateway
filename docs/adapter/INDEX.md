@@ -10,17 +10,17 @@ This documentation covers the **`unrelated-mcp-adapter`** binary in this reposit
 
 ## Configuration (field-by-field reference)
 
-The adapter supports a **unified config file** (recommended) plus legacy MCP JSON imports.
+The adapter uses a **unified config file**.
 
 - **Overview**: [`CONFIG.md`](CONFIG.md)
 - **Adapter process settings** (`adapter:`): [`config/ADAPTER.md`](config/ADAPTER.md)
-- **Imports** (`imports:`): [`config/IMPORTS.md`](config/IMPORTS.md)
 - **Servers** (`servers:`):
   - **Stdio MCP servers** (`type: stdio`): [`config/SERVERS_STDIO.md`](config/SERVERS_STDIO.md)
   - **Manual HTTP tools** (`type: http`): [`config/SERVERS_HTTP.md`](config/SERVERS_HTTP.md)
   - **OpenAPI** (`type: openapi`): [`config/SERVERS_OPENAPI.md`](config/SERVERS_OPENAPI.md)
 - **Authentication** (`auth:` blocks): [`config/AUTH.md`](config/AUTH.md)
 - **Environment expansion & precedence**: [`config/ENV_AND_PRECEDENCE.md`](config/ENV_AND_PRECEDENCE.md)
+- **Migrating old `imports` configs**: [`config/IMPORTS.md`](config/IMPORTS.md)
 
 ## Protocol & endpoints
 
