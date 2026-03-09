@@ -1,6 +1,54 @@
 # Changelog
 
-This repository is newly public. Earlier internal iteration notes are intentionally omitted.
+## 2026-03-10
+
+Release versions:
+
+- Adapter: `0.12.0`
+- Gateway: `0.12.0`
+- Gateway admin CLI: `0.12.0`
+- Gateway Operator: `0.12.0`
+- Tenant-level Web UI: `0.8.0`
+- Helm charts updated: `unrelated-mcp-gateway`, `unrelated-mcp-gateway-ui`, `unrelated-mcp-gateway-operator`, `unrelated-mcp-gateway-stack`, `unrelated-mcp-gateway-managed-fixtures`, `unrelated-mcp-postgres`
+
+### Gateway + admin API + CLI (0.12.0)
+
+- Fixed profile upstream binding in admin profile writes:
+  - when a tenant-owned managed upstream exists, logical upstream IDs now resolve to the tenant-owned internal ID before persistence
+  - avoids broken tool routing / empty `tools/list` results for managed profile bindings in Mode 3
+- Hardened tenant API key behavior:
+  - list/create/revoke API key operations now require the tenant to be enabled
+- Hardened OpenAPI resolver outbound behavior:
+  - external `$ref` URL fetches now pass outbound safety checks before network access
+  - resolver network errors are normalized/sanitized for clearer operator-facing diagnostics
+- Refreshed MCP protocol internals on `rmcp` `1.1.0` and updated request handling paths/tests to align with the newer constructor/parameter model.
+
+### Adapter (0.12.0)
+
+- Removed legacy MCP JSON import mode from runtime config:
+  - `imports`-based `mcp-json` loading is no longer accepted
+  - legacy `--mcp-config` input path support is removed
+- `--print-effective-config` now redacts sensitive auth values (bearer/header/query/basic credentials) so output is safe to share in logs/tickets.
+- Updated MCP request wiring to the `rmcp` `1.1.0` model with corresponding runtime/test coverage refresh.
+
+### Gateway Operator (0.12.0)
+
+- Operator ships on the `0.12.0` gateway release line for version alignment across gateway-managed runtime components.
+- No operator-only behavior changes were introduced in this release.
+
+### Web UI (0.8.0)
+
+- Reworked tenant unlock/session handling:
+  - added server-backed unlock endpoint (`/api/session/unlock`) that validates tenant tokens against Gateway before session establishment
+  - tenant token cookie is now set as `httpOnly` by the server route
+- Added dedicated logout/lock endpoint (`/api/session/logout`) with safe redirect handling for both sidebar and settings lock flows.
+- Expanded UI session route tests and added UI test execution to release gate checks.
+
+### Migration notes (0.12.0 line)
+
+- Adapter configs using legacy `imports` (`type: mcp-json`) or `--mcp-config` must be migrated to the unified `servers` model before upgrade.
+- Gateway now rejects legacy `v1.<payload>.<signature>` session token format; clients should establish fresh sessions after upgrade.
+- OpenAPI external reference URLs are now enforced by outbound safety policy; blocked refs need policy-compliant targets.
 
 ## 2026-03-07
 

@@ -3,7 +3,7 @@ name: unrelated-mcp-gateway-stack
 description: Umbrella chart for operator + gateway + UI (+ optional postgres).
 type: application
 version: 0.2.0
-appVersion: "0.11.0"
+appVersion: "0.12.0"
 dependencies:
   - name: unrelated-mcp-gateway-operator
     version: 0.2.0

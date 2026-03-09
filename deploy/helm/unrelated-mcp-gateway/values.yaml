@@ -3,7 +3,7 @@ fullnameOverride: ""
 
 image:
   repository: ghcr.io/unrelated-ai/mcp-gateway
-  tag: "0.11.0"
+  tag: "0.12.0"
   pullPolicy: IfNotPresent
 
 replicaCount: 1
@@ -77,7 +77,7 @@ migrations:
   enabled: true
   image:
     repository: ghcr.io/unrelated-ai/mcp-gateway-migrator
-    tag: "0.11.0"
+    tag: "0.12.0"
     pullPolicy: IfNotPresent
   # `gateway-migrator` image uses dbmate as ENTRYPOINT.
   # Set args (not command) so this renders to `dbmate --wait up`.
