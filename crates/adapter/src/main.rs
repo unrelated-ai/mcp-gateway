@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
     let config = AdapterConfig::load(cli)?;
 
     if config.cli.print_effective_config {
-        let yaml = serde_yaml::to_string(&config.effective())?;
+        let yaml = serde_yaml::to_string(&config.effective_redacted())?;
         print!("{yaml}");
         return Ok(());
     }
@@ -199,6 +199,7 @@ fn build_streamable_http_service(
         session_manager,
         StreamableHttpServerConfig {
             stateful_mode: true,
+            json_response: false,
             sse_keep_alive: Some(Duration::from_secs(15)),
             // Keep retry unset to preserve existing client/test behavior expectations
             // (first stream event is JSON data, not an SSE retry hint frame).
@@ -383,13 +384,12 @@ async fn refresh_aggregator(
     let prompts_for_hash: Vec<rmcp::model::Prompt> = snapshot
         .get_all_prompts()
         .iter()
-        .map(|(exposed_name, mapping)| rmcp::model::Prompt {
-            name: exposed_name.clone(),
-            title: None,
-            description: mapping.description.clone(),
-            arguments: mapping.arguments.clone(),
-            icons: None,
-            meta: None,
+        .map(|(exposed_name, mapping)| {
+            rmcp::model::Prompt::new(
+                exposed_name.clone(),
+                mapping.description.clone(),
+                mapping.arguments.clone(),
+            )
         })
         .collect();
 

@@ -414,12 +414,7 @@ mod tests {
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
 
         // Add an argument: should notify.
-        let arg = PromptArgument {
-            name: "x".to_string(),
-            title: None,
-            description: None,
-            required: Some(true),
-        };
+        let arg = PromptArgument::new("x").with_required(true);
         let p2 = Prompt::new("p1", Some("desc"), Some(vec![arg]));
         let change = tracker
             .update_prompts_contract("p1", &[p2])

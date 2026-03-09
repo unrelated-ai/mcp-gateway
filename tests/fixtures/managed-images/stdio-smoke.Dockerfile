@@ -1,7 +1,6 @@
 FROM unrelated-mcp-adapter:stdio-node
 
 RUN printf '%s\n' \
-  'imports: []' \
   'servers:' \
   '  smoke_everything:' \
   '    type: stdio' \

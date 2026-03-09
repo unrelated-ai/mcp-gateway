@@ -271,7 +271,6 @@ Once running, the adapter serves the resulting MCP tools over **streamable HTTP*
 #### HTTP tools (manual HTTP DSL)
 
 ```yaml
-imports: []
 servers:
   billing_api:
     type: http
@@ -311,7 +310,6 @@ Result: exposes an MCP tool named `create_invoice` (or `billing_api:create_invoi
 #### OpenAPI (auto-discover tools from a spec)
 
 ```yaml
-imports: []
 servers:
   orders_api:
     type: openapi
@@ -329,7 +327,6 @@ Result: exposes one MCP tool per discovered OpenAPI operation (here: all `GET` o
 #### MCP stdio (spawn a local MCP server process)
 
 ```yaml
-imports: []
 servers:
   local_mcp:
     type: stdio

@@ -1,40 +1,46 @@
-# `imports:` (load-time includes)
+# Legacy `imports` migration
 
-Imports are applied **at config load time**. They let you include other config sources (currently: legacy MCP JSON).
+`imports` is no longer supported by the adapter.
 
-Source of truth: [`crates/adapter/src/config.rs`](../../../crates/adapter/src/config.rs) (`ImportConfig`, `McpJsonImportConfig`).
-
-## Example
+If your config still contains:
 
 ```yaml
 imports:
   - type: mcp-json
-    path: /path/to/claude_desktop_config.json
-    prefix: legacy
-    conflict: skip
+    path: ...
 ```
 
-## Supported import types
+the adapter now fails startup with a migration-focused error message.
 
-### `type: mcp-json`
+## What to do instead
 
-Imports a legacy MCP JSON file (`mcpServers` format) into the unified `servers:` map as `type: stdio`.
+Move each imported server into `servers:` directly.
 
-#### Fields
+### Before (legacy)
 
-- `path`
-  - **Type**: string (file path)
-  - **Required**: yes
-- `prefix`
-  - **Type**: string
-  - **Required**: no
-  - **Meaning**: optional name prefix applied to imported server names.
-- `conflict`
-  - **Type**: enum: `error` | `skip` | `overwrite`
-  - **Default**: `error`
-  - **Meaning**: what to do if an imported server name collides with an existing `servers:` entry.
+```yaml
+imports:
+  - type: mcp-json
+    path: /path/to/legacy-mcp.json
+```
 
-## Notes
+### After (supported)
 
-- Imports are applied after reading the config file and expanding env vars inside it.
-- CLI `--mcp-config` is treated as an implicit `mcp-json` import (see [`ENV_AND_PRECEDENCE.md`](ENV_AND_PRECEDENCE.md)).
+```yaml
+servers:
+  filesystem:
+    type: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/data"]
+```
+
+## Quick conversion checklist
+
+1. Open your old `mcpServers` JSON.
+2. For each entry, copy command/args/env into a `servers.<name>` block with `type: stdio`.
+3. Remove the `imports` section entirely (or keep it empty as `imports: []` during transition).
+4. Start the adapter and confirm `tools/list` returns the expected tools.
+
+## Source of truth
+
+- [`crates/adapter/src/config.rs`](../../../crates/adapter/src/config.rs)

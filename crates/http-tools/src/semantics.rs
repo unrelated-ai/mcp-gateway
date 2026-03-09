@@ -16,63 +16,57 @@ pub fn annotations_for_method(method: &Method) -> ToolAnnotations {
     let open_world_hint = Some(true);
 
     if method == Method::GET || method == Method::HEAD || method == Method::OPTIONS {
-        return ToolAnnotations {
-            title: None,
-            read_only_hint: Some(true),
-            destructive_hint: Some(false),
-            idempotent_hint: Some(true),
+        return ToolAnnotations::from_raw(
+            None,
+            Some(true),
+            Some(false),
+            Some(true),
             open_world_hint,
-        };
+        );
     }
 
     if method == Method::POST {
-        return ToolAnnotations {
-            title: None,
-            read_only_hint: Some(false),
-            destructive_hint: Some(false),
-            idempotent_hint: Some(false),
+        return ToolAnnotations::from_raw(
+            None,
+            Some(false),
+            Some(false),
+            Some(false),
             open_world_hint,
-        };
+        );
     }
 
     if method == Method::PUT {
-        return ToolAnnotations {
-            title: None,
-            read_only_hint: Some(false),
-            destructive_hint: Some(true),
-            idempotent_hint: Some(true),
+        return ToolAnnotations::from_raw(
+            None,
+            Some(false),
+            Some(true),
+            Some(true),
             open_world_hint,
-        };
+        );
     }
 
     if method == Method::PATCH {
-        return ToolAnnotations {
-            title: None,
-            read_only_hint: Some(false),
-            destructive_hint: Some(true),
+        return ToolAnnotations::from_raw(
+            None,
+            Some(false),
+            Some(true),
             // PATCH may or may not be idempotent; do not guess.
-            idempotent_hint: None,
+            None,
             open_world_hint,
-        };
+        );
     }
 
     if method == Method::DELETE {
-        return ToolAnnotations {
-            title: None,
-            read_only_hint: Some(false),
-            destructive_hint: Some(true),
-            idempotent_hint: Some(true),
+        return ToolAnnotations::from_raw(
+            None,
+            Some(false),
+            Some(true),
+            Some(true),
             open_world_hint,
-        };
+        );
     }
 
-    ToolAnnotations {
-        title: None,
-        read_only_hint: None,
-        destructive_hint: None,
-        idempotent_hint: None,
-        open_world_hint,
-    }
+    ToolAnnotations::from_raw(None, None, None, None, open_world_hint)
 }
 
 #[cfg(test)]

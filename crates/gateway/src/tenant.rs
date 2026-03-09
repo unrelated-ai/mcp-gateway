@@ -3096,6 +3096,9 @@ async fn list_api_keys(
     let Some(store) = &state.store else {
         return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
     };
+    if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
+        return resp;
+    }
 
     match store.list_api_keys(&tenant_id).await {
         Ok(api_keys) => Json(ApiKeysResponse { api_keys }).into_response(),
@@ -3115,6 +3118,9 @@ async fn create_api_key(
     let Some(store) = &state.store else {
         return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
     };
+    if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
+        return resp;
+    }
     let started = Instant::now();
     let outcome = tenant_create_api_key_inner(store.as_ref(), &tenant_id, req).await;
 
@@ -3316,6 +3322,9 @@ async fn revoke_api_key(
     let Some(store) = &state.store else {
         return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
     };
+    if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
+        return resp;
+    }
     let started = Instant::now();
 
     let tenant_id_for_audit = tenant_id.clone();

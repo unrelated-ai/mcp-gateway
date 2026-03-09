@@ -10,8 +10,6 @@ adapter:
     minMs: 5000
     maxMs: 1000
 
-imports: []
-
 servers: {}
 
 

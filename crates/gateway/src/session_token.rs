@@ -11,8 +11,6 @@ use rusty_paseto::prelude::{
     PasetoParser, PasetoSymmetricKey, V4,
 };
 
-type HmacSha256 = hmac::Hmac<Sha256>;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionTokenVerifyErrorKind {
     Expired,
@@ -112,13 +110,11 @@ impl SessionSigner {
     }
 
     pub fn verify(&self, token: &str) -> anyhow::Result<TokenPayloadV1> {
-        // 1) Try v4.local PASETO tokens first (new format).
-        if token.starts_with("v4.local.") {
-            return self.verify_paseto_v4_local(token);
+        // Gateway session routing tokens are strictly PASETO v4.local.
+        if !token.starts_with("v4.local.") {
+            return Err(session_token_err(SessionTokenVerifyErrorKind::Invalid));
         }
-
-        // 2) Legacy format support (sign-only HMAC token) for smoother rollouts.
-        self.verify_legacy_v1(token)
+        self.verify_paseto_v4_local(token)
     }
 
     fn verify_paseto_v4_local(&self, token: &str) -> anyhow::Result<TokenPayloadV1> {
@@ -165,36 +161,6 @@ impl SessionSigner {
             return Err(session_token_err(SessionTokenVerifyErrorKind::Expired));
         }
         Ok(())
-    }
-
-    fn verify_legacy_v1(&self, token: &str) -> anyhow::Result<TokenPayloadV1> {
-        // Legacy format: v1.<base64url(payload_json)>.<base64url(hmac_sha256(payload_b64))>
-        // We keep it for a migration window. It does NOT have exp/iat.
-        use hmac::Mac as _;
-        let (version, rest) = token
-            .split_once('.')
-            .ok_or_else(|| anyhow::anyhow!("invalid token format"))?;
-        if version != "v1" {
-            return Err(anyhow::anyhow!("unsupported token version: {version}"));
-        }
-        let (payload_b64, sig_b64) = rest
-            .split_once('.')
-            .ok_or_else(|| anyhow::anyhow!("invalid token format"))?;
-        let got = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(sig_b64)
-            .map_err(|_| anyhow::anyhow!("invalid token signature encoding"))?;
-
-        let mut mac = HmacSha256::new_from_slice(self.keys[0].raw_secret.as_slice())
-            .map_err(|_| anyhow::anyhow!("invalid HMAC key"))?;
-        mac.update(payload_b64.as_bytes());
-        mac.verify_slice(&got)
-            .map_err(|_| anyhow::anyhow!("invalid token signature"))?;
-
-        let payload_json = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(payload_b64)
-            .map_err(|_| anyhow::anyhow!("invalid token payload encoding"))?;
-        let payload: TokenPayloadV1 = serde_json::from_slice(&payload_json)?;
-        Ok(payload)
     }
 }
 
@@ -247,6 +213,7 @@ pub struct UpstreamSessionBinding {
     pub session: String,
 }
 
+#[derive(Clone)]
 struct KeyEntry {
     kid: String,
     key: Arc<
@@ -255,8 +222,6 @@ struct KeyEntry {
             rusty_paseto::prelude::Local,
         >,
     >,
-    // Keep raw secret bytes so we can derive a legacy HMAC key for migration only.
-    raw_secret: Vec<u8>,
 }
 
 impl KeyEntry {
@@ -277,17 +242,6 @@ impl KeyEntry {
             key: Arc::new(PasetoSymmetricKey::<V4, Local>::from(Key::<32>::from(
                 key_bytes,
             ))),
-            raw_secret: secret.to_vec(),
-        }
-    }
-}
-
-impl Clone for KeyEntry {
-    fn clone(&self) -> Self {
-        Self {
-            kid: self.kid.clone(),
-            key: self.key.clone(),
-            raw_secret: self.raw_secret.clone(),
         }
     }
 }
@@ -315,7 +269,6 @@ fn extract_paseto_footer_kid(token: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hmac::Mac as _;
 
     #[test]
     fn token_roundtrip() {
@@ -351,7 +304,7 @@ mod tests {
         let signer =
             SessionSigner::new(vec![b"secret".to_vec()], Duration::from_secs(60)).expect("signer");
         let err = signer.verify("v2.payload.sig").unwrap_err().to_string();
-        assert!(err.contains("unsupported token version"));
+        assert!(err.contains("invalid session token"));
     }
 
     #[test]
@@ -359,86 +312,18 @@ mod tests {
         let signer =
             SessionSigner::new(vec![b"secret".to_vec()], Duration::from_secs(60)).expect("signer");
         let err = signer.verify("not-a-token").unwrap_err().to_string();
-        // It's not a PASETO token and not a legacy token either.
-        assert!(err.contains("invalid token format") || err.contains("invalid session token"));
+        assert!(err.contains("invalid session token"));
     }
 
     #[test]
-    fn verify_rejects_bad_signature_encoding() {
+    fn verify_rejects_legacy_v1_tokens() {
         let signer =
             SessionSigner::new(vec![b"secret".to_vec()], Duration::from_secs(60)).expect("signer");
-        let payload = TokenPayloadV1 {
-            profile_id: "p1".to_string(),
-            bindings: vec![],
-            auth: None,
-            oidc: None,
-            iat: None,
-            exp: None,
-            proxy_key: None,
-        };
-        let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(serde_json::to_vec(&payload).unwrap());
-        let token = format!("v1.{payload_b64}.@@@"); // invalid base64
-        let err = signer.verify(&token).unwrap_err().to_string();
-        assert!(err.contains("signature encoding"));
-    }
-
-    #[test]
-    fn verify_rejects_bad_payload_encoding() {
-        let signer =
-            SessionSigner::new(vec![b"secret".to_vec()], Duration::from_secs(60)).expect("signer");
-
-        // Sign the "payload" bytes, but payload is not valid base64 for JSON.
-        let payload_b64 = "!!!notbase64!!!";
-        let mut mac = HmacSha256::new_from_slice(b"secret").unwrap();
-        mac.update(payload_b64.as_bytes());
-        let sig = mac.finalize().into_bytes();
-        let sig_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig);
-        let token = format!("v1.{payload_b64}.{sig_b64}");
-
-        let err = signer.verify(&token).unwrap_err().to_string();
-        assert!(err.contains("payload encoding"));
-    }
-
-    #[test]
-    fn verify_rejects_tampered_payload() {
-        let signer =
-            SessionSigner::new(vec![b"secret".to_vec()], Duration::from_secs(60)).expect("signer");
-        let payload = TokenPayloadV1 {
-            profile_id: "p1".to_string(),
-            bindings: vec![UpstreamSessionBinding {
-                upstream: "u1".to_string(),
-                endpoint: "e1".to_string(),
-                session: "s1".to_string(),
-            }],
-            auth: None,
-            oidc: None,
-            iat: None,
-            exp: None,
-            proxy_key: None,
-        };
-        // Create a legacy token and then tamper it.
-        let legacy = {
-            // Legacy signer: raw secret bytes as HMAC key.
-            let payload_json = serde_json::to_vec(&payload).unwrap();
-            let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload_json);
-            let mut mac = HmacSha256::new_from_slice(b"secret").unwrap();
-            mac.update(payload_b64.as_bytes());
-            let sig = mac.finalize().into_bytes();
-            let sig_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig);
-            format!("v1.{payload_b64}.{sig_b64}")
-        };
-
-        // Tamper by changing one char in the payload section; signature should fail.
-        let mut parts: Vec<&str> = legacy.split('.').collect();
-        assert_eq!(parts.len(), 3);
-        let mut payload_b64 = parts[1].as_bytes().to_vec();
-        // Flip one byte (keep it URL-safe-ish; this is enough to invalidate signature).
-        payload_b64[0] = if payload_b64[0] == b'A' { b'B' } else { b'A' };
-        parts[1] = std::str::from_utf8(&payload_b64).unwrap();
-        let tampered = parts.join(".");
-
-        let err = signer.verify(&tampered).unwrap_err().to_string();
-        assert!(err.contains("invalid token signature"));
+        // Previously accepted for migration compatibility; now always rejected.
+        let err = signer
+            .verify("v1.payload.signature")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("invalid session token"));
     }
 }

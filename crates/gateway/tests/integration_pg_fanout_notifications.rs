@@ -146,23 +146,18 @@ impl DynamicUpstream {
         let session_id = uuid::Uuid::new_v4().to_string();
         self.sessions.lock().await.insert(session_id.clone());
 
-        let init_result = InitializeResult {
-            protocol_version: init_params.protocol_version,
-            capabilities: ServerCapabilities::builder()
+        let init_result = InitializeResult::new(
+            ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
                 .enable_prompts()
                 .build(),
-            server_info: rmcp::model::Implementation {
-                name: format!("dynamic-upstream-{}", self.upstream_id),
-                title: None,
-                version: "0".to_string(),
-                description: None,
-                icons: None,
-                website_url: None,
-            },
-            instructions: None,
-        };
+        )
+        .with_protocol_version(init_params.protocol_version)
+        .with_server_info(rmcp::model::Implementation::new(
+            format!("dynamic-upstream-{}", self.upstream_id),
+            "0",
+        ));
 
         let msg = ServerJsonRpcMessage::Response(JsonRpcResponse {
             jsonrpc: JsonRpcVersion2_0,

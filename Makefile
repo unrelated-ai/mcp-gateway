@@ -129,7 +129,7 @@ qa-release-gates:
 	cargo test -p unrelated-mcp-gateway --test integration_mode1_config -- --nocapture --test-threads=1
 	cargo check -p unrelated-mcp-gateway-operator
 	cargo test -p unrelated-mcp-gateway-operator
-	cd ui && npm run lint && npm run build
+	cd ui && npm run lint && npm run test && npm run build
 	$(MAKE) helm-validate-optional
 
 # =============================================================================

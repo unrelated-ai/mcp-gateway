@@ -111,24 +111,21 @@ impl AdapterMcpServer {
 
 impl ServerHandler for AdapterMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder()
-                .enable_logging()
-                .enable_completions()
-                .enable_tools()
-                .enable_tool_list_changed()
-                .enable_resources()
-                .enable_resources_list_changed()
-                .enable_resources_subscribe()
-                .enable_prompts()
-                .enable_prompts_list_changed()
-                .build(),
-            server_info: Implementation::from_build_env(),
-            instructions: Some(
-                "MCP adapter that bridges stdio MCP servers and OpenAPI backends.".to_string(),
-            ),
-        }
+        let capabilities = ServerCapabilities::builder()
+            .enable_logging()
+            .enable_completions()
+            .enable_tools()
+            .enable_tool_list_changed()
+            .enable_resources()
+            .enable_resources_list_changed()
+            .enable_resources_subscribe()
+            .enable_prompts()
+            .enable_prompts_list_changed()
+            .build();
+        ServerInfo::new(capabilities)
+            .with_protocol_version(ProtocolVersion::V_2024_11_05)
+            .with_server_info(Implementation::from_build_env())
+            .with_instructions("MCP adapter that bridges stdio MCP servers and OpenAPI backends.")
     }
 
     async fn set_level(
@@ -656,13 +653,12 @@ impl ServerHandler for AdapterMcpServer {
 
         let prompt_list: Vec<Prompt> = prompts
             .iter()
-            .map(|(exposed_name, mapping)| Prompt {
-                name: exposed_name.clone(),
-                title: None,
-                description: mapping.description.clone(),
-                arguments: mapping.arguments.clone(),
-                icons: None,
-                meta: None,
+            .map(|(exposed_name, mapping)| {
+                Prompt::new(
+                    exposed_name.clone(),
+                    mapping.description.clone(),
+                    mapping.arguments.clone(),
+                )
             })
             .collect();
 

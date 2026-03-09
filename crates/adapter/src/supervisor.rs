@@ -766,16 +766,12 @@ impl StdioBackend {
 
         let peer = client.peer().clone();
         let args = arguments.as_object().cloned();
-        let request = rmcp::model::ClientRequest::CallToolRequest(rmcp::model::CallToolRequest {
-            method: rmcp::model::CallToolRequestMethod,
-            params: CallToolRequestParams {
-                name: name.to_string().into(),
-                arguments: args,
-                meta: None,
-                task: None,
-            },
-            extensions: rmcp::model::Extensions::default(),
-        });
+        let mut params = CallToolRequestParams::new(name.to_string());
+        if let Some(arguments) = args {
+            params = params.with_arguments(arguments);
+        }
+        let request =
+            rmcp::model::ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(params));
 
         let handle = peer
             .send_cancellable_request(
@@ -838,15 +834,10 @@ impl StdioBackend {
         };
 
         let peer = client.peer().clone();
-        let request =
-            rmcp::model::ClientRequest::ReadResourceRequest(rmcp::model::ReadResourceRequest {
-                method: rmcp::model::ReadResourceRequestMethod,
-                params: ReadResourceRequestParams {
-                    uri: uri.to_string(),
-                    meta: None,
-                },
-                extensions: rmcp::model::Extensions::default(),
-            });
+        let params = ReadResourceRequestParams::new(uri.to_string());
+        let request = rmcp::model::ClientRequest::ReadResourceRequest(
+            rmcp::model::ReadResourceRequest::new(params),
+        );
 
         let handle = peer
             .send_cancellable_request(
@@ -911,15 +902,13 @@ impl StdioBackend {
         };
 
         let peer = client.peer().clone();
-        let request = rmcp::model::ClientRequest::GetPromptRequest(rmcp::model::GetPromptRequest {
-            method: rmcp::model::GetPromptRequestMethod,
-            params: GetPromptRequestParams {
-                name: name.to_string(),
-                arguments,
-                meta: None,
-            },
-            extensions: rmcp::model::Extensions::default(),
-        });
+        let mut params = GetPromptRequestParams::new(name.to_string());
+        if let Some(arguments) = arguments {
+            params = params.with_arguments(arguments);
+        }
+        let request = rmcp::model::ClientRequest::GetPromptRequest(
+            rmcp::model::GetPromptRequest::new(params),
+        );
 
         let handle = peer
             .send_cancellable_request(
@@ -981,11 +970,8 @@ impl StdioBackend {
         };
 
         let peer = client.peer().clone();
-        let request = rmcp::model::ClientRequest::CompleteRequest(rmcp::model::CompleteRequest {
-            method: rmcp::model::CompleteRequestMethod,
-            params: request,
-            extensions: rmcp::model::Extensions::default(),
-        });
+        let request =
+            rmcp::model::ClientRequest::CompleteRequest(rmcp::model::CompleteRequest::new(request));
 
         let handle = peer
             .send_cancellable_request(
@@ -1267,16 +1253,12 @@ impl Backend for StdioBackend {
         // Convert arguments to JsonObject
         let args = arguments.as_object().cloned();
 
-        let request = rmcp::model::ClientRequest::CallToolRequest(rmcp::model::CallToolRequest {
-            method: rmcp::model::CallToolRequestMethod,
-            params: CallToolRequestParams {
-                name: name.to_string().into(),
-                arguments: args,
-                meta: None,
-                task: None,
-            },
-            extensions: rmcp::model::Extensions::default(),
-        });
+        let mut params = CallToolRequestParams::new(name.to_string());
+        if let Some(arguments) = args {
+            params = params.with_arguments(arguments);
+        }
+        let request =
+            rmcp::model::ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(params));
 
         let handle = match peer
             .send_cancellable_request(
@@ -1387,15 +1369,10 @@ impl Backend for StdioBackend {
             }
         };
 
-        let request =
-            rmcp::model::ClientRequest::ReadResourceRequest(rmcp::model::ReadResourceRequest {
-                method: rmcp::model::ReadResourceRequestMethod,
-                params: ReadResourceRequestParams {
-                    uri: uri.to_string(),
-                    meta: None,
-                },
-                extensions: rmcp::model::Extensions::default(),
-            });
+        let params = ReadResourceRequestParams::new(uri.to_string());
+        let request = rmcp::model::ClientRequest::ReadResourceRequest(
+            rmcp::model::ReadResourceRequest::new(params),
+        );
 
         let handle = match peer
             .send_cancellable_request(
@@ -1507,15 +1484,13 @@ impl Backend for StdioBackend {
             }
         };
 
-        let request = rmcp::model::ClientRequest::GetPromptRequest(rmcp::model::GetPromptRequest {
-            method: rmcp::model::GetPromptRequestMethod,
-            params: GetPromptRequestParams {
-                name: name.to_string(),
-                arguments,
-                meta: None,
-            },
-            extensions: rmcp::model::Extensions::default(),
-        });
+        let mut params = GetPromptRequestParams::new(name.to_string());
+        if let Some(arguments) = arguments {
+            params = params.with_arguments(arguments);
+        }
+        let request = rmcp::model::ClientRequest::GetPromptRequest(
+            rmcp::model::GetPromptRequest::new(params),
+        );
 
         let handle = match peer
             .send_cancellable_request(
@@ -1611,11 +1586,8 @@ impl Backend for StdioBackend {
             }
         };
 
-        let request = rmcp::model::ClientRequest::CompleteRequest(rmcp::model::CompleteRequest {
-            method: rmcp::model::CompleteRequestMethod,
-            params: request,
-            extensions: rmcp::model::Extensions::default(),
-        });
+        let request =
+            rmcp::model::ClientRequest::CompleteRequest(rmcp::model::CompleteRequest::new(request));
 
         let handle = match peer
             .send_cancellable_request(
@@ -1713,14 +1685,10 @@ impl Backend for StdioBackend {
             _ => unreachable!("handled above"),
         };
 
-        let request = rmcp::model::ClientRequest::SubscribeRequest(rmcp::model::SubscribeRequest {
-            method: rmcp::model::SubscribeRequestMethod,
-            params: rmcp::model::SubscribeRequestParams {
-                uri: uri.to_string(),
-                meta: None,
-            },
-            extensions: rmcp::model::Extensions::default(),
-        });
+        let params = rmcp::model::SubscribeRequestParams::new(uri.to_string());
+        let request = rmcp::model::ClientRequest::SubscribeRequest(
+            rmcp::model::SubscribeRequest::new(params),
+        );
 
         let handle = match peer
             .send_cancellable_request(
@@ -1818,15 +1786,13 @@ impl Backend for StdioBackend {
             _ => unreachable!("handled above"),
         };
 
-        let request =
-            rmcp::model::ClientRequest::UnsubscribeRequest(rmcp::model::UnsubscribeRequest {
-                method: rmcp::model::UnsubscribeRequestMethod,
-                params: rmcp::model::UnsubscribeRequestParams {
-                    uri: uri.to_string(),
-                    meta: None,
-                },
-                extensions: rmcp::model::Extensions::default(),
-            });
+        let params: rmcp::model::UnsubscribeRequestParams =
+            serde_json::from_value(serde_json::json!({ "uri": uri })).map_err(|e| {
+                AdapterError::Runtime(format!("Failed to build unsubscribe request params: {e}"))
+            })?;
+        let request = rmcp::model::ClientRequest::UnsubscribeRequest(
+            rmcp::model::UnsubscribeRequest::new(params),
+        );
 
         let handle = match peer
             .send_cancellable_request(

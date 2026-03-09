@@ -1,4 +1,3 @@
-imports: []
 servers:
   smoke_everything:
     type: stdio

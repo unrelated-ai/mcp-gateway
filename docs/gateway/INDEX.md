@@ -18,7 +18,7 @@ The Adapter stays “dumb plumbing” on purpose: it turns systems into MCP and 
     - Key rotation via `UNRELATED_GATEWAY_SESSION_SECRETS` (comma-separated; first is active for minting)
       - Fallback: `UNRELATED_GATEWAY_SESSION_SECRET` (single secret, no rotation)
       - If neither is set, the Gateway generates an ephemeral secret at startup (not HA-safe)
-    - Legacy compatibility: still accepts the old sign-only `v1.<payload>.<hmac>` format for migration
+    - Legacy `v1.<payload>.<hmac>` session tokens are no longer accepted
   - `tools/list`, `resources/list`, `prompts/list`: fan-out to upstreams + merge
     - Name collisions: prefix with `<upstream_id>:` (same philosophy as the adapter)
     - Resource URI collisions: rewritten into stable gateway URNs (`urn:unrelated-mcp-gateway:resource:...`)

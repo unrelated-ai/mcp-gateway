@@ -55,31 +55,67 @@ export function decodeTenantTokenPayload(token: string): TenantTokenPayloadV1 {
   return { tenant_id: tenantId, exp_unix_secs: expUnixSecs };
 }
 
-export function setTenantSessionCookies(token: string, payload: TenantTokenPayloadV1): void {
-  if (typeof document === "undefined") return;
-  const now = Math.floor(Date.now() / 1000);
-  const maxAge = Math.max(1, payload.exp_unix_secs - now);
+type UnlockSessionResponse = {
+  ok: true;
+  tenantId: string;
+  expUnixSecs: number;
+};
 
-  // v0 UI-only session: cookie is not httpOnly (set from browser JS).
-  // Backend integration can migrate this to httpOnly cookies later.
-  document.cookie = `${TENANT_TOKEN_COOKIE}=${encodeURIComponent(token)}; Path=/; Max-Age=${maxAge}; SameSite=Lax`;
-  document.cookie = `${TENANT_ID_COOKIE}=${encodeURIComponent(payload.tenant_id)}; Path=/; Max-Age=${maxAge}; SameSite=Lax`;
-  document.cookie = `${TENANT_EXP_COOKIE}=${encodeURIComponent(String(payload.exp_unix_secs))}; Path=/; Max-Age=${maxAge}; SameSite=Lax`;
+function parseErrorMessage(text: string): string {
+  const t = text.trim();
+  if (!t) return "Request failed";
+  try {
+    const v = JSON.parse(t) as unknown;
+    if (v && typeof v === "object") {
+      const o = v as Record<string, unknown>;
+      if (typeof o.error === "string" && o.error.trim()) return o.error;
+    }
+  } catch {
+    // ignore non-JSON
+  }
+  return t;
 }
 
-export function clearTenantSessionCookies(): void {
-  if (typeof document === "undefined") return;
-  const past = "Thu, 01 Jan 1970 00:00:00 GMT";
-  document.cookie = `${TENANT_TOKEN_COOKIE}=; Path=/; Expires=${past}; SameSite=Lax`;
-  document.cookie = `${TENANT_ID_COOKIE}=; Path=/; Expires=${past}; SameSite=Lax`;
-  document.cookie = `${TENANT_EXP_COOKIE}=; Path=/; Expires=${past}; SameSite=Lax`;
+export async function establishTenantSession(token: string): Promise<TenantTokenPayloadV1> {
+  const res = await fetch("/api/session/unlock", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: token.trim() }),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(parseErrorMessage(text));
+  }
+  let body: UnlockSessionResponse;
+  try {
+    body = JSON.parse(text) as UnlockSessionResponse;
+  } catch {
+    throw new Error("Invalid unlock response");
+  }
+  if (!body.ok || !body.tenantId || !Number.isFinite(body.expUnixSecs)) {
+    throw new Error("Invalid unlock response");
+  }
+  return {
+    tenant_id: body.tenantId,
+    exp_unix_secs: body.expUnixSecs,
+  };
+}
+
+function buildUnlockPath(nextPath?: string): string {
+  const next =
+    nextPath ??
+    (typeof window !== "undefined" ? `${window.location.pathname}${window.location.search}` : "/");
+  return `/unlock?next=${encodeURIComponent(next)}`;
+}
+
+export function lockTenantSession(nextPath?: string): void {
+  if (typeof window === "undefined") return;
+  const unlockPath = buildUnlockPath(nextPath);
+  window.location.href = `/api/session/logout?next=${encodeURIComponent(unlockPath)}`;
 }
 
 export function forceReunlock(nextPath?: string): void {
-  if (typeof window === "undefined") return;
-  clearTenantSessionCookies();
-  const next = nextPath ?? window.location.pathname;
-  window.location.href = `/unlock?next=${encodeURIComponent(next)}`;
+  lockTenantSession(nextPath);
 }
 
 export function readCookie(name: string): string | null {

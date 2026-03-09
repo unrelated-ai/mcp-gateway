@@ -104,19 +104,10 @@ impl MockUpstream {
         let session_id = uuid::Uuid::new_v4().to_string();
         self.sessions.lock().await.insert(session_id.clone());
 
-        let init_result = InitializeResult {
-            protocol_version: init_params.protocol_version,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: rmcp::model::Implementation {
-                name: "mock-upstream".to_string(),
-                title: None,
-                version: "0".to_string(),
-                description: None,
-                icons: None,
-                website_url: None,
-            },
-            instructions: None,
-        };
+        let init_result =
+            InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
+                .with_protocol_version(init_params.protocol_version)
+                .with_server_info(rmcp::model::Implementation::new("mock-upstream", "0"));
 
         let msg = ServerJsonRpcMessage::Response(JsonRpcResponse {
             jsonrpc: JsonRpcVersion2_0,

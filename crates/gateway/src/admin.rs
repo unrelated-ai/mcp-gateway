@@ -1690,6 +1690,7 @@ struct PutProfileStoreInputs<'a> {
 async fn put_profile_in_store(
     store: &dyn AdminStore,
     req: &PutProfileRequest,
+    upstream_ids: &[String],
     input: PutProfileStoreInputs<'_>,
 ) -> Result<(), BoxResponse> {
     store
@@ -1702,7 +1703,7 @@ async fn put_profile_in_store(
                 enabled: req.enabled,
                 allow_partial_upstreams: req.allow_partial_upstreams,
             },
-            upstream_ids: &req.upstreams,
+            upstream_ids,
             source_ids: &req.sources,
             transforms: &req.transforms,
             enabled_tools: input.enabled_tools,
@@ -1859,12 +1860,22 @@ async fn admin_put_profile_inner_impl(
         &tool_policies,
     )?;
 
+    let resolved_upstreams = admin_put_profile_resolve_upstreams(
+        store,
+        profile_uuid,
+        profile_id.clone(),
+        name.clone(),
+        &req.tenant_id,
+        &req.upstreams,
+    )
+    .await?;
+
     admin_put_profile_validate_no_self_upstream_loop(
         store,
         profile_uuid,
         profile_id.clone(),
         name.clone(),
-        &req.upstreams,
+        &resolved_upstreams,
     )
     .await?;
 
@@ -1874,6 +1885,7 @@ async fn admin_put_profile_inner_impl(
         profile_id.clone(),
         name.clone(),
         &req,
+        &resolved_upstreams,
         PutProfileStoreInputs {
             profile_id: &profile_id,
             name: &name,
@@ -2031,6 +2043,53 @@ fn admin_put_profile_validate_tools(
     Ok(())
 }
 
+async fn resolve_admin_profile_upstream_ids(
+    store: &dyn AdminStore,
+    tenant_id: &str,
+    upstream_ids: &[String],
+) -> Result<Vec<String>, Response> {
+    let mut resolved = Vec::with_capacity(upstream_ids.len());
+    for upstream_id in upstream_ids {
+        // Admin profile writes keep previous behavior for unknown IDs, but when a
+        // tenant-owned managed upstream exists we must bind to its internal ID.
+        let internal_id = tenant_upstream_internal_id(tenant_id, upstream_id);
+        let has_tenant_owned = store
+            .get_upstream(&internal_id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response())?
+            .is_some();
+        if has_tenant_owned {
+            resolved.push(internal_id);
+        } else {
+            resolved.push(upstream_id.clone());
+        }
+    }
+    Ok(resolved)
+}
+
+async fn admin_put_profile_resolve_upstreams(
+    store: &dyn AdminStore,
+    profile_uuid: Uuid,
+    profile_id: String,
+    name: String,
+    tenant_id: &str,
+    upstream_ids: &[String],
+) -> AdminPutProfileInnerResult<Vec<String>> {
+    match resolve_admin_profile_upstream_ids(store, tenant_id, upstream_ids).await {
+        Ok(v) => Ok(v),
+        Err(resp) => {
+            let status = resp.status();
+            Err(Box::new(AdminPutProfileInnerError {
+                resp,
+                profile_uuid: Some(profile_uuid),
+                profile_id: Some(profile_id),
+                name: Some(name),
+                error: AuditError::new("request_failed", status.to_string()),
+            }))
+        }
+    }
+}
+
 async fn admin_put_profile_validate_no_self_upstream_loop(
     store: &dyn AdminStore,
     profile_uuid: Uuid,
@@ -2057,9 +2116,10 @@ async fn admin_put_profile_write_store(
     profile_id: String,
     name: String,
     req: &PutProfileRequest,
+    resolved_upstreams: &[String],
     store_input: PutProfileStoreInputs<'_>,
 ) -> AdminPutProfileInnerResult<()> {
-    if let Err(resp) = put_profile_in_store(store, req, store_input).await {
+    if let Err(resp) = put_profile_in_store(store, req, resolved_upstreams, store_input).await {
         let status = resp.status();
         return Err(Box::new(AdminPutProfileInnerError {
             resp: *resp,

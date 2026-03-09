@@ -14,7 +14,6 @@ import {
   SourcesDbIcon,
 } from "@/components/icons";
 import { type ReactNode } from "react";
-import { clearTenantSessionCookies } from "@/src/lib/tenant-session";
 
 interface AppShellProps {
   children: ReactNode;
@@ -115,16 +114,16 @@ export function AppShell({ children }: AppShellProps) {
 
         {/* Footer */}
         <div className="p-3 border-t border-zinc-800/60">
-          <Link
-            href="/unlock"
+          <button
+            type="button"
             onClick={() => {
-              clearTenantSessionCookies();
+              window.location.href = "/api/session/logout?next=%2Funlock";
             }}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 transition-all duration-150"
           >
             <LockIcon className="w-5 h-5 text-zinc-500" />
             Lock / Switch Tenant
-          </Link>
+          </button>
         </div>
       </aside>
 

@@ -20,7 +20,7 @@ serde_json = "1"
 anyhow = "1"
 async-trait = "0.1"
 futures = "0.3"
-rmcp = { version = "0.15.0", features = ["client", "transport-streamable-http-client-reqwest", "elicitation"] }
+rmcp = { version = "1.1.0", features = ["client", "transport-streamable-http-client-reqwest", "elicitation"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 jsonwebtoken = "9"
 base64 = "0.22"
@@ -52,3 +52,4 @@ rsa = { version = "0.9.10", features = ["pem"] }
 tempfile = "3"
 testcontainers = "0.27.0"
 unrelated-test-support = { path = "../test-support" }
+reqwest13 = { package = "reqwest", version = "0.13.2", default-features = false, features = ["json", "rustls", "stream"] }
