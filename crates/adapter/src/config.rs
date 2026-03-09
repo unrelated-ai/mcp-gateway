@@ -1,8 +1,8 @@
 //! Configuration parsing and validation.
 //!
-//! Supports both:
-//! - Legacy JSON format (mcpServers only)
-//! - Unified config format (adapter/imports/servers)
+//! Unified config format:
+//! - `adapter` process settings
+//! - `servers` runtime backends
 
 use crate::error::{AdapterError, Result};
 use clap::Parser;
@@ -41,21 +41,11 @@ pub struct CliArgs {
     #[arg(short = 'c', long = "config", env = "UNRELATED_CONFIG")]
     pub config: Option<PathBuf>,
 
-    /// Path(s) to MCP servers JSON config (mcpServers format).
-    /// Can be specified multiple times. Legacy option.
-    #[arg(
-        short = 'm',
-        long = "mcp-config",
-        env = "UNRELATED_MCP_CONFIG",
-        value_delimiter = ':'
-    )]
-    pub mcp_config: Vec<PathBuf>,
-
     /// Convenience mode: single `OpenAPI` spec URL (no config file needed).
     #[arg(long = "api-spec", env = "UNRELATED_API_SPEC")]
     pub api_spec: Option<String>,
 
-    /// Print the fully resolved configuration (after imports + env expansion + overrides) and exit.
+    /// Print the fully resolved configuration (after env expansion + overrides) and exit.
     #[arg(long = "print-effective-config")]
     pub print_effective_config: bool,
 
@@ -159,7 +149,7 @@ pub struct RestartBackoffConfig {
 }
 
 // ============================================================================
-// Unified Config File (adapter/imports/servers)
+// Unified Config File (adapter/servers)
 // ============================================================================
 
 const DEFAULT_BIND: &str = "127.0.0.1:3000";
@@ -269,31 +259,20 @@ pub struct AdapterSection {
     pub transforms: TransformPipeline,
 }
 
-/// Import-time includes (load-time macros).
+/// Legacy import stubs kept only to produce migration-focused errors.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
-pub enum ImportConfig {
+pub enum LegacyImportConfig {
     #[serde(rename = "mcp-json")]
-    McpJson(McpJsonImportConfig),
+    McpJson(LegacyMcpJsonImportConfig),
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct McpJsonImportConfig {
+pub struct LegacyMcpJsonImportConfig {
     pub path: String,
     #[serde(default)]
     pub prefix: Option<String>,
-    #[serde(default)]
-    pub conflict: ImportConflictPolicy,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ImportConflictPolicy {
-    #[default]
-    Error,
-    Skip,
-    Overwrite,
 }
 
 /// Unified config file format.
@@ -303,22 +282,9 @@ pub struct ConfigFile {
     #[serde(default)]
     pub adapter: AdapterSection,
     #[serde(default)]
-    pub imports: Vec<ImportConfig>,
+    pub imports: Vec<LegacyImportConfig>,
     #[serde(default)]
     pub servers: HashMap<String, ServerConfig>,
-}
-
-// ============================================================================
-// MCP Server Config (Stdio)
-// ============================================================================
-
-/// Legacy MCP JSON configuration format.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct McpConfigFile {
-    /// Map of server name to server configuration.
-    #[serde(default)]
-    pub mcp_servers: HashMap<String, McpServerConfig>,
 }
 
 /// Configuration for a single stdio MCP server.
@@ -385,6 +351,8 @@ pub struct EffectiveConfig {
     pub servers: HashMap<String, ServerConfig>,
 }
 
+const REDACTED_SECRET: &str = "***REDACTED***";
+
 impl AdapterConfig {
     pub fn effective(&self) -> EffectiveConfig {
         EffectiveConfig {
@@ -392,6 +360,23 @@ impl AdapterConfig {
             transforms: self.transforms.clone(),
             servers: self.servers.clone(),
         }
+    }
+
+    /// Like `effective()`, but with sensitive credentials redacted for safe printing.
+    #[must_use]
+    pub fn effective_redacted(&self) -> EffectiveConfig {
+        let mut cfg = self.effective();
+        if cfg.adapter.mcp_bearer_token.is_some() {
+            cfg.adapter.mcp_bearer_token = Some(REDACTED_SECRET.to_string());
+        }
+        for server in cfg.servers.values_mut() {
+            match server {
+                ServerConfig::Stdio { .. } => {}
+                ServerConfig::OpenApi { config } => redact_auth(config.auth.as_mut()),
+                ServerConfig::Http { config } => redact_auth(config.auth.as_mut()),
+            }
+        }
+        cfg
     }
 
     /// Load and merge configuration from CLI args, env, and config files.
@@ -414,19 +399,16 @@ impl AdapterConfig {
                 servers.insert(name, expanded);
             }
 
-            // Apply imports from file.
-            for import in file.imports {
-                apply_import(&mut servers, import)?;
+            // Legacy import support was removed; fail fast with a migration-focused error.
+            if !file.imports.is_empty() {
+                return Err(unsupported_legacy_imports_error(&file.imports));
             }
         }
 
         // 2) Apply CLI/ENV overrides for adapter settings (CLI > ENV is handled by clap).
         apply_cli_overrides(&mut adapter, &cli)?;
 
-        // 3) Apply legacy `--mcp-config` as implicit mcp-json imports.
-        apply_legacy_mcp_configs(&mut servers, &cli.mcp_config)?;
-
-        // 4) Apply quick `--api-spec` as implicit OpenAPI server.
+        // 3) Apply quick `--api-spec` as implicit OpenAPI server.
         if let Some(spec_url) = &cli.api_spec {
             let expanded = expand_env_string(spec_url)?;
             let cfg = ApiServerConfig {
@@ -445,18 +427,14 @@ impl AdapterConfig {
             servers.insert("default".to_string(), ServerConfig::OpenApi { config: cfg });
         }
 
-        // 5) Validate: must have at least one config source (unless a config file was explicitly provided).
-        if cli.config.is_none()
-            && cli.mcp_config.is_empty()
-            && cli.api_spec.is_none()
-            && servers.is_empty()
-        {
+        // 4) Validate: must have at least one config source (unless a config file was explicitly provided).
+        if cli.config.is_none() && cli.api_spec.is_none() && servers.is_empty() {
             return Err(AdapterError::Config(
-                "No configuration provided. Use --config, --mcp-config, or --api-spec".to_string(),
+                "No configuration provided. Use --config or --api-spec".to_string(),
             ));
         }
 
-        // 6) Validate restart backoff bounds.
+        // 5) Validate restart backoff bounds.
         if adapter.restart_backoff.min_ms > adapter.restart_backoff.max_ms {
             return Err(AdapterError::Config(format!(
                 "Invalid restart backoff: minMs ({}) must be <= maxMs ({})",
@@ -464,7 +442,7 @@ impl AdapterConfig {
             )));
         }
 
-        // 7) Clamp tool call timeout to the shared cap (Gateway ↔ Adapter coordination).
+        // 6) Clamp tool call timeout to the shared cap (Gateway ↔ Adapter coordination).
         let cap = crate::timeouts::tool_call_timeout_cap_secs();
         if adapter.call_timeout == 0 {
             return Err(AdapterError::Config("callTimeout must be > 0".to_string()));
@@ -484,6 +462,20 @@ impl AdapterConfig {
             transforms,
             servers,
         })
+    }
+}
+
+fn redact_auth(auth: Option<&mut AuthConfig>) {
+    let Some(auth) = auth else {
+        return;
+    };
+    match auth {
+        AuthConfig::None => {}
+        AuthConfig::Bearer { token } => *token = REDACTED_SECRET.to_string(),
+        AuthConfig::Header { value, .. } | AuthConfig::Query { value, .. } => {
+            *value = REDACTED_SECRET.to_string();
+        }
+        AuthConfig::Basic { password, .. } => *password = REDACTED_SECRET.to_string(),
     }
 }
 
@@ -589,105 +581,29 @@ fn apply_cli_overrides(adapter: &mut AdapterSettings, cli: &CliArgs) -> Result<(
     Ok(())
 }
 
-fn apply_import(servers: &mut HashMap<String, ServerConfig>, import: ImportConfig) -> Result<()> {
-    match import {
-        ImportConfig::McpJson(cfg) => {
-            let path_str = expand_env_string(&cfg.path)?;
-            let prefix = cfg.prefix.map(|p| expand_env_string(&p)).transpose()?;
-            let content = std::fs::read_to_string(&path_str).map_err(|e| {
-                AdapterError::Config(format!("Failed to read import {path_str}: {e}"))
-            })?;
-            let file: McpConfigFile = serde_json::from_str(&content).map_err(|e| {
-                AdapterError::Config(format!("Failed to parse import {path_str}: {e}"))
-            })?;
-
-            for (name, server_config) in file.mcp_servers {
-                let expanded = expand_mcp_env_vars(server_config)?;
-                let final_name = match &prefix {
-                    Some(p) => format!("{p}:{name}"),
-                    None => name,
+fn unsupported_legacy_imports_error(imports: &[LegacyImportConfig]) -> AdapterError {
+    let mut details = Vec::new();
+    for import in imports {
+        match import {
+            LegacyImportConfig::McpJson(cfg) => {
+                let entry = if let Some(prefix) = &cfg.prefix {
+                    format!("{} (prefix: {})", cfg.path, prefix)
+                } else {
+                    cfg.path.clone()
                 };
-                merge_server(
-                    servers,
-                    final_name,
-                    ServerConfig::Stdio { config: expanded },
-                    cfg.conflict,
-                    Some(&path_str),
-                )?;
+                details.push(entry);
             }
-            Ok(())
         }
     }
-}
-
-fn apply_legacy_mcp_configs(
-    servers: &mut HashMap<String, ServerConfig>,
-    paths: &[PathBuf],
-) -> Result<()> {
-    let mut seen_paths: Vec<PathBuf> = Vec::new();
-    for path in paths {
-        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-        if seen_paths.contains(&canonical) {
-            continue;
-        }
-        seen_paths.push(canonical);
-
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            AdapterError::Config(format!("Failed to read {}: {}", path.display(), e))
-        })?;
-
-        let file: McpConfigFile = serde_json::from_str(&content).map_err(|e| {
-            AdapterError::Config(format!("Failed to parse {}: {}", path.display(), e))
-        })?;
-
-        for (name, server_config) in file.mcp_servers {
-            let expanded = expand_mcp_env_vars(server_config)?;
-            merge_server(
-                servers,
-                name,
-                ServerConfig::Stdio { config: expanded },
-                ImportConflictPolicy::Error,
-                Some(&path.display().to_string()),
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn merge_server(
-    servers: &mut HashMap<String, ServerConfig>,
-    name: String,
-    new_server: ServerConfig,
-    policy: ImportConflictPolicy,
-    source: Option<&str>,
-) -> Result<()> {
-    match servers.get(&name) {
-        None => {
-            servers.insert(name, new_server);
-            Ok(())
-        }
-        Some(existing) => match policy {
-            ImportConflictPolicy::Skip => Ok(()),
-            ImportConflictPolicy::Overwrite => {
-                servers.insert(name, new_server);
-                Ok(())
-            }
-            ImportConflictPolicy::Error => {
-                // Allow dedupe for identical stdio configs.
-                if let (ServerConfig::Stdio { config: a }, ServerConfig::Stdio { config: b }) =
-                    (existing, &new_server)
-                    && a == b
-                {
-                    return Ok(());
-                }
-
-                let src = source.unwrap_or("<import>");
-                Err(AdapterError::Config(format!(
-                    "Conflicting configurations for server '{name}' from {src}"
-                )))
-            }
-        },
-    }
+    let joined = if details.is_empty() {
+        "<unknown>".to_string()
+    } else {
+        details.join(", ")
+    };
+    AdapterError::Config(format!(
+        "The `imports` section is no longer supported. Found legacy `mcp-json` imports: {joined}. \
+Please move each imported server into `servers:` using `type: stdio` and remove `imports`."
+    ))
 }
 
 fn expand_server_env_vars(server: ServerConfig) -> Result<ServerConfig> {
@@ -849,7 +765,27 @@ pub fn expand_env_string(s: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use tempfile::tempdir;
+
+    fn cli_args_with_config(config: PathBuf) -> CliArgs {
+        CliArgs {
+            config: Some(config),
+            api_spec: None,
+            print_effective_config: false,
+            bind: None,
+            mcp_bearer_token: None,
+            log_level: None,
+            call_timeout: None,
+            startup_timeout: None,
+            openapi_probe: None,
+            openapi_probe_timeout: None,
+            restart_policy: None,
+            stdio_lifecycle: None,
+            restart_backoff_min_ms: None,
+            restart_backoff_max_ms: None,
+        }
+    }
 
     #[test]
     fn test_expand_env_string() {
@@ -895,238 +831,108 @@ mod tests {
     }
 
     #[test]
-    fn mcp_json_import_conflict_error_rejects_different_stdio_configs() {
+    fn effective_redacted_masks_sensitive_values() {
         let dir = tempdir().expect("tempdir");
-        let mcp1 = dir.path().join("mcp1.json");
-        let mcp2 = dir.path().join("mcp2.json");
-        std::fs::write(
-            &mcp1,
-            r#"{"mcpServers":{"s1":{"command":"cmd-a","args":[],"env":{}}}}"#,
-        )
-        .expect("write mcp1");
-        std::fs::write(
-            &mcp2,
-            r#"{"mcpServers":{"s1":{"command":"cmd-b","args":[],"env":{}}}}"#,
-        )
-        .expect("write mcp2");
-
         let cfg = dir.path().join("cfg.yaml");
         std::fs::write(
             &cfg,
-            format!(
-                r#"imports:
-  - type: mcp-json
-    path: "{}"
-    conflict: error
-  - type: mcp-json
-    path: "{}"
-    conflict: error
-"#,
-                mcp1.display(),
-                mcp2.display()
-            ),
+            r"adapter:
+  mcpBearerToken: MCP_BEARER_SUPER_SECRET
+servers:
+  http_bearer:
+    type: http
+    baseUrl: https://example.com
+    auth:
+      type: bearer
+      token: HTTP_BEARER_SECRET
+  http_header:
+    type: http
+    baseUrl: https://example.com
+    auth:
+      type: header
+      name: X-Api-Key
+      value: HTTP_HEADER_SECRET
+  http_query:
+    type: http
+    baseUrl: https://example.com
+    auth:
+      type: query
+      name: api_key
+      value: HTTP_QUERY_SECRET
+  openapi_basic:
+    type: openapi
+    spec: https://example.com/openapi.json
+    auth:
+      type: basic
+      username: test-user
+      password: OPENAPI_BASIC_PASSWORD_SECRET
+",
         )
         .expect("write cfg");
 
-        let cli = CliArgs {
-            config: Some(cfg),
-            mcp_config: vec![],
-            api_spec: None,
-            print_effective_config: false,
-            bind: None,
-            mcp_bearer_token: None,
-            log_level: None,
-            call_timeout: None,
-            startup_timeout: None,
-            openapi_probe: None,
-            openapi_probe_timeout: None,
-            restart_policy: None,
-            stdio_lifecycle: None,
-            restart_backoff_min_ms: None,
-            restart_backoff_max_ms: None,
-        };
+        let loaded = AdapterConfig::load(cli_args_with_config(cfg)).expect("load config");
 
-        let err = AdapterConfig::load(cli).unwrap_err().to_string();
+        let rendered =
+            serde_yaml::to_string(&loaded.effective_redacted()).expect("serialize redacted config");
+
+        for secret in [
+            "MCP_BEARER_SUPER_SECRET",
+            "HTTP_BEARER_SECRET",
+            "HTTP_HEADER_SECRET",
+            "HTTP_QUERY_SECRET",
+            "OPENAPI_BASIC_PASSWORD_SECRET",
+        ] {
+            assert!(
+                !rendered.contains(secret),
+                "redacted output leaked secret '{secret}'",
+            );
+        }
+        assert_eq!(rendered.matches(REDACTED_SECRET).count(), 5);
+    }
+
+    #[test]
+    fn legacy_imports_are_rejected_with_migration_message() {
+        let dir = tempdir().expect("tempdir");
+        let cfg = dir.path().join("cfg.yaml");
+        std::fs::write(
+            &cfg,
+            r"imports:
+  - type: mcp-json
+    path: ./legacy.json
+servers: {}
+",
+        )
+        .expect("write cfg");
+
+        let err = AdapterConfig::load(cli_args_with_config(cfg))
+            .unwrap_err()
+            .to_string();
         assert!(
-            err.contains("Conflicting configurations for server 's1'"),
+            err.contains("`imports` section is no longer supported"),
             "err={err}"
         );
+        assert!(err.contains("mcp-json"), "err={err}");
     }
 
     #[test]
-    fn mcp_json_import_conflict_error_allows_identical_stdio_configs() {
+    fn empty_imports_list_is_allowed() {
         let dir = tempdir().expect("tempdir");
-        let mcp1 = dir.path().join("mcp1.json");
-        let mcp2 = dir.path().join("mcp2.json");
-        std::fs::write(
-            &mcp1,
-            r#"{"mcpServers":{"s1":{"command":"same","args":["--x"],"env":{"A":"1"}}}}"#,
-        )
-        .expect("write mcp1");
-        std::fs::write(
-            &mcp2,
-            r#"{"mcpServers":{"s1":{"command":"same","args":["--x"],"env":{"A":"1"}}}}"#,
-        )
-        .expect("write mcp2");
-
         let cfg = dir.path().join("cfg.yaml");
         std::fs::write(
             &cfg,
-            format!(
-                r#"imports:
-  - type: mcp-json
-    path: "{}"
-    conflict: error
-  - type: mcp-json
-    path: "{}"
-    conflict: error
-"#,
-                mcp1.display(),
-                mcp2.display()
-            ),
+            r"imports: []
+servers:
+  local:
+    type: stdio
+    command: /bin/echo
+",
         )
         .expect("write cfg");
 
-        let cli = CliArgs {
-            config: Some(cfg),
-            mcp_config: vec![],
-            api_spec: None,
-            print_effective_config: false,
-            bind: None,
-            mcp_bearer_token: None,
-            log_level: None,
-            call_timeout: None,
-            startup_timeout: None,
-            openapi_probe: None,
-            openapi_probe_timeout: None,
-            restart_policy: None,
-            stdio_lifecycle: None,
-            restart_backoff_min_ms: None,
-            restart_backoff_max_ms: None,
-        };
-
-        let loaded = AdapterConfig::load(cli).expect("load");
+        let loaded = AdapterConfig::load(cli_args_with_config(cfg)).expect("load");
         assert!(matches!(
-            loaded.servers.get("s1"),
+            loaded.servers.get("local"),
             Some(ServerConfig::Stdio { .. })
         ));
-    }
-
-    #[test]
-    fn mcp_json_import_conflict_skip_keeps_first() {
-        let dir = tempdir().expect("tempdir");
-        let mcp1 = dir.path().join("mcp1.json");
-        let mcp2 = dir.path().join("mcp2.json");
-        std::fs::write(
-            &mcp1,
-            r#"{"mcpServers":{"s1":{"command":"cmd-a","args":[],"env":{}}}}"#,
-        )
-        .expect("write mcp1");
-        std::fs::write(
-            &mcp2,
-            r#"{"mcpServers":{"s1":{"command":"cmd-b","args":[],"env":{}}}}"#,
-        )
-        .expect("write mcp2");
-
-        let cfg = dir.path().join("cfg.yaml");
-        std::fs::write(
-            &cfg,
-            format!(
-                r#"imports:
-  - type: mcp-json
-    path: "{}"
-    conflict: error
-  - type: mcp-json
-    path: "{}"
-    conflict: skip
-"#,
-                mcp1.display(),
-                mcp2.display()
-            ),
-        )
-        .expect("write cfg");
-
-        let cli = CliArgs {
-            config: Some(cfg),
-            mcp_config: vec![],
-            api_spec: None,
-            print_effective_config: false,
-            bind: None,
-            mcp_bearer_token: None,
-            log_level: None,
-            call_timeout: None,
-            startup_timeout: None,
-            openapi_probe: None,
-            openapi_probe_timeout: None,
-            restart_policy: None,
-            stdio_lifecycle: None,
-            restart_backoff_min_ms: None,
-            restart_backoff_max_ms: None,
-        };
-
-        let loaded = AdapterConfig::load(cli).expect("load");
-        let ServerConfig::Stdio { config } = loaded.servers.get("s1").unwrap() else {
-            panic!("expected stdio config");
-        };
-        assert_eq!(config.command, "cmd-a");
-    }
-
-    #[test]
-    fn mcp_json_import_conflict_overwrite_replaces() {
-        let dir = tempdir().expect("tempdir");
-        let mcp1 = dir.path().join("mcp1.json");
-        let mcp2 = dir.path().join("mcp2.json");
-        std::fs::write(
-            &mcp1,
-            r#"{"mcpServers":{"s1":{"command":"cmd-a","args":[],"env":{}}}}"#,
-        )
-        .expect("write mcp1");
-        std::fs::write(
-            &mcp2,
-            r#"{"mcpServers":{"s1":{"command":"cmd-b","args":[],"env":{}}}}"#,
-        )
-        .expect("write mcp2");
-
-        let cfg = dir.path().join("cfg.yaml");
-        std::fs::write(
-            &cfg,
-            format!(
-                r#"imports:
-  - type: mcp-json
-    path: "{}"
-    conflict: error
-  - type: mcp-json
-    path: "{}"
-    conflict: overwrite
-"#,
-                mcp1.display(),
-                mcp2.display()
-            ),
-        )
-        .expect("write cfg");
-
-        let cli = CliArgs {
-            config: Some(cfg),
-            mcp_config: vec![],
-            api_spec: None,
-            print_effective_config: false,
-            bind: None,
-            mcp_bearer_token: None,
-            log_level: None,
-            call_timeout: None,
-            startup_timeout: None,
-            openapi_probe: None,
-            openapi_probe_timeout: None,
-            restart_policy: None,
-            stdio_lifecycle: None,
-            restart_backoff_min_ms: None,
-            restart_backoff_max_ms: None,
-        };
-
-        let loaded = AdapterConfig::load(cli).expect("load");
-        let ServerConfig::Stdio { config } = loaded.servers.get("s1").unwrap() else {
-            panic!("expected stdio config");
-        };
-        assert_eq!(config.command, "cmd-b");
     }
 }

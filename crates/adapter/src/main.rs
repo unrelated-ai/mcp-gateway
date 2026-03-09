@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
     let config = AdapterConfig::load(cli)?;
 
     if config.cli.print_effective_config {
-        let yaml = serde_yaml::to_string(&config.effective())?;
+        let yaml = serde_yaml::to_string(&config.effective_redacted())?;
         print!("{yaml}");
         return Ok(());
     }

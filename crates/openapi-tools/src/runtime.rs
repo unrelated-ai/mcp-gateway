@@ -408,7 +408,7 @@ impl OpenApiToolSource {
     /// Discover tools from the `OpenAPI` spec.
     async fn discover_tools(&self, spec: &OpenAPI) -> Result<Vec<GeneratedTool>> {
         let root_doc = DocId::parse(&self.config.spec)?;
-        let resolver = OpenApiResolver::new(root_doc, spec, &self.client)?;
+        let resolver = OpenApiResolver::new(root_doc, spec, &self.client, &self.safety)?;
         let mut tools = Vec::new();
         let mut tool_names: HashSet<String> = HashSet::new();
         let mut ops: Vec<OperationInfo> = Vec::new();

@@ -21,6 +21,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use unrelated_http_tools::safety::{OutboundHttpSafety, sanitize_reqwest_error};
 use url::Url;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -83,6 +84,7 @@ fn canonicalize_best_effort(path: PathBuf) -> PathBuf {
 pub struct OpenApiResolver<'a> {
     root_doc: DocId,
     client: &'a Client,
+    safety: &'a OutboundHttpSafety,
     docs: RwLock<HashMap<DocId, Arc<Value>>>,
 }
 
@@ -92,7 +94,12 @@ impl<'a> OpenApiResolver<'a> {
     /// # Errors
     ///
     /// Returns an error if the root spec cannot be converted into JSON for caching.
-    pub fn new(root_doc: DocId, spec: &OpenAPI, client: &'a Client) -> Result<Self> {
+    pub fn new(
+        root_doc: DocId,
+        spec: &OpenAPI,
+        client: &'a Client,
+        safety: &'a OutboundHttpSafety,
+    ) -> Result<Self> {
         let root_value =
             serde_json::to_value(spec).map_err(|e| OpenApiToolsError::OpenApi(e.to_string()))?;
         let mut docs = HashMap::new();
@@ -100,6 +107,7 @@ impl<'a> OpenApiResolver<'a> {
         Ok(Self {
             root_doc,
             client,
+            safety,
             docs: RwLock::new(docs),
         })
     }
@@ -351,19 +359,30 @@ impl<'a> OpenApiResolver<'a> {
                     path.display(),
                 ))
             })?,
-            DocId::Url(url) => self
-                .client
-                .get(url.clone())
-                .send()
-                .await
-                .map_err(|e| {
-                    OpenApiToolsError::OpenApi(format!("Failed to fetch referenced URL {url}: {e}"))
-                })?
-                .text()
-                .await
-                .map_err(|e| {
-                    OpenApiToolsError::OpenApi(format!("Failed to read referenced URL body: {e}"))
-                })?,
+            DocId::Url(url) => {
+                self.safety
+                    .check_url(url)
+                    .await
+                    .map_err(|e| OpenApiToolsError::Http(format!("Referenced URL blocked: {e}")))?;
+                self.client
+                    .get(url.clone())
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        OpenApiToolsError::OpenApi(format!(
+                            "Failed to fetch referenced URL {url}: {}",
+                            sanitize_reqwest_error(&e)
+                        ))
+                    })?
+                    .text()
+                    .await
+                    .map_err(|e| {
+                        OpenApiToolsError::OpenApi(format!(
+                            "Failed to read referenced URL body: {}",
+                            sanitize_reqwest_error(&e)
+                        ))
+                    })?
+            }
         };
 
         let parsed: Value = serde_json::from_str(&content)
@@ -378,5 +397,40 @@ impl<'a> OpenApiResolver<'a> {
         let parsed = Arc::new(parsed);
         self.docs.write().insert(doc.clone(), Arc::clone(&parsed));
         Ok(parsed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unrelated_http_tools::safety::OutboundHttpSafety;
+
+    #[tokio::test]
+    async fn blocks_external_ref_urls_under_restrictive_safety_policy() {
+        let spec_yaml = r#"
+openapi: "3.0.0"
+info:
+  title: t
+  version: "1"
+paths:
+  /pet:
+    $ref: "http://127.0.0.1:8080/openapi.yaml#/paths/~1pet"
+"#;
+        let spec: OpenAPI = serde_yaml::from_str(spec_yaml).expect("parse spec");
+        let root_doc = DocId::parse("inline-root.yaml").expect("root doc id");
+        let client = Client::new();
+        let safety = OutboundHttpSafety::gateway_default();
+        let resolver = OpenApiResolver::new(root_doc, &spec, &client, &safety).expect("resolver");
+
+        let path_ref = spec.paths.paths.get("/pet").expect("path ref");
+
+        let err = resolver
+            .resolve_path_item(resolver.root_doc(), path_ref)
+            .await
+            .expect_err("expected external ref URL to be blocked");
+        assert!(
+            err.to_string().contains("Referenced URL blocked"),
+            "err={err}",
+        );
     }
 }
