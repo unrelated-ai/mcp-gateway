@@ -9,7 +9,7 @@ import { CheckCircleIconBold, CheckIcon, ExclamationIcon, UnlockIcon } from "@/c
 import { CopyBlock, Modal } from "@/components/ui";
 import {
   decodeTenantTokenPayload,
-  setTenantSessionCookies,
+  establishTenantSession,
   type TenantTokenPayloadV1,
 } from "@/src/lib/tenant-session";
 
@@ -22,6 +22,7 @@ type UnlockForm = z.infer<typeof unlockSchema>;
 export function UnlockTenantCard() {
   const router = useRouter();
   const [isValidating, setIsValidating] = useState(false);
+  const [isUnlocking, setIsUnlocking] = useState(false);
   const [showResetHelp, setShowResetHelp] = useState(false);
   const [tokenInfo, setTokenInfo] = useState<{
     payload: TenantTokenPayloadV1;
@@ -71,15 +72,26 @@ export function UnlockTenantCard() {
     }, 250);
   });
 
-  const handleUnlock = () => {
+  const handleUnlock = async () => {
     if (!tokenInfo) return;
-    setTenantSessionCookies(getValues("token").trim(), tokenInfo.payload);
+    setIsUnlocking(true);
+    clearErrors("token");
+    try {
+      await establishTenantSession(getValues("token").trim());
 
-    const next =
-      typeof window !== "undefined"
-        ? new URLSearchParams(window.location.search).get("next")
-        : null;
-    router.replace(next && next.startsWith("/") ? next : "/profiles");
+      const next =
+        typeof window !== "undefined"
+          ? new URLSearchParams(window.location.search).get("next")
+          : null;
+      router.replace(next && next.startsWith("/") ? next : "/profiles");
+    } catch (e) {
+      setError("token", {
+        type: "validate",
+        message: e instanceof Error ? e.message : "Failed to unlock tenant session",
+      });
+    } finally {
+      setIsUnlocking(false);
+    }
   };
 
   return (
@@ -158,10 +170,11 @@ export function UnlockTenantCard() {
 
           <button
             onClick={handleUnlock}
+            disabled={isUnlocking}
             className="mt-6 w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-b from-violet-500 to-violet-600 text-white font-medium shadow-lg shadow-violet-500/25 hover:from-violet-400 hover:to-violet-500 transition-all duration-150"
           >
             <UnlockIcon className="w-5 h-5" />
-            Unlock &amp; Enter Dashboard
+            {isUnlocking ? "Unlocking..." : "Unlock & Enter Dashboard"}
           </button>
         </div>
       )}

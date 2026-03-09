@@ -6,7 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ConfirmModal, CopyButton } from "@/components/ui";
 import { SectionCard, Toggle } from "@/components/ui";
 import { qk } from "@/src/lib/queryKeys";
-import { clearTenantSessionCookies, getTenantExpFromCookies } from "@/src/lib/tenant-session";
+import { getTenantExpFromCookies, lockTenantSession } from "@/src/lib/tenant-session";
 import { LockIcon, ServerIconDevice, UserIcon } from "@/components/icons";
 import { GATEWAY_DATA_BASE, UI_VERSION } from "@/src/lib/env";
 import { useToastStore } from "@/src/lib/toast-store";
@@ -705,8 +705,7 @@ export default function SettingsPage() {
         open={showConfirmLock}
         onClose={() => setShowConfirmLock(false)}
         onConfirm={() => {
-          clearTenantSessionCookies();
-          window.location.href = "/unlock";
+          lockTenantSession();
         }}
         title="Lock session?"
         description="This will clear your session and return you to the unlock screen. You'll need your tenant token to access the dashboard again."
