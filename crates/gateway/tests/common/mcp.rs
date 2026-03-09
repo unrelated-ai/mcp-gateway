@@ -1,8 +1,10 @@
 use anyhow::Context as _;
+use reqwest13 as reqwest;
 use rmcp::model::ClientJsonRpcMessage;
 use rmcp::transport::streamable_http_client::{
     StreamableHttpClient as _, StreamableHttpPostResponse,
 };
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Minimal MCP client for gateway integration tests.
@@ -37,7 +39,7 @@ impl McpSession {
         .expect("initialize json must deserialize");
 
         let resp = client
-            .post_message(uri.clone(), init, None, auth_header.clone())
+            .post_message(uri.clone(), init, None, auth_header.clone(), HashMap::new())
             .await
             .context("POST initialize")?;
         let (_msg, session_id) = resp
@@ -80,12 +82,13 @@ impl McpSession {
                 msg,
                 Some(self.session_id.clone()),
                 self.default_auth_header.clone(),
+                HashMap::new(),
             )
             .await
             .context("POST notifications/initialized")?;
 
-        resp.expect_accepted::<reqwest::Error>()
-            .context("expected 202 Accepted")?;
+        resp.expect_accepted_or_json::<reqwest::Error>()
+            .context("expected 202 Accepted or JSON response")?;
 
         Ok(())
     }
@@ -132,6 +135,7 @@ impl McpSession {
                 msg,
                 Some(self.session_id.clone()),
                 auth_header,
+                HashMap::new(),
             )
             .await
             .with_context(|| format!("POST {method}"))?;
@@ -163,5 +167,6 @@ async fn read_first_server_message(
             bail!("unexpected end of SSE stream")
         }
         StreamableHttpPostResponse::Accepted => bail!("unexpected 202 Accepted response"),
+        _ => bail!("unsupported streamable HTTP response type"),
     }
 }

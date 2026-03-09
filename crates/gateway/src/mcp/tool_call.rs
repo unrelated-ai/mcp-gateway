@@ -917,6 +917,11 @@ async fn proxy_upstream_tool_call_with_retry(
                 stream, remaining, limit_ctx,
             ))
         }
+        _ => Err(super::jsonrpc_error_response(
+            call.req_id.clone(),
+            ErrorCode::INTERNAL_ERROR,
+            "unsupported upstream transport response".to_string(),
+        )),
     }
 }
 

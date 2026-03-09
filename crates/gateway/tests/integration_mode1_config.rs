@@ -237,19 +237,10 @@ impl MockUpstream {
         let session_id = uuid::Uuid::new_v4().to_string();
         self.sessions.lock().await.insert(session_id.clone());
 
-        let init_result = InitializeResult {
-            protocol_version: init_params.protocol_version,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: rmcp::model::Implementation {
-                name: "mock-upstream".to_string(),
-                title: None,
-                version: "0".to_string(),
-                description: None,
-                icons: None,
-                website_url: None,
-            },
-            instructions: None,
-        };
+        let init_result =
+            InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
+                .with_protocol_version(init_params.protocol_version)
+                .with_server_info(rmcp::model::Implementation::new("mock-upstream", "0"));
         let msg = ServerJsonRpcMessage::Response(JsonRpcResponse {
             jsonrpc: JsonRpcVersion2_0,
             id: req_id,
@@ -291,12 +282,8 @@ impl MockUpstream {
             }
             ClientRequest::CallToolRequest(call) => {
                 let name = call.params.name.to_string();
-                let result = CallToolResult {
-                    content: vec![Content::text(format!("ok:{name}"))],
-                    structured_content: None,
-                    is_error: None,
-                    meta: None,
-                };
+                let mut result = CallToolResult::success(vec![Content::text(format!("ok:{name}"))]);
+                result.is_error = None;
                 let msg = ServerJsonRpcMessage::Response(JsonRpcResponse {
                     jsonrpc: JsonRpcVersion2_0,
                     id,
@@ -556,19 +543,10 @@ impl MockUpstreamSingleTool {
                 };
                 let session_id = uuid::Uuid::new_v4().to_string();
                 this.sessions.lock().await.insert(session_id.clone());
-                let init_result = InitializeResult {
-                    protocol_version: init.params.protocol_version,
-                    capabilities: ServerCapabilities::builder().enable_tools().build(),
-                    server_info: rmcp::model::Implementation {
-                        name: "mock-upstream".to_string(),
-                        title: None,
-                        version: "0".to_string(),
-                        description: None,
-                        icons: None,
-                        website_url: None,
-                    },
-                    instructions: None,
-                };
+                let init_result =
+                    InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
+                        .with_protocol_version(init.params.protocol_version)
+                        .with_server_info(rmcp::model::Implementation::new("mock-upstream", "0"));
                 let msg = ServerJsonRpcMessage::Response(JsonRpcResponse {
                     jsonrpc: JsonRpcVersion2_0,
                     id: req_id,

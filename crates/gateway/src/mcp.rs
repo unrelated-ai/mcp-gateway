@@ -838,16 +838,12 @@ fn gateway_initialize_result(
         p.list_changed = None;
     }
 
-    let mut init_result = InitializeResult {
-        protocol_version,
-        capabilities: server_caps,
-        server_info: rmcp::model::Implementation {
-            name: "unrelated-mcp-gateway".to_string(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            ..Default::default()
-        },
-        instructions: None,
-    };
+    let mut init_result = InitializeResult::new(server_caps)
+        .with_protocol_version(protocol_version)
+        .with_server_info(rmcp::model::Implementation::new(
+            "unrelated-mcp-gateway",
+            env!("CARGO_PKG_VERSION"),
+        ));
 
     if !warnings.is_empty() {
         init_result.instructions = Some(format!(
@@ -2750,16 +2746,10 @@ mod tests {
         }))
         .expect("valid client capabilities");
 
-        let init = InitializeRequest::new(InitializeRequestParams {
-            meta: None,
-            protocol_version: rmcp::model::ProtocolVersion::default(),
-            capabilities: caps,
-            client_info: Implementation {
-                name: "DownstreamClient".to_string(),
-                version: "0.1.0".to_string(),
-                ..Default::default()
-            },
-        });
+        let init = InitializeRequest::new(InitializeRequestParams::new(
+            caps,
+            Implementation::new("DownstreamClient", "0.1.0"),
+        ));
         let msg = ClientJsonRpcMessage::Request(JsonRpcRequest {
             jsonrpc: JsonRpcVersion2_0,
             id: rmcp::model::RequestId::Number(1),
@@ -3647,12 +3637,10 @@ mod tests {
             mcp: crate::store::McpProfileSettings::default(),
         };
 
-        let init = InitializeRequest::new(InitializeRequestParams {
-            meta: None,
-            protocol_version: rmcp::model::ProtocolVersion::default(),
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation::from_build_env(),
-        });
+        let init = InitializeRequest::new(InitializeRequestParams::new(
+            ClientCapabilities::default(),
+            Implementation::from_build_env(),
+        ));
         let init_msg = ClientJsonRpcMessage::Request(JsonRpcRequest {
             jsonrpc: JsonRpcVersion2_0,
             id: rmcp::model::RequestId::Number(1),
@@ -4025,12 +4013,10 @@ sharedSources:
             mcp: crate::store::McpProfileSettings::default(),
         };
 
-        let init = InitializeRequest::new(InitializeRequestParams {
-            meta: None,
-            protocol_version: rmcp::model::ProtocolVersion::default(),
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation::from_build_env(),
-        });
+        let init = InitializeRequest::new(InitializeRequestParams::new(
+            ClientCapabilities::default(),
+            Implementation::from_build_env(),
+        ));
         let init_msg = ClientJsonRpcMessage::Request(JsonRpcRequest {
             jsonrpc: JsonRpcVersion2_0,
             id: rmcp::model::RequestId::Number(1),
@@ -4380,12 +4366,7 @@ sharedSources:
             jsonrpc: JsonRpcVersion2_0,
             id: rmcp::model::RequestId::Number(1),
             request: ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(
-                CallToolRequestParams {
-                    name: Cow::Owned("foo".to_string()),
-                    arguments: None,
-                    meta: None,
-                    task: None,
-                },
+                CallToolRequestParams::new(Cow::Owned("foo".to_string())),
             )),
         });
 

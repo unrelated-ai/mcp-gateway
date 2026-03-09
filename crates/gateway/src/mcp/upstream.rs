@@ -149,11 +149,8 @@ pub(super) fn rewrite_upstream_initialize_message(
     };
 
     if policy.rewrite_client_info {
-        init.params.client_info = rmcp::model::Implementation {
-            name: "unrelated-mcp-gateway".to_string(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            ..Default::default()
-        };
+        init.params.client_info =
+            rmcp::model::Implementation::new("unrelated-mcp-gateway", env!("CARGO_PKG_VERSION"));
     }
 
     match policy.client_capabilities_mode {
@@ -243,6 +240,13 @@ pub(super) async fn proxy_to_single_upstream(
         StreamableHttpPostResponse::Accepted => StatusCode::ACCEPTED.into_response(),
         StreamableHttpPostResponse::Json(msg, ..) => Json(msg).into_response(),
         StreamableHttpPostResponse::Sse(stream, ..) => super::sse_from_upstream_stream(stream),
+        _ => {
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                "unsupported upstream transport response",
+            )
+                .into_response());
+        }
     })
 }
 
@@ -523,5 +527,6 @@ pub(super) async fn read_first_response(
             Err(anyhow::anyhow!("unexpected end of sse stream"))
         }
         StreamableHttpPostResponse::Accepted => Err(anyhow::anyhow!("unexpected accepted")),
+        _ => Err(anyhow::anyhow!("unsupported upstream transport response")),
     }
 }

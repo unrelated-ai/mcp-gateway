@@ -1963,12 +1963,9 @@ impl OpenApiToolSource {
             ToolResponse::Image { bytes, mime_type } => {
                 let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
                 // Response shaping doesn't apply to binary.
-                Ok(CallToolResult {
-                    content: vec![Content::image(b64, mime_type)],
-                    structured_content: None,
-                    is_error: Some(false),
-                    meta: None,
-                })
+                Ok(CallToolResult::success(vec![Content::image(
+                    b64, mime_type,
+                )]))
             }
             ToolResponse::Value(mut body) => {
                 tool.response_pipeline.apply_to_value(&mut body);
@@ -1978,12 +1975,9 @@ impl OpenApiToolSource {
                     let structured = json!({ "body": body });
                     let text = serde_json::to_string(&structured)
                         .unwrap_or_else(|_| structured.to_string());
-                    Ok(CallToolResult {
-                        content: vec![Content::text(text)],
-                        structured_content: Some(structured),
-                        is_error: Some(false),
-                        meta: None,
-                    })
+                    let mut result = CallToolResult::success(vec![Content::text(text)]);
+                    result.structured_content = Some(structured);
+                    Ok(result)
                 } else {
                     let text = if let Some(s) = body.as_str() {
                         s.to_string()

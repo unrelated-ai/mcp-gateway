@@ -29,12 +29,10 @@ fn minimal_initialize_message() -> ClientJsonRpcMessage {
         ClientCapabilities, Implementation, InitializeRequest, InitializeRequestParams,
     };
 
-    let init = InitializeRequest::new(InitializeRequestParams {
-        meta: None,
-        protocol_version: rmcp::model::ProtocolVersion::default(),
-        capabilities: ClientCapabilities::default(),
-        client_info: Implementation::from_build_env(),
-    });
+    let init = InitializeRequest::new(InitializeRequestParams::new(
+        ClientCapabilities::default(),
+        Implementation::from_build_env(),
+    ));
     ClientJsonRpcMessage::Request(JsonRpcRequest {
         jsonrpc: JsonRpcVersion2_0,
         id: rmcp::model::RequestId::Number(1),
