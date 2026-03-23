@@ -1,6 +1,6 @@
 [package]
 name = "unrelated-mcp-gateway"
-version = "0.12.0"
+version = "0.12.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -20,7 +20,7 @@ serde_json = "1"
 anyhow = "1"
 async-trait = "0.1"
 futures = "0.3"
-rmcp = { version = "1.1.0", features = ["client", "transport-streamable-http-client-reqwest", "elicitation"] }
+rmcp = { version = "1.2.0", features = ["client", "transport-streamable-http-client-reqwest", "elicitation"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 jsonwebtoken = "9"
 base64 = "0.22"

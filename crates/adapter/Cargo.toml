@@ -1,6 +1,6 @@
 [package]
 name = "unrelated-mcp-adapter"
-version = "0.12.0"
+version = "0.12.1"
 edition.workspace = true
 rust-version.workspace = true
 description = "Expose stdio-based MCP servers over streamable HTTP"
@@ -10,7 +10,7 @@ repository.workspace = true
 
 [dependencies]
 # MCP Protocol - Official Rust SDK
-rmcp = { version = "1.1.0", features = ["client", "transport-child-process", "transport-streamable-http-server", "elicitation"] }
+rmcp = { version = "1.2.0", features = ["client", "transport-child-process", "transport-streamable-http-server", "elicitation"] }
 tokio = { version = "1", features = ["full", "signal"] }
 tokio-util = "0.7"
 axum = { version = "0.8", features = ["macros"] }
