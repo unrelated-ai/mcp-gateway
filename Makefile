@@ -9,7 +9,7 @@
         test test-adapter test-gateway test-cli test-unit \
         test-integration test-integration-adapter test-integration-gateway \
         fmt fmt-check clippy lint \
-        security security-audit security-trivy \
+        security security-audit security-deny security-trivy \
         doc doc-open \
         adapter-run adapter-run-release \
         adapter-run-with-test-config adapter-run-release-with-test-config \
@@ -158,11 +158,15 @@ lint: fmt-check clippy
 # =============================================================================
 
 ## Run security checks (mirrors split security workflows in .github/workflows/security-*.yml)
-security: security-audit security-trivy
+security: security-audit security-deny security-trivy
 
 ## Rust dependency audit (RustSec)
 security-audit:
 	cargo audit
+
+## Rust dependency audit (cargo-deny advisories)
+security-deny:
+	cargo deny check advisories
 
 ## Trivy scan local Docker images (requires docker + trivy)
 security-trivy:

@@ -1,0 +1,7 @@
+[advisories]
+db-path = "~/.cargo/advisory-dbs"
+db-urls = ["https://github.com/RustSec/advisory-db"]
+unmaintained = "workspace"
+# RUSTSEC-2023-0071 affects private-key RSA operations via non-constant-time behavior.
+# In this repo, `rsa` is a dev-dependency used only for ephemeral integration-test keygen.
+ignore = ["RUSTSEC-2023-0071"]

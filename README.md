@@ -6,6 +6,7 @@ MCP infrastructure for turning existing systems into MCP servers and serving the
 
 [![CI](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/ci.yml)
 [![Security RustSec](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-rustsec.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-rustsec.yml)
+[![Security Cargo Deny](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-cargo-deny.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-cargo-deny.yml)
 [![Security Adapter](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-adapter.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-adapter.yml)
 [![Security Gateway](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-gateway.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-gateway.yml)
 [![Security Operator](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-operator.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-operator.yml)
