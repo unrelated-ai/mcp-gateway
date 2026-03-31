@@ -68,7 +68,7 @@ services:
       start_period: 5s
 
   gateway_ui:
-    image: ghcr.io/unrelated-ai/mcp-gateway-ui:${UI_VERSION:-0.8.0}
+    image: ghcr.io/unrelated-ai/mcp-gateway-ui:${UI_VERSION:-0.8.1}
     depends_on:
       gateway:
         condition: service_healthy
