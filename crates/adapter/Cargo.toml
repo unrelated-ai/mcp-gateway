@@ -40,7 +40,7 @@ unrelated-env = { path = "../env" }
 
 [dev-dependencies]
 tempfile = "3"
-testcontainers = "0.27.0"
+testcontainers = "0.27.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 unrelated-test-support = { path = "../test-support" }
 

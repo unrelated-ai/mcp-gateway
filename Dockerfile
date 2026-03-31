@@ -154,7 +154,7 @@ ENTRYPOINT ["/app/unrelated-mcp-gateway-operator"]
 # -----------------------------------------------------------------------------
 # Stage 5: Gateway migrator (dbmate + baked migrations)
 # -----------------------------------------------------------------------------
-FROM amacneil/dbmate:2.31.0 AS gateway-migrator
+FROM amacneil/dbmate:2.32.0 AS gateway-migrator
 
 RUN apk upgrade --no-cache zlib
 
