@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-04-01
+
+Release versions:
+
+- Adapter: `0.12.2`
+- Gateway: `0.12.2`
+- Gateway admin CLI: `0.12.2`
+- Gateway Operator: `0.12.2`
+- Tenant-level Web UI: `0.8.1`
+- Helm charts updated: `unrelated-mcp-gateway`, `unrelated-mcp-gateway-operator`, `unrelated-mcp-gateway-stack`, `unrelated-mcp-gateway-managed-fixtures`
+
+### Security + release hardening (0.12.2 line)
+
+- Upgraded `testcontainers` to `0.27.2` in adapter/gateway dev dependencies, which pulls patched `astral-tokio-tar` `0.6.0` and clears `RUSTSEC-2026-0066`.
+- Upgraded the Gateway migrator image base to `amacneil/dbmate:2.32.0` and kept `zlib` upgrade, clearing previous Trivy HIGH/CRITICAL findings in `dbmate`.
+- Added `cargo-deny` advisory checks to local and CI security gates (`make security` + dedicated workflow) for layered Rust advisory coverage.
+
+### Web UI (0.8.1)
+
+- Refreshed UI dependencies to newer compatible versions on the existing `0.8.x` release line.
+
 ## 2026-03-10
 
 Release versions:

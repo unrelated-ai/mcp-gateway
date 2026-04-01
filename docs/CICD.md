@@ -34,7 +34,7 @@ All published runtime images are minimal and contain a **static** binary (or mig
 
 ## Release guard (Cargo.toml is the source of truth)
 
-On tag pushes (e.g. `adapter-v0.12.0`, `gateway-v0.12.0`, or `ui-v0.8.1`), the release workflow verifies that the tag version
+On tag pushes (e.g. `adapter-v0.12.2`, `gateway-v0.12.2`, or `ui-v0.8.1`), the release workflow verifies that the tag version
 matches the crate version resolved by `cargo metadata` for the target package. If it doesn’t
 match, the release fails (no image is pushed).
 
