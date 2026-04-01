@@ -1,0 +1,27 @@
+name: reusable-security-cargo-deny
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cargo_deny:
+    name: cargo deny (advisories)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@1.92.0
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked --version 0.19.0
+
+      - name: Cargo deny
+        run: cargo deny check advisories

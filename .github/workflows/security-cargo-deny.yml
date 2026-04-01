@@ -1,0 +1,14 @@
+name: security-cargo-deny
+
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 6 * * 1" # Mondays 06:15 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  cargo_deny:
+    uses: ./.github/workflows/reusable-security-cargo-deny.yml

@@ -6,6 +6,7 @@ MCP infrastructure for turning existing systems into MCP servers and serving the
 
 [![CI](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/ci.yml)
 [![Security RustSec](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-rustsec.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-rustsec.yml)
+[![Security Cargo Deny](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-cargo-deny.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-cargo-deny.yml)
 [![Security Adapter](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-adapter.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-adapter.yml)
 [![Security Gateway](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-gateway.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-gateway.yml)
 [![Security Operator](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-operator.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-operator.yml)
@@ -24,7 +25,7 @@ If you just want to try the product experience, this is the fastest path (no rep
 This example pins component versions (adjust as desired):
 
 - Gateway + migrator: `0.12.0`
-- Web UI: `0.8.0`
+- Web UI: `0.8.1`
 
 1. Download a Compose file that uses published images:
 
@@ -36,7 +37,7 @@ curl -fsSL -o mcp-gateway-compose.yml \
 2. Start the stack:
 
 ```bash
-GATEWAY_VERSION=0.12.0 UI_VERSION=0.8.0 \
+GATEWAY_VERSION=0.12.0 UI_VERSION=0.8.1 \
   docker compose -f mcp-gateway-compose.yml up -d
 ```
 
