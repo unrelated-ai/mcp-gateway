@@ -193,18 +193,13 @@ export default function SettingsPage() {
     if (!effectiveTransportLimits) return null;
     return {
       maxPostBodyBytes: effectiveTransportLimits.maxPostBodyBytes ?? DEFAULT_MAX_POST_BODY_BYTES,
-      maxSseEventBytes:
-        effectiveTransportLimits.maxSseEventBytes ?? DEFAULT_MAX_SSE_EVENT_BYTES,
+      maxSseEventBytes: effectiveTransportLimits.maxSseEventBytes ?? DEFAULT_MAX_SSE_EVENT_BYTES,
       maxJsonDepth: effectiveTransportLimits.maxJsonDepth ?? null,
       maxJsonArrayLen: effectiveTransportLimits.maxJsonArrayLen ?? null,
       maxJsonObjectKeys: effectiveTransportLimits.maxJsonObjectKeys ?? null,
       maxJsonStringBytes: effectiveTransportLimits.maxJsonStringBytes ?? null,
     };
-  }, [
-    DEFAULT_MAX_POST_BODY_BYTES,
-    DEFAULT_MAX_SSE_EVENT_BYTES,
-    effectiveTransportLimits,
-  ]);
+  }, [DEFAULT_MAX_POST_BODY_BYTES, DEFAULT_MAX_SSE_EVENT_BYTES, effectiveTransportLimits]);
 
   // Autosave: debounce changes and only send when settings differ from the last known server value.
   const debounceRef = useRef<number | null>(null);
