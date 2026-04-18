@@ -10,7 +10,7 @@ repository.workspace = true
 
 [dependencies]
 # MCP Protocol - Official Rust SDK
-rmcp = { version = "1.2.0", features = ["client", "transport-child-process", "transport-streamable-http-server", "elicitation"] }
+rmcp = { version = "1.5.0", features = ["client", "transport-child-process", "transport-streamable-http-server", "elicitation"] }
 tokio = { version = "1", features = ["full", "signal"] }
 tokio-util = "0.7"
 axum = { version = "0.8", features = ["macros"] }

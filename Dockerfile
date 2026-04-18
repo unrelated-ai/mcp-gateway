@@ -116,9 +116,20 @@ COPY tests/fixtures/stdio-smoke.yaml /config/config.yaml
 ENV UNRELATED_CONFIG=/config/config.yaml
 
 # -----------------------------------------------------------------------------
+# Stage 2c: dbmate builder (patched Go toolchain for migrator image)
+# -----------------------------------------------------------------------------
+FROM golang:1.26.2-alpine3.23 AS dbmate-builder
+
+ENV CGO_ENABLED=1
+
+RUN apk add --no-cache build-base git
+
+RUN go install github.com/amacneil/dbmate/v2@v2.32.0
+
+# -----------------------------------------------------------------------------
 # Stage 3: Gateway runtime
 # -----------------------------------------------------------------------------
-FROM alpine:3.20 AS gateway-runtime
+FROM alpine:3.23 AS gateway-runtime
 
 ARG TARGET=x86_64-unknown-linux-musl
 
@@ -139,7 +150,7 @@ ENTRYPOINT ["/app/unrelated-mcp-gateway"]
 # -----------------------------------------------------------------------------
 # Stage 4: Gateway operator runtime
 # -----------------------------------------------------------------------------
-FROM alpine:3.20 AS gateway-operator-runtime
+FROM alpine:3.23 AS gateway-operator-runtime
 
 ARG TARGET=x86_64-unknown-linux-musl
 
@@ -154,12 +165,19 @@ ENTRYPOINT ["/app/unrelated-mcp-gateway-operator"]
 # -----------------------------------------------------------------------------
 # Stage 5: Gateway migrator (dbmate + baked migrations)
 # -----------------------------------------------------------------------------
-FROM amacneil/dbmate:2.32.0 AS gateway-migrator
+FROM alpine:3.23 AS gateway-migrator
 
-RUN apk upgrade --no-cache zlib
+RUN apk add --no-cache \
+        mariadb-client \
+        mariadb-connector-c \
+        postgresql-client \
+        sqlite \
+        tzdata && \
+    apk upgrade --no-cache
 
 WORKDIR /db
 
+COPY --from=dbmate-builder /go/bin/dbmate /usr/local/bin/dbmate
 COPY crates/gateway/migrations /db/migrations
 
 ENV DBMATE_MIGRATIONS_DIR=/db/migrations

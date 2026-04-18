@@ -23,8 +23,11 @@ pub struct AdapterSessionManager {
 
 impl AdapterSessionManager {
     pub fn new(backend_manager: Arc<BackendManager>, contracts: Arc<ContractNotifier>) -> Self {
+        let mut inner = LocalSessionManager::default();
+        inner.session_config.sse_retry = None;
+
         Self {
-            inner: LocalSessionManager::default(),
+            inner,
             backend_manager,
             contracts,
         }
