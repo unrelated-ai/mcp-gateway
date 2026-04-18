@@ -1,5 +1,5 @@
 use base64::Engine as _;
-use hmac::Mac as _;
+use hmac::{KeyInit as _, Mac as _};
 use rmcp::model::RequestId;
 use sha2::Digest as _;
 
