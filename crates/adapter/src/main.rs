@@ -197,15 +197,17 @@ fn build_streamable_http_service(
             ))
         },
         session_manager,
-        StreamableHttpServerConfig {
-            stateful_mode: true,
-            json_response: false,
-            sse_keep_alive: Some(Duration::from_secs(15)),
+        StreamableHttpServerConfig::default()
+            .with_stateful_mode(true)
+            .with_json_response(false)
+            .with_sse_keep_alive(Some(Duration::from_secs(15)))
             // Keep retry unset to preserve existing client/test behavior expectations
             // (first stream event is JSON data, not an SSE retry hint frame).
-            sse_retry: None,
-            cancellation_token: ct.child_token(),
-        },
+            .with_sse_retry(None)
+            .with_cancellation_token(ct.child_token())
+            // Preserve the adapter's pre-upgrade reachability until host allow-listing
+            // becomes a configurable server setting.
+            .disable_allowed_hosts(),
     )
 }
 

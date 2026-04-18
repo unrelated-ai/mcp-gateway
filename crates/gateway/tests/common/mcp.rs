@@ -1,5 +1,5 @@
 use anyhow::Context as _;
-use reqwest13 as reqwest;
+use reqwest;
 use rmcp::model::ClientJsonRpcMessage;
 use rmcp::transport::streamable_http_client::{
     StreamableHttpClient as _, StreamableHttpPostResponse,

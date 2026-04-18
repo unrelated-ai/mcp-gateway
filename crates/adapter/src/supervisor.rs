@@ -58,6 +58,12 @@ async fn refresh_lists_from_peer(
     Ok((tools, resources, prompts))
 }
 
+fn peer_request_options(timeout: Duration) -> rmcp::service::PeerRequestOptions {
+    let mut options = rmcp::service::PeerRequestOptions::default();
+    options.timeout = Some(timeout);
+    options
+}
+
 // ============================================================================
 // Stdio Backend (MCP Server Process via rmcp)
 // ============================================================================
@@ -218,10 +224,9 @@ impl ClientHandler for ProxyClientHandler {
         let peer = self.downstream_peer.clone();
         async move {
             let Some(peer) = peer else {
-                return Ok(CreateElicitationResult {
-                    action: rmcp::model::ElicitationAction::Decline,
-                    content: None,
-                });
+                return Ok(CreateElicitationResult::new(
+                    rmcp::model::ElicitationAction::Decline,
+                ));
             };
             peer.create_elicitation(request)
                 .await
@@ -774,13 +779,7 @@ impl StdioBackend {
             rmcp::model::ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(params));
 
         let handle = peer
-            .send_cancellable_request(
-                request,
-                rmcp::service::PeerRequestOptions {
-                    timeout: Some(effective_timeout),
-                    meta: None,
-                },
-            )
+            .send_cancellable_request(request, peer_request_options(effective_timeout))
             .await;
 
         let result = match handle {
@@ -840,13 +839,7 @@ impl StdioBackend {
         );
 
         let handle = peer
-            .send_cancellable_request(
-                request,
-                rmcp::service::PeerRequestOptions {
-                    timeout: Some(self.call_timeout),
-                    meta: None,
-                },
-            )
+            .send_cancellable_request(request, peer_request_options(self.call_timeout))
             .await;
 
         let result = match handle {
@@ -911,13 +904,7 @@ impl StdioBackend {
         );
 
         let handle = peer
-            .send_cancellable_request(
-                request,
-                rmcp::service::PeerRequestOptions {
-                    timeout: Some(self.call_timeout),
-                    meta: None,
-                },
-            )
+            .send_cancellable_request(request, peer_request_options(self.call_timeout))
             .await;
 
         let result = match handle {
@@ -974,13 +961,7 @@ impl StdioBackend {
             rmcp::model::ClientRequest::CompleteRequest(rmcp::model::CompleteRequest::new(request));
 
         let handle = peer
-            .send_cancellable_request(
-                request,
-                rmcp::service::PeerRequestOptions {
-                    timeout: Some(self.call_timeout),
-                    meta: None,
-                },
-            )
+            .send_cancellable_request(request, peer_request_options(self.call_timeout))
             .await;
 
         let result = match handle {
@@ -1261,13 +1242,7 @@ impl Backend for StdioBackend {
             rmcp::model::ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(params));
 
         let handle = match peer
-            .send_cancellable_request(
-                request,
-                rmcp::service::PeerRequestOptions {
-                    timeout: Some(effective_timeout),
-                    meta: None,
-                },
-            )
+            .send_cancellable_request(request, peer_request_options(effective_timeout))
             .await
         {
             Ok(h) => h,
@@ -1375,13 +1350,7 @@ impl Backend for StdioBackend {
         );
 
         let handle = match peer
-            .send_cancellable_request(
-                request,
-                rmcp::service::PeerRequestOptions {
-                    timeout: Some(self.call_timeout),
-                    meta: None,
-                },
-            )
+            .send_cancellable_request(request, peer_request_options(self.call_timeout))
             .await
         {
             Ok(h) => h,
@@ -1493,13 +1462,7 @@ impl Backend for StdioBackend {
         );
 
         let handle = match peer
-            .send_cancellable_request(
-                request,
-                rmcp::service::PeerRequestOptions {
-                    timeout: Some(self.call_timeout),
-                    meta: None,
-                },
-            )
+            .send_cancellable_request(request, peer_request_options(self.call_timeout))
             .await
         {
             Ok(h) => h,
@@ -1590,13 +1553,7 @@ impl Backend for StdioBackend {
             rmcp::model::ClientRequest::CompleteRequest(rmcp::model::CompleteRequest::new(request));
 
         let handle = match peer
-            .send_cancellable_request(
-                request,
-                rmcp::service::PeerRequestOptions {
-                    timeout: Some(self.call_timeout),
-                    meta: None,
-                },
-            )
+            .send_cancellable_request(request, peer_request_options(self.call_timeout))
             .await
         {
             Ok(h) => h,
@@ -1691,13 +1648,7 @@ impl Backend for StdioBackend {
         );
 
         let handle = match peer
-            .send_cancellable_request(
-                request,
-                rmcp::service::PeerRequestOptions {
-                    timeout: Some(self.call_timeout),
-                    meta: None,
-                },
-            )
+            .send_cancellable_request(request, peer_request_options(self.call_timeout))
             .await
         {
             Ok(h) => h,
@@ -1795,13 +1746,7 @@ impl Backend for StdioBackend {
         );
 
         let handle = match peer
-            .send_cancellable_request(
-                request,
-                rmcp::service::PeerRequestOptions {
-                    timeout: Some(self.call_timeout),
-                    meta: None,
-                },
-            )
+            .send_cancellable_request(request, peer_request_options(self.call_timeout))
             .await
         {
             Ok(h) => h,

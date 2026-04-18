@@ -24,6 +24,7 @@ export function UnlockTenantCard() {
   const [isValidating, setIsValidating] = useState(false);
   const [isUnlocking, setIsUnlocking] = useState(false);
   const [showResetHelp, setShowResetHelp] = useState(false);
+  const [tokenDraft, setTokenDraft] = useState("");
   const [tokenInfo, setTokenInfo] = useState<{
     payload: TenantTokenPayloadV1;
     expires_at: string;
@@ -34,14 +35,11 @@ export function UnlockTenantCard() {
     getValues,
     setError,
     clearErrors,
-    watch,
     formState: { errors },
   } = useForm<UnlockForm>({
     resolver: zodResolver(unlockSchema),
     defaultValues: { token: "" },
   });
-
-  const token = watch("token");
 
   const handleValidate = handleSubmit((values) => {
     setIsValidating(true);
@@ -109,7 +107,8 @@ export function UnlockTenantCard() {
         <textarea
           aria-label="Tenant token"
           {...register("token", {
-            onChange: () => {
+            onChange: (event) => {
+              setTokenDraft(event.target.value);
               setTokenInfo(null);
               clearErrors("token");
             },
@@ -139,7 +138,7 @@ export function UnlockTenantCard() {
 
         <button
           onClick={handleValidate}
-          disabled={!token.trim() || isValidating}
+          disabled={!tokenDraft.trim() || isValidating}
           className="mt-4 w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-zinc-800 text-zinc-100 font-medium border border-zinc-700 hover:bg-zinc-700 hover:border-zinc-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-150"
         >
           {isValidating ? (

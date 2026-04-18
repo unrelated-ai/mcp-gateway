@@ -668,11 +668,8 @@ fn parse_initialize_request(
 }
 
 fn mint_proxy_key_b64() -> anyhow::Result<String> {
-    use rand_core::TryRngCore as _;
     let mut bytes = [0u8; PROXY_KEY_BYTES];
-    rand_core::OsRng
-        .try_fill_bytes(&mut bytes)
-        .map_err(|e| anyhow::anyhow!("OS RNG failure: {e}"))?;
+    getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("OS RNG failure: {e}"))?;
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }
 

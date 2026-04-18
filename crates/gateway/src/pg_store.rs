@@ -10,8 +10,8 @@ use crate::store::{
 };
 use crate::tool_policy::ToolPolicy;
 use async_trait::async_trait;
+use getrandom::fill as fill_random_bytes;
 use parking_lot::RwLock;
-use rand_core::{OsRng, TryRngCore as _};
 use serde_json::Value;
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row as _, Transaction};
@@ -1003,8 +1003,7 @@ where tenant_id = $1
         if let Some(value) = plaintext {
             let cipher = &self.secrets_cipher;
             let mut new_nonce = [0u8; 24];
-            let mut rng = OsRng;
-            rng.try_fill_bytes(&mut new_nonce)
+            fill_random_bytes(&mut new_nonce)
                 .map_err(|e| anyhow::anyhow!("generate secret nonce: {e:?}"))?;
             let new_ciphertext = cipher.encrypt(tenant_id, name, &value, new_nonce)?;
             let new_kid = cipher.active_kid().to_string();
@@ -2027,8 +2026,7 @@ order by name asc
     async fn put_secret(&self, tenant_id: &str, name: &str, value: &str) -> anyhow::Result<()> {
         let cipher = &self.secrets_cipher;
         let mut nonce = [0u8; 24];
-        let mut rng = OsRng;
-        rng.try_fill_bytes(&mut nonce)
+        fill_random_bytes(&mut nonce)
             .map_err(|e| anyhow::anyhow!("generate secret nonce: {e:?}"))?;
         let ciphertext = cipher.encrypt(tenant_id, name, value, nonce)?;
         let kid = cipher.active_kid().to_string();
