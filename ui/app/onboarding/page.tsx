@@ -14,6 +14,7 @@ type BootstrapStatusResponse =
 
 export default function OnboardingPage() {
   const [step, setStep] = useState<Step>(1);
+  const [hasRestoredProgress, setHasRestoredProgress] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
@@ -43,25 +44,38 @@ export default function OnboardingPage() {
 
   // Load persisted wizard progress.
   useEffect(() => {
+    let frame = 0;
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       const n = raw ? Number(raw) : NaN;
       // This page only renders on fresh install (no tenants), so step 4 is never a valid resume state.
       const next: Step = n === 2 ? 2 : n === 3 ? 3 : 1;
-      setStep(next);
+      frame = window.requestAnimationFrame(() => {
+        setStep(next);
+        setHasRestoredProgress(true);
+      });
     } catch {
-      setStep(1);
+      frame = window.requestAnimationFrame(() => {
+        setStep(1);
+        setHasRestoredProgress(true);
+      });
     }
+    return () => {
+      if (frame) {
+        window.cancelAnimationFrame(frame);
+      }
+    };
   }, []);
 
   // Persist step progress (best-effort).
   useEffect(() => {
+    if (!hasRestoredProgress) return;
     try {
       localStorage.setItem(STORAGE_KEY, String(step));
     } catch {
       // ignore
     }
-  }, [step]);
+  }, [hasRestoredProgress, step]);
 
   const title = useMemo(() => {
     switch (step) {

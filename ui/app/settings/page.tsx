@@ -160,53 +160,6 @@ export default function SettingsPage() {
   const transportLimitsDebounceRef = useRef<number | null>(null);
   const transportLimitsLastSavedKeyRef = useRef<string | null>(null);
 
-  // Initialize drafts from server once (avoid overwriting user edits).
-  useEffect(() => {
-    if (!effectiveAuditSettings) return;
-    if (auditEnabledDraft === null) setAuditEnabledDraft(effectiveAuditSettings.enabled);
-    if (auditRetentionDaysDraft === null)
-      setAuditRetentionDaysDraft(effectiveAuditSettings.retentionDays);
-    if (auditDefaultLevelDraft === null)
-      setAuditDefaultLevelDraft(effectiveAuditSettings.defaultLevel);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveAuditSettings]);
-
-  // Initialize transport limit drafts from server once (avoid overwriting user edits).
-  useEffect(() => {
-    if (!effectiveTransportLimits) return;
-
-    const initMaxPost = effectiveTransportLimits.maxPostBodyBytes ?? DEFAULT_MAX_POST_BODY_BYTES;
-    const initMaxSse = effectiveTransportLimits.maxSseEventBytes ?? DEFAULT_MAX_SSE_EVENT_BYTES;
-
-    if (maxPostBodyBytesDraft === null) setMaxPostBodyBytesDraft(initMaxPost);
-    if (maxSseEventBytesDraft === null) setMaxSseEventBytesDraft(initMaxSse);
-
-    if (maxJsonDepthDraft === null && effectiveTransportLimits.maxJsonDepth != null) {
-      setMaxJsonDepthDraft(effectiveTransportLimits.maxJsonDepth);
-    }
-    if (maxJsonArrayLenDraft === null && effectiveTransportLimits.maxJsonArrayLen != null) {
-      setMaxJsonArrayLenDraft(effectiveTransportLimits.maxJsonArrayLen);
-    }
-    if (maxJsonObjectKeysDraft === null && effectiveTransportLimits.maxJsonObjectKeys != null) {
-      setMaxJsonObjectKeysDraft(effectiveTransportLimits.maxJsonObjectKeys);
-    }
-    if (maxJsonStringBytesDraft === null && effectiveTransportLimits.maxJsonStringBytes != null) {
-      setMaxJsonStringBytesDraft(effectiveTransportLimits.maxJsonStringBytes);
-    }
-
-    // Establish a baseline key so we don't immediately autosave defaults.
-    const baseline: TenantTransportLimitsSettings = {
-      maxPostBodyBytes: initMaxPost,
-      maxSseEventBytes: initMaxSse,
-      maxJsonDepth: effectiveTransportLimits.maxJsonDepth ?? null,
-      maxJsonArrayLen: effectiveTransportLimits.maxJsonArrayLen ?? null,
-      maxJsonObjectKeys: effectiveTransportLimits.maxJsonObjectKeys ?? null,
-      maxJsonStringBytes: effectiveTransportLimits.maxJsonStringBytes ?? null,
-    };
-    transportLimitsLastSavedKeyRef.current = JSON.stringify(baseline);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveTransportLimits]);
-
   const desiredSettings: TenantAuditSettings | null = useMemo(() => {
     if (!effectiveAuditSettings) return null;
     return {
@@ -233,6 +186,23 @@ export default function SettingsPage() {
     draftMaxJsonStringBytes,
     draftMaxPostBodyBytes,
     draftMaxSseEventBytes,
+    effectiveTransportLimits,
+  ]);
+
+  const effectiveTransportLimitsBaseline: TenantTransportLimitsSettings | null = useMemo(() => {
+    if (!effectiveTransportLimits) return null;
+    return {
+      maxPostBodyBytes: effectiveTransportLimits.maxPostBodyBytes ?? DEFAULT_MAX_POST_BODY_BYTES,
+      maxSseEventBytes:
+        effectiveTransportLimits.maxSseEventBytes ?? DEFAULT_MAX_SSE_EVENT_BYTES,
+      maxJsonDepth: effectiveTransportLimits.maxJsonDepth ?? null,
+      maxJsonArrayLen: effectiveTransportLimits.maxJsonArrayLen ?? null,
+      maxJsonObjectKeys: effectiveTransportLimits.maxJsonObjectKeys ?? null,
+      maxJsonStringBytes: effectiveTransportLimits.maxJsonStringBytes ?? null,
+    };
+  }, [
+    DEFAULT_MAX_POST_BODY_BYTES,
+    DEFAULT_MAX_SSE_EVENT_BYTES,
     effectiveTransportLimits,
   ]);
 
@@ -269,10 +239,10 @@ export default function SettingsPage() {
   ]);
 
   useEffect(() => {
-    if (!effectiveTransportLimits || !desiredTransportLimits) return;
+    if (!effectiveTransportLimitsBaseline || !desiredTransportLimits) return;
     if (transportLimitsQuery.isPending || transportLimitsQuery.isError) return;
 
-    const serverKey = JSON.stringify(effectiveTransportLimits);
+    const serverKey = JSON.stringify(effectiveTransportLimitsBaseline);
     const desiredKey = JSON.stringify(desiredTransportLimits);
     if (desiredKey === serverKey) return;
     if (desiredKey === transportLimitsLastSavedKeyRef.current) return;
@@ -291,7 +261,7 @@ export default function SettingsPage() {
     };
   }, [
     desiredTransportLimits,
-    effectiveTransportLimits,
+    effectiveTransportLimitsBaseline,
     saveTransportLimitsMutation,
     transportLimitsQuery.isError,
     transportLimitsQuery.isPending,
