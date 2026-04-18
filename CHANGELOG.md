@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-04-18
+
+Release versions:
+
+- Adapter: `0.12.3`
+- Gateway: `0.12.3`
+- Gateway admin CLI: `0.12.3`
+- Gateway Operator: `0.12.3`
+- Tenant-level Web UI: `0.8.2`
+- Helm charts updated: `unrelated-mcp-gateway`, `unrelated-mcp-gateway-ui`, `unrelated-mcp-gateway-operator`, `unrelated-mcp-gateway-stack`, `unrelated-mcp-gateway-managed-fixtures`
+
+### Adapter + Gateway line (0.12.3)
+
+- Upgraded the MCP transport stack to `rmcp` `1.5.0` across adapter/gateway shared crates and aligned request/session handling with the newer builder-style API surface.
+- Upgraded `reqwest` to `0.13.2` across the adapter, gateway, CLI, operator, and shared test/tooling crates for a consistent HTTP client baseline.
+- Refreshed gateway crypto/schema dependencies used by tenant auth and validation paths, including `jsonwebtoken` `10.3.0`, `hmac` `0.13.0`, `sha2` `0.11.0`, and `jsonschema` `0.46.0`.
+- Switched gateway random-byte generation for proxy keys and encrypted-secret nonces to `getrandom`, removing older RNG wiring that no longer matched the refreshed dependency set.
+
+### Adapter runtime + packaging (0.12.3)
+
+- Preserved pre-upgrade streamable HTTP behavior while moving to the newer `rmcp` server/session configuration model by keeping SSE retry hints disabled for existing client compatibility.
+- Explicitly disabled adapter host allow-listing while on the new `rmcp` server config path until it becomes a configurable deployment setting.
+- Reworked the migrator image build to use a patched Go-built `dbmate` binary on Alpine `3.23` instead of inheriting from the upstream `dbmate` image.
+- Updated gateway and operator runtime images to Alpine `3.23`.
+
+### Web UI (0.8.2)
+
+- Fixed the unlock flow button enablement by tracking the current tenant-token draft directly instead of relying on watched form state.
+- Fixed onboarding progress restore so saved steps `2` and `3` resume correctly, while invalid/completed values still fall back to step `1`.
+- Refined Settings transport-limit baseline handling so autosave compares against a stable derived baseline rather than transient initialization state.
+- Refreshed UI framework/tooling dependencies on the `0.8.x` line, including Next `16.2.4`, React `19.2.5`, ESLint `10`, and TypeScript `6`.
+
 ## 2026-04-01
 
 Release versions:

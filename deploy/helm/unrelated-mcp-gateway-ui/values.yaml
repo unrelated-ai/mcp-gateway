@@ -3,7 +3,7 @@ fullnameOverride: ""
 
 image:
   repository: ghcr.io/unrelated-ai/mcp-gateway-ui
-  tag: "0.8.1"
+  tag: "0.8.2"
   pullPolicy: IfNotPresent
 
 replicaCount: 1

@@ -2,8 +2,8 @@ apiVersion: v2
 name: unrelated-mcp-gateway
 description: MCP Gateway runtime/admin Helm chart.
 type: application
-version: 0.2.1
-appVersion: "0.12.2"
+version: 0.2.2
+appVersion: "0.12.3"
 dependencies:
   - name: unrelated-mcp-postgres
     version: 0.2.0
