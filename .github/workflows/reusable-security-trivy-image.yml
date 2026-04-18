@@ -45,10 +45,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
+
+      - name: Set up Trivy
+        uses: aquasecurity/setup-trivy@v0.2.6
+        with:
+          version: v0.70.0
 
       - name: Build image (default target)
         if: ${{ inputs.docker_target == '' }}
@@ -59,10 +64,12 @@ jobs:
         run: docker build -f "${{ inputs.dockerfile }}" --target "${{ inputs.docker_target }}" -t "${{ inputs.image_ref }}" "${{ inputs.context }}"
 
       - name: Trivy scan
-        uses: aquasecurity/trivy-action@0.35.0
-        with:
-          image-ref: ${{ inputs.image_ref }}
-          format: ${{ inputs.format }}
-          exit-code: "1"
-          vuln-type: ${{ inputs.vuln_type }}
-          severity: ${{ inputs.severity }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trivy image \
+            --format "${{ inputs.format }}" \
+            --exit-code 1 \
+            --vuln-type "${{ inputs.vuln_type }}" \
+            --severity "${{ inputs.severity }}" \
+            "${{ inputs.image_ref }}"
