@@ -118,7 +118,7 @@ ENV UNRELATED_CONFIG=/config/config.yaml
 # -----------------------------------------------------------------------------
 # Stage 2c: dbmate builder (patched Go toolchain for migrator image)
 # -----------------------------------------------------------------------------
-FROM golang:1.26.2-alpine3.23 AS dbmate-builder
+FROM golang:1.26.3-alpine3.23 AS dbmate-builder
 
 ENV CGO_ENABLED=1
 
