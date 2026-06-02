@@ -180,7 +180,7 @@ impl MockUpstream {
                 } else {
                     let msg = ServerJsonRpcMessage::Error(JsonRpcError {
                         jsonrpc: JsonRpcVersion2_0,
-                        id,
+                        id: Some(id),
                         error: ErrorData::new(
                             rmcp::model::ErrorCode::METHOD_NOT_FOUND,
                             "method not found",
