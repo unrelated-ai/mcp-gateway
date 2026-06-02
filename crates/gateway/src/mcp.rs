@@ -945,56 +945,59 @@ async fn forward_proxied_response_if_any(
     message: &mut ClientJsonRpcMessage,
     hop: u32,
 ) -> Result<Option<Response>, Response> {
-    match message {
-        ClientJsonRpcMessage::Response(JsonRpcResponse { id, .. })
-        | ClientJsonRpcMessage::Error(JsonRpcError { id, .. }) => {
-            let proxy_key = decode_proxy_key(payload);
-            let Some((upstream_id, original_id)) =
-                parse_proxied_request_id(id, proxy_key.as_deref())
-            else {
+    let id = match message {
+        ClientJsonRpcMessage::Response(JsonRpcResponse { id, .. }) => id,
+        ClientJsonRpcMessage::Error(JsonRpcError { id, .. }) => {
+            let Some(id) = id.as_mut() else {
                 return Ok(None);
             };
-            *id = original_id;
-            let Some(binding) = payload
-                .bindings
-                .iter()
-                .find(|b| b.upstream.as_str() == upstream_id.as_str())
-            else {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    "Unknown upstream for proxied response id",
-                )
-                    .into_response());
-            };
-            let Some(endpoint) = upstream::resolve_endpoint(state, profile_id, binding).await?
-            else {
-                return Err((
-                    StatusCode::BAD_GATEWAY,
-                    "Upstream endpoint not available for proxied response",
-                )
-                    .into_response());
-            };
-            if hop >= upstream::MAX_HOPS {
-                return Err((
-                    StatusCode::BAD_GATEWAY,
-                    "proxy loop detected (max hops exceeded)",
-                )
-                    .into_response());
-            }
-            let endpoint_url = upstream::apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
-            let headers = upstream::build_upstream_headers(endpoint.auth.as_ref(), hop + 1);
-            let _ = streamable_http::post_message(
-                &state.http,
-                endpoint_url.into(),
-                message.clone(),
-                Some(binding.session.clone().into()),
-                &headers,
-            )
-            .await;
-            Ok(Some(StatusCode::ACCEPTED.into_response()))
+            id
         }
-        _ => Ok(None),
+        _ => return Ok(None),
+    };
+
+    let proxy_key = decode_proxy_key(payload);
+    let Some((upstream_id, original_id)) = parse_proxied_request_id(id, proxy_key.as_deref())
+    else {
+        return Ok(None);
+    };
+    *id = original_id;
+    let Some(binding) = payload
+        .bindings
+        .iter()
+        .find(|b| b.upstream.as_str() == upstream_id.as_str())
+    else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Unknown upstream for proxied response id",
+        )
+            .into_response());
+    };
+    let Some(endpoint) = upstream::resolve_endpoint(state, profile_id, binding).await? else {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            "Upstream endpoint not available for proxied response",
+        )
+            .into_response());
+    };
+    if hop >= upstream::MAX_HOPS {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            "proxy loop detected (max hops exceeded)",
+        )
+            .into_response());
     }
+    let endpoint_url = upstream::apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
+    let headers = upstream::build_upstream_headers(endpoint.auth.as_ref(), hop + 1);
+    let _ = streamable_http::post_message(
+        &state.http,
+        endpoint_url.into(),
+        message.clone(),
+        Some(binding.session.clone().into()),
+        &headers,
+    )
+    .await;
+    Ok(Some(StatusCode::ACCEPTED.into_response()))
 }
 
 async fn broadcast_notification_best_effort(
@@ -1811,7 +1814,7 @@ async fn maybe_block_upstream_server_request(ctx: &UpstreamSseMapCtx, data: &str
     {
         let err = ClientJsonRpcMessage::Error(JsonRpcError {
             jsonrpc: JsonRpcVersion2_0,
-            id,
+            id: Some(id),
             error: ErrorData::new(
                 ErrorCode::METHOD_NOT_FOUND,
                 format!("blocked by gateway upstream request policy: {method}"),
@@ -2673,7 +2676,7 @@ fn jsonrpc_error_response_with_data(
 ) -> Response {
     let error = ServerJsonRpcMessage::Error(JsonRpcError {
         jsonrpc: JsonRpcVersion2_0,
-        id,
+        id: Some(id),
         error: ErrorData::new(code, message, data),
     });
     sse_single_message(&error)
