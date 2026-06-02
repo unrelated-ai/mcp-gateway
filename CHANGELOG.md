@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-06-02
+
+Release versions:
+
+- Adapter: `0.12.4`
+- Gateway: `0.12.4`
+- Gateway admin CLI: `0.12.4`
+- Gateway Operator: `0.12.4`
+- Tenant-level Web UI: `0.8.3`
+- Helm charts updated: `unrelated-mcp-gateway`, `unrelated-mcp-gateway-ui`, `unrelated-mcp-gateway-operator`, `unrelated-mcp-gateway-stack`, `unrelated-mcp-gateway-managed-fixtures`
+
+### Security dependency refresh (0.12.4 / 0.8.3)
+
+- Upgraded Rust dependency baselines across the adapter, gateway, CLI, operator, and tool crates, including `rmcp` `1.7.0`, `reqwest` `0.13.4`, `jsonschema` `0.46.5`, `kube` `3.1.0`, and patched lockfile transitive dependencies `astral-tokio-tar` `0.6.2` and `rustls-webpki` `0.103.13`.
+- Updated gateway error response handling for the newer `rmcp` optional JSON-RPC error id shape.
+- Updated the migrator build to use the patched Go toolchain image.
+- Refreshed the UI dependency baseline to Next `16.2.7`, React `19.2.5`, and ESLint `9.39.4`, with package overrides for patched transitive dependencies.
+
 ## 2026-04-18
 
 Release versions:

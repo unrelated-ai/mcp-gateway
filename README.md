@@ -24,8 +24,8 @@ If you just want to try the product experience, this is the fastest path (no rep
 
 This example pins component versions (adjust as desired):
 
-- Gateway + migrator: `0.12.3`
-- Web UI: `0.8.2`
+- Gateway + migrator: `0.12.4`
+- Web UI: `0.8.3`
 
 1. Download a Compose file that uses published images:
 
@@ -37,7 +37,7 @@ curl -fsSL -o mcp-gateway-compose.yml \
 2. Start the stack:
 
 ```bash
-GATEWAY_VERSION=0.12.3 UI_VERSION=0.8.2 \
+GATEWAY_VERSION=0.12.4 UI_VERSION=0.8.3 \
   docker compose -f mcp-gateway-compose.yml up -d
 ```
 
