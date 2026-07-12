@@ -3,6 +3,10 @@
 //! This module implements the MCP server using the official rmcp SDK,
 //! providing dynamic tool routing to our backends (stdio and `OpenAPI`).
 
+// SEP-2577 keeps logging wire-compatible during its deprecation window. The adapter continues
+// proxying it so existing MCP clients do not lose functionality during an SDK-only upgrade.
+#![allow(deprecated)]
+
 use crate::aggregator::Aggregator;
 use crate::contracts::ContractNotifier;
 use crate::supervisor::BackendManager;
@@ -11,12 +15,11 @@ use parking_lot::RwLock;
 use rmcp::{
     ErrorData as McpError, ServerHandler,
     model::{
-        AnnotateAble, CallToolRequestParams, CallToolResult, CompleteRequestParams, CompleteResult,
-        Content, GetPromptRequestParams, GetPromptResult, Implementation, ListPromptsResult,
+        CallToolRequestParams, CallToolResult, CompleteRequestParams, CompleteResult, ContentBlock,
+        GetPromptRequestParams, GetPromptResult, Implementation, ListPromptsResult,
         ListResourcesResult, ListToolsResult, PaginatedRequestParams, Prompt, ProtocolVersion,
-        RawResource, ReadResourceRequestParams, ReadResourceResult, Reference, Resource,
-        ServerCapabilities, ServerInfo, SetLevelRequestParams, SubscribeRequestParams, Tool,
-        UnsubscribeRequestParams,
+        ReadResourceRequestParams, ReadResourceResult, Reference, Resource, ServerCapabilities,
+        ServerInfo, SetLevelRequestParams, SubscribeRequestParams, Tool, UnsubscribeRequestParams,
     },
     service::{RequestContext, RoleServer},
 };
@@ -123,7 +126,7 @@ impl ServerHandler for AdapterMcpServer {
             .enable_prompts_list_changed()
             .build();
         ServerInfo::new(capabilities)
-            .with_protocol_version(ProtocolVersion::V_2024_11_05)
+            .with_protocol_version(ProtocolVersion::LATEST)
             .with_server_info(Implementation::from_build_env())
             .with_instructions("MCP adapter that bridges stdio MCP servers and OpenAPI backends.")
     }
@@ -176,6 +179,12 @@ impl ServerHandler for AdapterMcpServer {
                     ));
                 };
                 (server, Reference::for_resource(original_uri))
+            }
+            _ => {
+                return Err(McpError::invalid_params(
+                    "Unsupported completion reference type",
+                    None,
+                ));
             }
         };
         request.r#ref = rewritten_ref;
@@ -448,7 +457,7 @@ impl ServerHandler for AdapterMcpServer {
                     elapsed = ?start.elapsed(),
                     "tools/call failed"
                 );
-                Ok(CallToolResult::error(vec![Content::text(format!(
+                Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "Error: {e}"
                 ))]))
             }
@@ -543,11 +552,11 @@ impl ServerHandler for AdapterMcpServer {
         let resource_list: Vec<Resource> = resources
             .iter()
             .map(|(exposed_uri, mapping)| {
-                let mut raw = RawResource::new(exposed_uri.clone(), mapping.name.clone());
-                raw.description.clone_from(&mapping.description);
-                raw.mime_type.clone_from(&mapping.mime_type);
-                raw.size = mapping.size;
-                raw.no_annotation()
+                let mut resource = Resource::new(exposed_uri.clone(), mapping.name.clone());
+                resource.description.clone_from(&mapping.description);
+                resource.mime_type.clone_from(&mapping.mime_type);
+                resource.size = mapping.size;
+                resource
             })
             .collect();
 

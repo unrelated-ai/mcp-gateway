@@ -13,7 +13,7 @@ use futures::StreamExt as _;
 use rmcp::model::{
     ClientJsonRpcMessage, ClientRequest, ErrorData, InitializeResult, JsonRpcError, JsonRpcRequest,
     JsonRpcResponse, JsonRpcVersion2_0, ListPromptsResult, ListResourcesResult, ListToolsResult,
-    Prompt, RawResource, Resource, ServerCapabilities, ServerJsonRpcMessage, ServerResult, Tool,
+    Prompt, Resource, ServerCapabilities, ServerJsonRpcMessage, ServerResult, Tool,
 };
 use serde_json::json;
 use std::collections::HashSet;
@@ -206,15 +206,9 @@ impl DynamicUpstream {
                 }
                 ClientRequest::ListResourcesRequest(_) => {
                     let v = self.version.load(Ordering::SeqCst);
-                    let mut resources: Vec<Resource> = vec![rmcp::model::Annotated::new(
-                        RawResource::new("file:///r1".to_string(), "r1".to_string()),
-                        None,
-                    )];
+                    let mut resources: Vec<Resource> = vec![Resource::new("file:///r1", "r1")];
                     if v >= 1 {
-                        resources.push(rmcp::model::Annotated::new(
-                            RawResource::new("file:///r2".to_string(), "r2".to_string()),
-                            None,
-                        ));
+                        resources.push(Resource::new("file:///r2", "r2"));
                     }
                     let result = ListResourcesResult {
                         resources,

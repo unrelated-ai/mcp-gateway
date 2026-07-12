@@ -10,7 +10,7 @@ use common::mcp::McpSession;
 use common::pg::{apply_dbmate_migrations, wait_pg_ready};
 use common::{KillOnDrop, pick_unused_port, spawn_gateway, wait_http_ok};
 use rmcp::model::{
-    CallToolResult, ClientJsonRpcMessage, ClientRequest, Content, ErrorData, InitializeResult,
+    CallToolResult, ClientJsonRpcMessage, ClientRequest, ContentBlock, ErrorData, InitializeResult,
     JsonObject, JsonRpcError, JsonRpcRequest, JsonRpcResponse, JsonRpcVersion2_0, ListToolsResult,
     ServerCapabilities, ServerJsonRpcMessage, ServerResult, Tool,
 };
@@ -155,7 +155,7 @@ impl MockUpstream {
                 ClientRequest::CallToolRequest(call) => {
                     let name = call.params.name.to_string();
                     let text = format!("upstream={}, tool={name}", self.upstream_id);
-                    let mut result = CallToolResult::success(vec![Content::text(text)]);
+                    let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
                     result.is_error = None;
                     let msg = ServerJsonRpcMessage::Response(JsonRpcResponse {
                         jsonrpc: JsonRpcVersion2_0,

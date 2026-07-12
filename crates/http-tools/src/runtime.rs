@@ -13,7 +13,7 @@ use base64::Engine as _;
 use mime::Mime;
 use openapiv3::QueryStyle;
 use reqwest::{Client, Method};
-use rmcp::model::{CallToolResult, Content, JsonObject, Tool};
+use rmcp::model::{CallToolResult, ContentBlock, JsonObject, Tool};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -215,7 +215,7 @@ impl HttpToolSource {
             ToolResponse::Image { bytes, mime_type } => {
                 let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
                 // Response shaping doesn't apply to binary.
-                Ok(CallToolResult::success(vec![Content::image(
+                Ok(CallToolResult::success(vec![ContentBlock::image(
                     b64, mime_type,
                 )]))
             }
@@ -225,12 +225,12 @@ impl HttpToolSource {
                 // Emit `structured_content` only when the tool advertises an output schema.
                 if tool.output_schema.is_some() {
                     let structured = json!({ "body": body });
-                    // Return both `structured_content` and `Content::text(...)` for interoperability:
+                    // Return both `structured_content` and `ContentBlock::text(...)` for interoperability:
                     // some MCP clients only render `content` and ignore `structured_content`.
                     let text = serde_json::to_string(&structured)
                         .unwrap_or_else(|_| structured.to_string());
 
-                    let mut result = CallToolResult::success(vec![Content::text(text)]);
+                    let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
                     result.structured_content = Some(structured);
                     Ok(result)
                 } else {
@@ -239,7 +239,7 @@ impl HttpToolSource {
                     } else {
                         serde_json::to_string(&body).unwrap_or_else(|_| body.to_string())
                     };
-                    Ok(CallToolResult::success(vec![Content::text(text)]))
+                    Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
                 }
             }
         }

@@ -790,6 +790,9 @@ fn effective_caps(profile: &crate::store::Profile) -> EffectiveMcpCapabilities {
     profile.mcp.capabilities.effective()
 }
 
+// SEP-2577 keeps logging wire-compatible during its deprecation window. Continue advertising it
+// when profile policy allows it so an SDK-only upgrade does not change the gateway contract.
+#[allow(deprecated)]
 fn gateway_initialize_result(
     profile: &crate::store::Profile,
     protocol_version: rmcp::model::ProtocolVersion,
@@ -1042,7 +1045,11 @@ async fn forward_notification_if_any(
         ..
     }) = &*message
     {
-        parse_proxied_request_id(&cancelled.params.request_id, proxy_key.as_deref())
+        cancelled
+            .params
+            .request_id
+            .as_ref()
+            .and_then(|id| parse_proxied_request_id(id, proxy_key.as_deref()))
     } else {
         None
     };
@@ -1053,7 +1060,7 @@ async fn forward_notification_if_any(
             ..
         }) = message
         {
-            cancelled.params.request_id = original_id;
+            cancelled.params.request_id = Some(original_id);
         }
         let Some(binding) = payload
             .bindings
@@ -1649,6 +1656,7 @@ enum NotificationKind {
     ToolListChanged,
     PromptListChanged,
     ElicitationCompletion,
+    TaskStatus,
     Custom(String),
 }
 
@@ -1663,6 +1671,7 @@ impl NotificationKind {
             NotificationKind::ToolListChanged => "notifications/tools/list_changed",
             NotificationKind::PromptListChanged => "notifications/prompts/list_changed",
             NotificationKind::ElicitationCompletion => "notifications/elicitation/complete",
+            NotificationKind::TaskStatus => "notifications/tasks/status",
             NotificationKind::Custom(method) => method,
         }
     }
@@ -1679,9 +1688,10 @@ fn classify_server_notification(notification: &ServerNotification) -> Notificati
         }
         ServerNotification::ToolListChangedNotification(_) => NotificationKind::ToolListChanged,
         ServerNotification::PromptListChangedNotification(_) => NotificationKind::PromptListChanged,
-        ServerNotification::ElicitationCompletionNotification(_) => {
+        ServerNotification::ElicitationCompleteNotification(_) => {
             NotificationKind::ElicitationCompletion
         }
+        ServerNotification::TaskStatusNotification(_) => NotificationKind::TaskStatus,
         ServerNotification::CustomNotification(n) => NotificationKind::Custom(n.method.clone()),
     }
 }
@@ -1695,6 +1705,9 @@ fn allowed_by_caps_for_notification_kind(
         NotificationKind::ToolListChanged => caps.tools_list_changed(),
         NotificationKind::ResourceListChanged => caps.resources_list_changed(),
         NotificationKind::PromptListChanged => caps.prompts_list_changed(),
+        // Tasks are not advertised or routed end-to-end yet. Do not leak unrouteable task ids to
+        // downstream clients if a non-conforming upstream sends a status notification anyway.
+        NotificationKind::TaskStatus => false,
         _ => true,
     }
 }
@@ -1740,13 +1753,15 @@ fn rewrite_upstream_sse_data(
             changed = true;
         }
         ServerJsonRpcMessage::Notification(JsonRpcNotification { notification, .. }) => {
-            if let ServerNotification::CancelledNotification(cancelled) = notification {
-                cancelled.params.request_id = make_proxied_request_id(
+            if let ServerNotification::CancelledNotification(cancelled) = notification
+                && let Some(request_id) = cancelled.params.request_id.as_ref()
+            {
+                cancelled.params.request_id = Some(make_proxied_request_id(
                     ns_req,
                     upstream_id,
-                    &cancelled.params.request_id,
+                    request_id,
                     proxy_key,
-                );
+                ));
                 changed = true;
             }
             if let ServerNotification::ResourceUpdatedNotification(updated) = notification {
@@ -2397,6 +2412,13 @@ async fn route_and_proxy_completion_complete(
                     })?;
             (upstream_id, Reference::for_resource(original_uri))
         }
+        _ => {
+            return Err(jsonrpc_error_response(
+                req_id,
+                ErrorCode::INVALID_PARAMS,
+                "Unsupported completion reference type".to_string(),
+            ));
+        }
     };
 
     if let Some(param) = as_complete_mut(message) {
@@ -2880,6 +2902,16 @@ mod tests {
                 Some(serde_json::json!({"elicitationId": "e1"})),
             ),
             (
+                "notifications/tasks/status",
+                Some(serde_json::json!({
+                    "taskId": "task-1",
+                    "status": "working",
+                    "createdAt": "2026-07-12T00:00:00Z",
+                    "lastUpdatedAt": "2026-07-12T00:00:00Z",
+                    "ttl": null
+                })),
+            ),
+            (
                 "notifications/custom/example",
                 Some(serde_json::json!({"value": 1})),
             ),
@@ -3035,6 +3067,26 @@ mod tests {
             allowed_by_caps_for_notification_kind(caps, &kind),
             "elicitation completion should not be capability-gated"
         );
+    }
+
+    #[test]
+    fn task_status_notification_is_blocked_until_tasks_are_routed() {
+        let kind = classify_server_notification(&parse_server_notification(
+            "notifications/tasks/status",
+            Some(serde_json::json!({
+                "taskId": "task-1",
+                "status": "working",
+                "createdAt": "2026-07-12T00:00:00Z",
+                "lastUpdatedAt": "2026-07-12T00:00:00Z",
+                "ttl": null
+            })),
+        ));
+        assert_eq!(kind, NotificationKind::TaskStatus);
+        assert!(!notification_allowed(
+            default_effective_caps(),
+            &crate::store::McpNotificationFilter::default(),
+            &kind
+        ));
     }
 
     #[derive(Clone)]

@@ -73,7 +73,7 @@ pub(crate) async fn post_message(
     match content_type(resp.headers()).as_deref() {
         Some(ct) if ct.eq_ignore_ascii_case(EVENT_STREAM_MIME_TYPE) => {
             let stream: BoxStream<'static, Result<sse_stream::Sse, sse_stream::Error>> =
-                sse_stream::SseStream::from_byte_stream(resp.bytes_stream()).boxed();
+                sse_stream::SseStream::from_bytes_stream(resp.bytes_stream()).boxed();
             Ok(StreamableHttpPostResponse::Sse(stream, session_id))
         }
         Some(ct) if ct.eq_ignore_ascii_case(JSON_MIME_TYPE) => {
@@ -113,7 +113,7 @@ pub(crate) async fn get_stream(
         return Err(StreamableHttpError::UnexpectedContentType(ct));
     }
 
-    Ok(sse_stream::SseStream::from_byte_stream(resp.bytes_stream()).boxed())
+    Ok(sse_stream::SseStream::from_bytes_stream(resp.bytes_stream()).boxed())
 }
 
 pub(crate) async fn delete_session(

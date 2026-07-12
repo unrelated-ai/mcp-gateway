@@ -25,7 +25,6 @@ use crate::supervisor::BackendManager;
 use crate::supervisor::StdioBackend;
 use crate::supervisor::StdioBackendSettings;
 use clap::Parser;
-use rmcp::model::AnnotateAble;
 use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use std::io::{IsTerminal as _, stdout};
 use std::net::SocketAddr;
@@ -375,11 +374,12 @@ async fn refresh_aggregator(
         .get_all_resources()
         .iter()
         .map(|(exposed_uri, mapping)| {
-            let mut raw = rmcp::model::RawResource::new(exposed_uri.clone(), mapping.name.clone());
-            raw.description.clone_from(&mapping.description);
-            raw.mime_type.clone_from(&mapping.mime_type);
-            raw.size = mapping.size;
-            raw.no_annotation()
+            let mut resource =
+                rmcp::model::Resource::new(exposed_uri.clone(), mapping.name.clone());
+            resource.description.clone_from(&mapping.description);
+            resource.mime_type.clone_from(&mapping.mime_type);
+            resource.size = mapping.size;
+            resource
         })
         .collect();
 

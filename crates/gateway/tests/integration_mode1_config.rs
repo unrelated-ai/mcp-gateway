@@ -11,9 +11,9 @@ use common::mcp::McpSession;
 use common::sse::read_first_event_stream_json_message;
 use common::{KillOnDrop, pick_unused_port, spawn_gateway_mode1, wait_http_ok};
 use rmcp::model::{
-    CallToolResult, ClientJsonRpcMessage, ClientRequest, Content, InitializeResult, JsonObject,
-    JsonRpcRequest, JsonRpcResponse, JsonRpcVersion2_0, ListToolsResult, ServerCapabilities,
-    ServerJsonRpcMessage, ServerResult, Tool,
+    CallToolResult, ClientJsonRpcMessage, ClientRequest, ContentBlock, InitializeResult,
+    JsonObject, JsonRpcRequest, JsonRpcResponse, JsonRpcVersion2_0, ListToolsResult,
+    ServerCapabilities, ServerJsonRpcMessage, ServerResult, Tool,
 };
 use serde_json::json;
 use std::collections::HashSet;
@@ -282,7 +282,8 @@ impl MockUpstream {
             }
             ClientRequest::CallToolRequest(call) => {
                 let name = call.params.name.to_string();
-                let mut result = CallToolResult::success(vec![Content::text(format!("ok:{name}"))]);
+                let mut result =
+                    CallToolResult::success(vec![ContentBlock::text(format!("ok:{name}"))]);
                 result.is_error = None;
                 let msg = ServerJsonRpcMessage::Response(JsonRpcResponse {
                     jsonrpc: JsonRpcVersion2_0,

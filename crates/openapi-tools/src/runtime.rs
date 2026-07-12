@@ -15,7 +15,7 @@ use openapiv3::{
 use parking_lot::RwLock;
 use regex::Regex;
 use reqwest::{Client, Method};
-use rmcp::model::{CallToolResult, Content, JsonObject, Tool};
+use rmcp::model::{CallToolResult, ContentBlock, JsonObject, Tool};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -1963,7 +1963,7 @@ impl OpenApiToolSource {
             ToolResponse::Image { bytes, mime_type } => {
                 let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
                 // Response shaping doesn't apply to binary.
-                Ok(CallToolResult::success(vec![Content::image(
+                Ok(CallToolResult::success(vec![ContentBlock::image(
                     b64, mime_type,
                 )]))
             }
@@ -1975,7 +1975,7 @@ impl OpenApiToolSource {
                     let structured = json!({ "body": body });
                     let text = serde_json::to_string(&structured)
                         .unwrap_or_else(|_| structured.to_string());
-                    let mut result = CallToolResult::success(vec![Content::text(text)]);
+                    let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
                     result.structured_content = Some(structured);
                     Ok(result)
                 } else {
@@ -1984,7 +1984,7 @@ impl OpenApiToolSource {
                     } else {
                         serde_json::to_string(&body).unwrap_or_else(|_| body.to_string())
                     };
-                    Ok(CallToolResult::success(vec![Content::text(text)]))
+                    Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
                 }
             }
         }
