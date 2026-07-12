@@ -13,6 +13,16 @@ use std::{
     sync::Arc,
 };
 
+pub(crate) const UNRELATED_TOOL_REF_META_KEY: &str = "ai.unrelated/tool-ref";
+
+fn set_stable_tool_ref(tool: &mut rmcp::model::Tool, source_id: &str, original_name: &str) {
+    let meta = tool.meta.get_or_insert_with(rmcp::model::Meta::new);
+    meta.0.insert(
+        UNRELATED_TOOL_REF_META_KEY.to_string(),
+        serde_json::Value::String(format!("{source_id}:{original_name}")),
+    );
+}
+
 pub(super) fn merge_resources_with_collisions(
     per_upstream: Vec<(String, Vec<rmcp::model::Resource>)>,
 ) -> (Vec<rmcp::model::Resource>, HashMap<String, usize>) {
@@ -212,6 +222,9 @@ pub(super) fn merge_tools_surface(
         };
 
         r.tool.name = Cow::Owned(final_name.clone());
+        // This value is Gateway-owned. It is deliberately written after reading the
+        // upstream definition so an upstream cannot spoof another source's stable ref.
+        set_stable_tool_ref(&mut r.tool, &r.source_id, &r.original_name);
         merged.push(r.tool);
 
         let route = ToolRoute {

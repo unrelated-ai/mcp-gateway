@@ -1,3 +1,8 @@
+#![allow(
+    clippy::wildcard_imports,
+    reason = "split admin route modules share the parent module's private HTTP types"
+)]
+
 use crate::audit::{AuditActor, AuditError, AuditEvent, HttpAuditEvent, duration_ms};
 use crate::profile_http::{
     DataPlaneAuthSettings, DataPlaneLimitsSettings, NullableString, NullableU64,

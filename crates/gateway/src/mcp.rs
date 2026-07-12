@@ -1,3 +1,8 @@
+#![allow(
+    clippy::wildcard_imports,
+    reason = "the protocol helper module intentionally supplies the MCP response vocabulary"
+)]
+
 use crate::audit::AuditSink;
 use crate::catalog::SharedCatalog;
 use crate::contracts::ContractTracker;

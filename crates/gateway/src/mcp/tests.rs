@@ -50,6 +50,84 @@ fn tools_call_args_validation_reports_unknown_param_with_suggestion() {
 }
 
 #[test]
+fn tool_surface_adds_trusted_stable_refs_and_preserves_other_metadata() {
+    use crate::mcp::surface::{ToolSourceTools, UNRELATED_TOOL_REF_META_KEY, merge_tools_surface};
+
+    let mut upstream = rmcp::model::Tool::new(
+        "get_messages".to_string(),
+        "Read messages".to_string(),
+        Arc::new(serde_json::Map::from_iter([(
+            "type".to_string(),
+            serde_json::json!("object"),
+        )])),
+    );
+    upstream.meta = Some(rmcp::model::Meta(serde_json::Map::from_iter([
+        (
+            UNRELATED_TOOL_REF_META_KEY.to_string(),
+            serde_json::json!("spoofed:tool"),
+        ),
+        ("vendor.example/hint".to_string(), serde_json::json!(true)),
+    ])));
+    let mut local = upstream.clone();
+    local.meta = None;
+
+    let profile = crate::store::Profile {
+        id: "profile".to_string(),
+        tenant_id: "tenant".to_string(),
+        allow_partial_upstreams: true,
+        source_ids: vec!["telegram".to_string(), "local".to_string()],
+        transforms: unrelated_tool_transforms::TransformPipeline::default(),
+        enabled_tools: Vec::new(),
+        data_plane_auth_mode: DataPlaneAuthMode::Disabled,
+        accept_x_api_key: false,
+        oauth_required_scopes: Vec::new(),
+        rate_limit_enabled: false,
+        rate_limit_tool_calls_per_minute: None,
+        quota_enabled: false,
+        quota_tool_calls: None,
+        tool_call_timeout_secs: None,
+        tool_policies: vec![],
+        mcp: crate::store::McpProfileSettings::default(),
+    };
+    let merged = merge_tools_surface(
+        "profile",
+        &profile,
+        vec![
+            ToolSourceTools {
+                kind: ToolRouteKind::Upstream,
+                source_id: "telegram".to_string(),
+                tools: vec![upstream],
+            },
+            ToolSourceTools {
+                kind: ToolRouteKind::SharedLocal,
+                source_id: "local".to_string(),
+                tools: vec![local],
+            },
+        ],
+    );
+
+    assert_eq!(merged.tools.len(), 2);
+    assert_eq!(merged.tools[0].name, "telegram:get_messages");
+    assert_eq!(merged.tools[1].name, "local:get_messages");
+    let meta = merged.tools[0].meta.as_ref().expect("tool metadata");
+    assert_eq!(
+        meta.0.get(UNRELATED_TOOL_REF_META_KEY),
+        Some(&serde_json::json!("telegram:get_messages"))
+    );
+    assert_eq!(
+        meta.0.get("vendor.example/hint"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        merged.tools[1]
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.0.get(UNRELATED_TOOL_REF_META_KEY)),
+        Some(&serde_json::json!("local:get_messages"))
+    );
+}
+
+#[test]
 fn upstream_initialize_rewrite_strip_allowlist_and_clientinfo() {
     let caps: ClientCapabilities = serde_json::from_value(serde_json::json!({
         "roots": { "listChanged": true },

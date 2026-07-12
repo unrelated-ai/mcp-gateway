@@ -236,7 +236,7 @@ pub(super) async fn enforce_data_plane_auth(
     profile: &crate::store::Profile,
     headers: &HeaderMap,
     session_auth: Option<&TokenAuthV1>,
-    session_oauth: Option<&TokenOidcV1>,
+    session_oidc_token: Option<&TokenOidcV1>,
 ) -> Result<(), Response> {
     match profile.data_plane_auth_mode {
         DataPlaneAuthMode::Disabled => Ok(()),
@@ -244,7 +244,7 @@ pub(super) async fn enforce_data_plane_auth(
             enforce_api_key_every_request(state, profile, headers, session_auth).await
         }
         DataPlaneAuthMode::OAuth => {
-            enforce_oauth_in_session(state, profile, headers, session_oauth).await
+            enforce_oauth_in_session(state, profile, headers, session_oidc_token).await
         }
     }
 }

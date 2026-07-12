@@ -1,0 +1,4 @@
+interface:
+  display_name: "Unrelated Tools"
+  short_description: "Search and call Gateway tools efficiently"
+  default_prompt: "Use $unrelated-tools to find and call the right Gateway tool."

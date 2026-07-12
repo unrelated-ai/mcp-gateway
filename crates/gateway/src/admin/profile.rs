@@ -287,6 +287,7 @@ struct AdminPutProfileInnerError {
     error: AuditError,
 }
 
+#[allow(clippy::too_many_lines)]
 async fn admin_put_profile_inner_impl(
     store: &dyn AdminStore,
     oidc_issuer: Option<&str>,

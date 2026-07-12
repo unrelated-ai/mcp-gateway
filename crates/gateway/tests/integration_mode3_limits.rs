@@ -293,6 +293,7 @@ fn generate_test_keypair_and_jwks(kid: &str) -> anyhow::Result<(String, serde_js
     ))
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn sign_rs256_jwt(
     pem: &str,
     kid: &str,
@@ -1102,6 +1103,7 @@ async fn mode3_rejects_oauth_profiles_and_partial_runtime_configuration() -> any
 
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers)"]
+#[allow(clippy::too_many_lines)]
 async fn mode3_oauth_enforces_profile_scoped_and_tenant_wide_principal_bindings()
 -> anyhow::Result<()> {
     let kid = "test-kid";
