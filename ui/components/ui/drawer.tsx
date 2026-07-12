@@ -53,7 +53,10 @@ export function Drawer({
       if (e.shiftKey && (active === first || active === panelRef.current || focusOutsidePanel)) {
         e.preventDefault();
         last.focus();
-      } else if (!e.shiftKey && (active === last || active === panelRef.current || focusOutsidePanel)) {
+      } else if (
+        !e.shiftKey &&
+        (active === last || active === panelRef.current || focusOutsidePanel)
+      ) {
         e.preventDefault();
         first.focus();
       }
