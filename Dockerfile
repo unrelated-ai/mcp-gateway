@@ -118,13 +118,13 @@ ENV UNRELATED_CONFIG=/config/config.yaml
 # -----------------------------------------------------------------------------
 # Stage 2c: dbmate builder (patched Go toolchain for migrator image)
 # -----------------------------------------------------------------------------
-FROM golang:1.26.3-alpine3.23 AS dbmate-builder
+FROM golang:1.26.5-alpine3.23 AS dbmate-builder
 
 ENV CGO_ENABLED=1
 
 RUN apk add --no-cache build-base git
 
-RUN go install github.com/amacneil/dbmate/v2@v2.32.0
+RUN go install github.com/amacneil/dbmate/v2@v2.34.1
 
 # -----------------------------------------------------------------------------
 # Stage 3: Gateway runtime

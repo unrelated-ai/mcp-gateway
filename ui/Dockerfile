@@ -23,7 +23,7 @@ ENV NEXT_PUBLIC_UI_VERSION=$UI_VERSION
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
-RUN apk upgrade --no-cache zlib && \
+RUN apk upgrade --no-cache zlib libcrypto3 libssl3 && \
     rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 # Next.js "standalone" output (see next.config.ts)
