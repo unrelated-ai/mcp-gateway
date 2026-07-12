@@ -30,7 +30,3 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- default "default" .Values.serviceAccount.name -}}
 {{- end -}}
 {{- end -}}
-
-{{- define "unrelated-mcp-gateway-ui.inlineSecretName" -}}
-{{- printf "%s-inline-secrets" (include "unrelated-mcp-gateway-ui.fullname" .) | trunc 63 | trimSuffix "-" -}}
-{{- end -}}

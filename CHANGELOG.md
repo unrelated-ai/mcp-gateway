@@ -1,5 +1,59 @@
 # Changelog
 
+## 2026-07-12
+
+Release versions:
+
+- Adapter: `0.13.0`
+- Gateway: `0.13.0`
+- Gateway admin CLI: `0.13.0`
+- Gateway Operator: `0.13.0`
+- Gateway migrator image: `0.13.0`
+- Tenant-level Web UI: `0.9.0`
+- Helm chart packages:
+  - `unrelated-mcp-gateway`: `0.2.4`
+  - `unrelated-mcp-gateway-operator`: `0.2.4`
+  - `unrelated-mcp-gateway-ui`: `0.2.3`
+  - `unrelated-mcp-gateway-managed-fixtures`: `0.2.4`
+  - `unrelated-mcp-gateway-stack`: `0.2.4`
+- `unrelated-mcp-postgres`: unchanged at `0.2.0`
+
+Release tags: `adapter-v0.13.0`, `gateway-v0.13.0`, and `ui-v0.9.0`.
+
+### Web UI redesign (`0.9.0`)
+
+- Redesigned the tenant UI and its primary workflows around a consistent visual system.
+- Improved accessibility across forms and audit event details, including focus-managed drawers.
+- Centralized tenant API proxying and strengthened UI request handling and security headers.
+
+### Runtime and security refresh (`0.13.0` line)
+
+- Refreshed patched Rust lockfile dependencies, including `anyhow` `1.0.103` and `quinn-proto`
+  `0.11.16`, for the Adapter, Gateway, CLI, and Operator release builds.
+- Updated the migrator build to Go `1.26.5` and `dbmate` `2.34.1`.
+- Updated the UI runtime image to upgrade Alpine `zlib`, `libcrypto3`, and `libssl3` packages.
+- Updated CI security tooling to `cargo-deny` `0.20.2`, Trivy setup action `0.3.1`, and Trivy
+  `0.72.0`.
+
+### Helm, examples, and documentation
+
+- Updated quickstart, Helm, crate, package, and UI fallback versions for the new release lines.
+- Corrected the Operator chart's default image repository to
+  `ghcr.io/unrelated-ai/mcp-gateway-operator`.
+- Removed the unused `GATEWAY_ADMIN_TOKEN` Secret/value plumbing from the UI chart; tenant access
+  continues to use the tenant token stored in the UI session cookie.
+- Reworked the root README for first-time readers and synchronized component, deployment, CLI,
+  security, architecture, and UI documentation with the current implementation.
+
+### Upgrade notes
+
+- No Gateway database migration, API contract change, or Adapter configuration migration is
+  required for this release.
+- Remove obsolete `gatewayui.auth.adminToken` (stack chart) or `auth.adminToken` (standalone UI
+  chart) overrides; the UI never consumed this value.
+- The UI now sends `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'`, so
+  embedding it in an iframe is intentionally unsupported.
+
 ## 2026-06-02
 
 Release versions:

@@ -46,11 +46,6 @@ gatewayui:
   gateway:
     adminBase: http://unrelated-mcp-gateway-admin:4001
     dataBase: http://localhost:27100
-  auth:
-    adminToken:
-      existingSecret:
-        name: ""
-      value: dev-admin-token
   ingress:
     enabled: false
   autoscaling:

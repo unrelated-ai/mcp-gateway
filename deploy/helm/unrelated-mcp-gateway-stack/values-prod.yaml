@@ -80,12 +80,6 @@ gatewayui:
   gateway:
     adminBase: http://unrelated-mcp-gateway-admin:4001
     dataBase: https://gateway.example.com
-  auth:
-    adminToken:
-      existingSecret:
-        name: unrelated-mcp-gateway-secrets
-        key: UNRELATED_GATEWAY_ADMIN_TOKEN
-      value: ""
   ingress:
     enabled: true
     className: nginx

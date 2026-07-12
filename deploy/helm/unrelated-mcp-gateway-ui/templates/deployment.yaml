@@ -4,12 +4,6 @@
 {{- if not .Values.gateway.dataBase -}}
 {{- fail "gateway.dataBase must be set for the UI chart." -}}
 {{- end -}}
-{{- $adminTokenSecretName := .Values.auth.adminToken.existingSecret.name | default "" -}}
-{{- $adminTokenSecretKey := .Values.auth.adminToken.existingSecret.key | default "GATEWAY_ADMIN_TOKEN" -}}
-{{- if and (eq $adminTokenSecretName "") .Values.auth.adminToken.value -}}
-{{- $adminTokenSecretName = include "unrelated-mcp-gateway-ui.inlineSecretName" . -}}
-{{- $adminTokenSecretKey = "GATEWAY_ADMIN_TOKEN" -}}
-{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -66,13 +60,6 @@ spec:
             {{- if .Values.gateway.uiVersion }}
             - name: NEXT_PUBLIC_UI_VERSION
               value: {{ .Values.gateway.uiVersion | quote }}
-            {{- end }}
-            {{- if $adminTokenSecretName }}
-            - name: GATEWAY_ADMIN_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $adminTokenSecretName | quote }}
-                  key: {{ $adminTokenSecretKey | quote }}
             {{- end }}
 {{- with .Values.extraEnv }}
 {{ toYaml . | indent 12 }}
