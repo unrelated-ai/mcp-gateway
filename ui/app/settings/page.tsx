@@ -30,8 +30,9 @@ type GatewayStatusResponse =
         uptimeSecs?: number;
         configLoaded?: boolean;
         profileCount?: number;
-        oidcConfigured?: boolean;
-        oidcIssuer?: string;
+        oauthConfigured?: boolean;
+        oauthIssuer?: string;
+        publicDataBaseUrl?: string;
       };
     }
   | { ok: false; error?: string; status?: number };

@@ -373,7 +373,7 @@ async fn mode3_pg_profile_aggregates_two_upstreams_and_prefixes_on_collision() -
         .context("create profile response missing id")?
         .to_string();
 
-    // Mode 3 data-plane requires an API key (profile default: ApiKeyInitializeOnly).
+    // Mode 3 data-plane requires an API key by default.
     let t1_token = admin_issue_tenant_token(&client, &admin_base, "t1").await?;
     let api_key = tenant_create_api_key(&client, &admin_base, &t1_token, &profile_id).await?;
 
@@ -384,9 +384,7 @@ async fn mode3_pg_profile_aggregates_two_upstreams_and_prefixes_on_collision() -
     .await?;
 
     // No allowlist configured: tools/list should include all tools (collision => prefixed names).
-    let tools_msg = session
-        .request_value_no_auth(1, "tools/list", json!({}))
-        .await?;
+    let tools_msg = session.request_value(1, "tools/list", json!({})).await?;
     let tools = tools_msg
         .get("result")
         .and_then(|r| r.get("tools"))
@@ -424,9 +422,7 @@ async fn mode3_pg_profile_aggregates_two_upstreams_and_prefixes_on_collision() -
     .await?;
 
     // With only one tool enabled, there is no collision, so tools/list should show the base name.
-    let tools_msg = session
-        .request_value_no_auth(2, "tools/list", json!({}))
-        .await?;
+    let tools_msg = session.request_value(2, "tools/list", json!({})).await?;
     let tools = tools_msg
         .get("result")
         .and_then(|r| r.get("tools"))
@@ -446,7 +442,7 @@ async fn mode3_pg_profile_aggregates_two_upstreams_and_prefixes_on_collision() -
 
     // tools/call route to specific upstream.
     let call_msg = session
-        .request_value_no_auth(
+        .request_value(
             3,
             "tools/call",
             json!({ "name": "u1:echo_request", "arguments": {} }),

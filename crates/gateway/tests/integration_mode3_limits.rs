@@ -6,7 +6,10 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use common::pg::{apply_dbmate_migrations, wait_pg_ready};
+use common::pg::{
+    apply_dbmate_migration_file, apply_dbmate_migrations, apply_dbmate_migrations_before,
+    wait_pg_ready,
+};
 use common::sse::read_first_event_stream_json_message;
 use common::{KillOnDrop, pick_unused_port, spawn_gateway, wait_http_ok};
 use rmcp::model::{
@@ -23,7 +26,9 @@ use tokio::sync::Mutex;
 
 const ADMIN_TOKEN: &str = "test-admin-token";
 const SESSION_SECRET: &str = "test-session-secret";
-const TEST_OIDC_ISSUER: &str = "https://issuer.example";
+const TEST_OAUTH_ISSUER: &str = "https://issuer.example";
+const TEST_PUBLIC_DATA_BASE_URL: &str = "https://mcp.example.com";
+const OAUTH_MIGRATION: &str = "20260712000000_oauth_resource_server.sql";
 
 struct AbortOnDrop(tokio::task::JoinHandle<()>);
 
@@ -55,6 +60,27 @@ async fn start_postgres() -> anyhow::Result<Pg> {
     wait_pg_ready(&database_url, Duration::from_secs(30)).await?;
     apply_dbmate_migrations(&database_url).await?;
 
+    Ok(Pg {
+        _container: pg,
+        database_url,
+    })
+}
+
+async fn start_postgres_before_oauth_migration() -> anyhow::Result<Pg> {
+    let pg = GenericImage::new("postgres", "16-alpine")
+        .with_exposed_port(5432.tcp())
+        .with_env_var("POSTGRES_PASSWORD", "postgres")
+        .with_env_var("POSTGRES_USER", "postgres")
+        .with_env_var("POSTGRES_DB", "gateway")
+        .start()
+        .await
+        .context("start postgres container")?;
+    let host = pg.get_host().await?.to_string();
+    let port = pg.get_host_port_ipv4(5432).await?;
+    let database_url =
+        format!("postgres://postgres:postgres@{host}:{port}/gateway?sslmode=disable");
+    wait_pg_ready(&database_url, Duration::from_secs(30)).await?;
+    apply_dbmate_migrations_before(&database_url, OAUTH_MIGRATION).await?;
     Ok(Pg {
         _container: pg,
         database_url,
@@ -105,11 +131,11 @@ async fn start_gateway_mode3(database_url: &str) -> anyhow::Result<Gateway> {
     })
 }
 
-async fn start_gateway_mode3_with_oidc(
+async fn start_gateway_mode3_with_oauth(
     database_url: &str,
     jwks_uri: &str,
 ) -> anyhow::Result<Gateway> {
-    let gw = spawn_gateway_with_oidc(database_url, jwks_uri)?;
+    let gw = spawn_gateway_with_oauth(database_url, jwks_uri)?;
     let data_base = gw.data_base.clone();
     let admin_base = gw.admin_base.clone();
     let gw = KillOnDrop(gw.child);
@@ -267,11 +293,21 @@ fn generate_test_keypair_and_jwks(kid: &str) -> anyhow::Result<(String, serde_js
     ))
 }
 
-fn sign_rs256_jwt(pem: &str, kid: &str, subject: &str, now: u64) -> anyhow::Result<String> {
+fn sign_rs256_jwt(
+    pem: &str,
+    kid: &str,
+    subject: &str,
+    issuer: &str,
+    audience: serde_json::Value,
+    scopes: serde_json::Value,
+    now: u64,
+) -> anyhow::Result<String> {
     use jsonwebtoken::{Algorithm, EncodingKey, Header};
 
     let claims = json!({
-        "iss": TEST_OIDC_ISSUER,
+        "iss": issuer,
+        "aud": audience,
+        "scope": scopes,
         "sub": subject,
         "iat": now,
         "nbf": now.saturating_sub(1),
@@ -309,7 +345,7 @@ async fn mcp_initialize_with_jwt_allow_error(
             "params": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": { "name": "mode3-oidc-test", "version": "0" }
+                "clientInfo": { "name": "mode3-oauth-test", "version": "0" }
             }
         }),
     )
@@ -449,7 +485,7 @@ async fn post_mcp_allow_error(
     req.send().await.context("POST mcp")
 }
 
-fn spawn_gateway_with_oidc(
+fn spawn_gateway_with_oauth(
     database_url: &str,
     jwks_uri: &str,
 ) -> anyhow::Result<common::SpawnedGateway> {
@@ -474,12 +510,16 @@ fn spawn_gateway_with_oidc(
             "UNRELATED_GATEWAY_SECRET_KEYS",
             "unrelated-mcp-gateway-test-secret-keys-v1",
         )
-        .env("UNRELATED_GATEWAY_OIDC_ISSUER", TEST_OIDC_ISSUER)
-        .env("UNRELATED_GATEWAY_OIDC_JWKS_URI", jwks_uri)
+        .env(
+            "UNRELATED_GATEWAY_PUBLIC_DATA_BASE_URL",
+            TEST_PUBLIC_DATA_BASE_URL,
+        )
+        .env("UNRELATED_GATEWAY_OAUTH_ISSUER", TEST_OAUTH_ISSUER)
+        .env("UNRELATED_GATEWAY_OAUTH_JWKS_URI", jwks_uri)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .context("spawn gateway with oidc")?;
+        .context("spawn gateway with oauth")?;
     common::wait_for_gateway_ports(child, Duration::from_secs(10))
 }
 
@@ -678,7 +718,7 @@ async fn mode3_quota_blocks_second_tools_call() -> anyhow::Result<()> {
             &client,
             &profile_mcp_url(&gw.data_base, &profile_id),
             Some(&session_id),
-            None,
+            Some(&api_key),
             json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -697,7 +737,7 @@ async fn mode3_quota_blocks_second_tools_call() -> anyhow::Result<()> {
             &client,
             &profile_mcp_url(&gw.data_base, &profile_id),
             Some(&session_id),
-            None,
+            Some(&api_key),
             json!({
                 "jsonrpc": "2.0",
                 "id": 2,
@@ -757,7 +797,7 @@ async fn mode3_rate_limit_blocks_subsequent_tools_call_and_sets_retry_after() ->
             &client,
             &profile_mcp_url(&gw.data_base, &profile_id),
             Some(&session_id),
-            None,
+            Some(&api_key),
             json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -778,7 +818,7 @@ async fn mode3_rate_limit_blocks_subsequent_tools_call_and_sets_retry_after() ->
                 &client,
                 &profile_mcp_url(&gw.data_base, &profile_id),
                 Some(&session_id),
-                None,
+                Some(&api_key),
                 json!({
                     "jsonrpc": "2.0",
                     "id": id,
@@ -814,13 +854,13 @@ async fn mode3_rate_limit_blocks_subsequent_tools_call_and_sets_retry_after() ->
 
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers)"]
-async fn mode3_revoked_api_key_breaks_session_for_initialize_only_mode() -> anyhow::Result<()> {
+async fn mode3_revoked_api_key_breaks_authenticated_session() -> anyhow::Result<()> {
     let pg = start_postgres().await?;
     let upstream = start_mock_upstream().await?;
     let gw = start_gateway_mode3(&pg.database_url).await?;
     let client = reqwest::Client::new();
 
-    // Provision tenant + upstream + profile (default data-plane auth mode is ApiKeyInitializeOnly).
+    // Provision tenant + upstream + profile (default data-plane auth mode is API key).
     admin_create_tenant(&client, &gw.admin_base, "t1").await?;
     admin_create_upstream(
         &client,
@@ -856,7 +896,7 @@ async fn mode3_revoked_api_key_breaks_session_for_initialize_only_mode() -> anyh
         &client,
         &profile_mcp_url(&gw.data_base, &profile_id),
         Some(&session_id),
-        None,
+        Some(&api_key),
         json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}),
     )
     .await?;
@@ -875,13 +915,12 @@ async fn mode3_revoked_api_key_breaks_session_for_initialize_only_mode() -> anyh
         revoke_resp.status()
     );
 
-    // Now, in ApiKeyInitializeOnly mode, the gateway should reject follow-ups because it checks
-    // the key is still active on every request.
+    // The revoked key is rejected on subsequent requests.
     let after = post_mcp_allow_error(
         &client,
         &profile_mcp_url(&gw.data_base, &profile_id),
         Some(&session_id),
-        None,
+        Some(&api_key),
         json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
     )
     .await?;
@@ -919,14 +958,158 @@ async fn mode3_revoked_api_key_breaks_session_for_initialize_only_mode() -> anyh
 
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers)"]
-async fn mode3_jwt_every_request_enforces_profile_scoped_and_tenant_wide_oidc_bindings()
+async fn oauth_migration_converts_legacy_modes_and_preserves_x_api_key_values() -> anyhow::Result<()>
+{
+    use sqlx::Row as _;
+
+    let pg = start_postgres_before_oauth_migration().await?;
+    let pool = sqlx::PgPool::connect(&pg.database_url).await?;
+    sqlx::query("insert into tenants (id) values ('t1')")
+        .execute(&pool)
+        .await?;
+    for (name, mode, accept_x_api_key) in [
+        ("legacy-api-init", "api_key_initialize_only", false),
+        ("legacy-api-every", "api_key_every_request", true),
+        ("legacy-jwt", "jwt_every_request", true),
+        ("disabled", "disabled", false),
+    ] {
+        sqlx::query(
+            "insert into profiles (id, tenant_id, name, data_plane_auth_mode, accept_x_api_key) \
+             values (gen_random_uuid(), 't1', $1, $2, $3)",
+        )
+        .bind(name)
+        .bind(mode)
+        .bind(accept_x_api_key)
+        .execute(&pool)
+        .await?;
+    }
+
+    apply_dbmate_migration_file(&pg.database_url, OAUTH_MIGRATION).await?;
+    let rows = sqlx::query(
+        "select name, data_plane_auth_mode, accept_x_api_key, oauth_required_scopes \
+         from profiles order by name",
+    )
+    .fetch_all(&pool)
+    .await?;
+    let actual: Vec<(String, String, bool, Vec<String>)> = rows
+        .iter()
+        .map(|row| {
+            Ok((
+                row.try_get("name")?,
+                row.try_get("data_plane_auth_mode")?,
+                row.try_get("accept_x_api_key")?,
+                row.try_get("oauth_required_scopes")?,
+            ))
+        })
+        .collect::<Result<_, sqlx::Error>>()?;
+    assert_eq!(
+        actual,
+        vec![
+            (
+                "disabled".to_string(),
+                "disabled".to_string(),
+                false,
+                vec![]
+            ),
+            (
+                "legacy-api-every".to_string(),
+                "api_key".to_string(),
+                true,
+                vec![]
+            ),
+            (
+                "legacy-api-init".to_string(),
+                "api_key".to_string(),
+                false,
+                vec![]
+            ),
+            (
+                "legacy-jwt".to_string(),
+                "oauth".to_string(),
+                true,
+                vec!["mcp:access".to_string()]
+            ),
+        ]
+    );
+
+    sqlx::query("insert into profiles (id, tenant_id, name) values (gen_random_uuid(), 't1', 'new-default')")
+        .execute(&pool)
+        .await?;
+    let default = sqlx::query(
+        "select data_plane_auth_mode, accept_x_api_key, oauth_required_scopes \
+         from profiles where name = 'new-default'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(
+        default.try_get::<String, _>("data_plane_auth_mode")?,
+        "api_key"
+    );
+    assert!(!default.try_get::<bool, _>("accept_x_api_key")?);
+    assert!(
+        default
+            .try_get::<Vec<String>, _>("oauth_required_scopes")?
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers)"]
+async fn mode3_rejects_oauth_profiles_and_partial_runtime_configuration() -> anyhow::Result<()> {
+    let pg = start_postgres().await?;
+    let gw = start_gateway_mode3(&pg.database_url).await?;
+    let client = reqwest::Client::new();
+    admin_create_tenant(&client, &gw.admin_base, "t1").await?;
+
+    let response = client
+        .post(format!("{}/admin/v1/profiles", gw.admin_base))
+        .header("Authorization", format!("Bearer {ADMIN_TOKEN}"))
+        .json(&json!({
+            "tenantId": "t1",
+            "name": "oauth-without-runtime",
+            "enabled": true,
+            "allowPartialUpstreams": true,
+            "upstreams": [],
+            "dataPlaneAuth": { "mode": "oauth", "requiredScopes": ["mcp:access"] }
+        }))
+        .send()
+        .await?;
+    anyhow::ensure!(response.status() == reqwest::StatusCode::BAD_REQUEST);
+    drop(gw);
+
+    let error = match common::spawn_gateway_with_env(
+        &pg.database_url,
+        Some(ADMIN_TOKEN),
+        SESSION_SECRET,
+        &[(
+            "UNRELATED_GATEWAY_PUBLIC_DATA_BASE_URL",
+            TEST_PUBLIC_DATA_BASE_URL,
+        )],
+    ) {
+        Ok(spawned) => {
+            drop(KillOnDrop(spawned.child));
+            anyhow::bail!("gateway started with partial OAuth configuration");
+        }
+        Err(error) => error,
+    };
+    anyhow::ensure!(
+        format!("{error:#}").contains("partial OAuth configuration"),
+        "unexpected startup error: {error:#}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers)"]
+async fn mode3_oauth_enforces_profile_scoped_and_tenant_wide_principal_bindings()
 -> anyhow::Result<()> {
     let kid = "test-kid";
     let (pem, jwks_json) = generate_test_keypair_and_jwks(kid)?;
     let jwks = start_jwks_server(jwks_json).await?;
     let pg = start_postgres().await?;
     let upstream = start_mock_upstream().await?;
-    let gw = start_gateway_mode3_with_oidc(&pg.database_url, &jwks.jwks_uri).await?;
+    let gw = start_gateway_mode3_with_oauth(&pg.database_url, &jwks.jwks_uri).await?;
 
     let client = reqwest::Client::new();
     admin_create_tenant(&client, &gw.admin_base, "t1").await?;
@@ -945,22 +1128,167 @@ async fn mode3_jwt_every_request_enforces_profile_scoped_and_tenant_wide_oidc_bi
         "allowPartialUpstreams": true,
         "upstreams": ["u1"],
         "tools": [],
-        "dataPlaneAuth": { "mode": "jwtEveryRequest" }
+        "dataPlaneAuth": { "mode": "oauth", "requiredScopes": ["mcp:access"] }
     });
     let mut profile_body_2 = profile_body.clone();
     profile_body_2["name"] = json!("p2");
     let p1_id = admin_create_profile(&client, &gw.admin_base, profile_body).await?;
-    let p2_id = admin_create_profile(&client, &gw.admin_base, profile_body_2).await?;
+    let p2_id = admin_create_profile(&client, &gw.admin_base, profile_body_2.clone()).await?;
+
+    let mut api_key_profile = profile_body_2.clone();
+    api_key_profile["name"] = json!("api-key-profile");
+    api_key_profile["dataPlaneAuth"] = json!({ "mode": "apiKey", "acceptXApiKey": false });
+    let api_key_profile_id = admin_create_profile(&client, &gw.admin_base, api_key_profile).await?;
+
+    let mut disabled_auth_profile = profile_body_2.clone();
+    disabled_auth_profile["name"] = json!("disabled-auth-profile");
+    disabled_auth_profile["dataPlaneAuth"] = json!({ "mode": "disabled" });
+    let disabled_auth_profile_id =
+        admin_create_profile(&client, &gw.admin_base, disabled_auth_profile).await?;
+
+    let mut disabled_profile = profile_body_2.clone();
+    disabled_profile["name"] = json!("disabled-profile");
+    disabled_profile["enabled"] = json!(false);
+    let disabled_profile_id =
+        admin_create_profile(&client, &gw.admin_base, disabled_profile).await?;
+
+    let metadata = client
+        .get(format!(
+            "{}/.well-known/oauth-protected-resource/{p1_id}/mcp",
+            gw.data_base
+        ))
+        .send()
+        .await?;
+    anyhow::ensure!(metadata.status().is_success());
+    anyhow::ensure!(
+        metadata
+            .headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok())
+            == Some("no-store")
+    );
+    let metadata: serde_json::Value = metadata.json().await?;
+    anyhow::ensure!(
+        metadata["resource"] == json!(format!("{TEST_PUBLIC_DATA_BASE_URL}/{p1_id}/mcp"))
+    );
+    for metadata_path in [
+        format!("/.well-known/oauth-protected-resource/{api_key_profile_id}/mcp"),
+        format!("/.well-known/oauth-protected-resource/{disabled_auth_profile_id}/mcp"),
+        format!("/.well-known/oauth-protected-resource/{disabled_profile_id}/mcp"),
+        format!(
+            "/.well-known/oauth-protected-resource/{}/mcp",
+            uuid::Uuid::new_v4()
+        ),
+        "/.well-known/oauth-protected-resource/not-a-uuid/mcp".to_string(),
+    ] {
+        let response = client
+            .get(format!("{}{}", gw.data_base, metadata_path))
+            .send()
+            .await?;
+        anyhow::ensure!(response.status() == reqwest::StatusCode::NOT_FOUND);
+    }
+
+    let x_api_key_only = client
+        .post(profile_mcp_url(&gw.data_base, &p1_id))
+        .header("Accept", "application/json, text/event-stream")
+        .header("Content-Type", "application/json")
+        .header("X-API-Key", "must-be-ignored")
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "mode3-oauth-test", "version": "0" }
+            }
+        }))
+        .send()
+        .await?;
+    anyhow::ensure!(x_api_key_only.status() == reqwest::StatusCode::UNAUTHORIZED);
+    let challenge = x_api_key_only
+        .headers()
+        .get("www-authenticate")
+        .and_then(|value| value.to_str().ok())
+        .context("missing OAuth challenge")?;
+    anyhow::ensure!(challenge.contains("resource_metadata="));
+    anyhow::ensure!(!challenge.contains("error="));
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .context("time")?
         .as_secs();
-    let jwt = sign_rs256_jwt(&pem, kid, "user1", now)?;
+    let p1_resource = format!("{TEST_PUBLIC_DATA_BASE_URL}/{p1_id}/mcp");
+    let p2_resource = format!("{TEST_PUBLIC_DATA_BASE_URL}/{p2_id}/mcp");
+    let jwt_p1 = sign_rs256_jwt(
+        &pem,
+        kid,
+        "user1",
+        TEST_OAUTH_ISSUER,
+        json!(&p1_resource),
+        json!("mcp:access"),
+        now,
+    )?;
+
+    let wrong_issuer = sign_rs256_jwt(
+        &pem,
+        kid,
+        "user1",
+        "https://wrong-issuer.example",
+        json!(&p1_resource),
+        json!(["mcp:access"]),
+        now,
+    )?;
+    let invalid =
+        mcp_initialize_with_jwt_allow_error(&client, &gw.data_base, &p1_id, &wrong_issuer, 10)
+            .await?;
+    anyhow::ensure!(invalid.status() == reqwest::StatusCode::UNAUTHORIZED);
+    anyhow::ensure!(
+        invalid
+            .headers()
+            .get("www-authenticate")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.contains("error=\"invalid_token\""))
+    );
+
+    let wrong_audience = sign_rs256_jwt(
+        &pem,
+        kid,
+        "user1",
+        TEST_OAUTH_ISSUER,
+        json!("https://mcp.example.com/wrong/mcp"),
+        json!("mcp:access"),
+        now,
+    )?;
+    let invalid =
+        mcp_initialize_with_jwt_allow_error(&client, &gw.data_base, &p1_id, &wrong_audience, 11)
+            .await?;
+    anyhow::ensure!(invalid.status() == reqwest::StatusCode::UNAUTHORIZED);
+
+    let missing_scope = sign_rs256_jwt(
+        &pem,
+        kid,
+        "user1",
+        TEST_OAUTH_ISSUER,
+        json!(&p1_resource),
+        json!(["tools:read"]),
+        now,
+    )?;
+    let insufficient =
+        mcp_initialize_with_jwt_allow_error(&client, &gw.data_base, &p1_id, &missing_scope, 12)
+            .await?;
+    anyhow::ensure!(insufficient.status() == reqwest::StatusCode::FORBIDDEN);
+    anyhow::ensure!(
+        insufficient
+            .headers()
+            .get("www-authenticate")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.contains("error=\"insufficient_scope\""))
+    );
 
     let denied =
-        mcp_initialize_with_jwt_allow_error(&client, &gw.data_base, &p1_id, &jwt, 0).await?;
-    anyhow::ensure!(denied.status() == reqwest::StatusCode::UNAUTHORIZED);
+        mcp_initialize_with_jwt_allow_error(&client, &gw.data_base, &p1_id, &jwt_p1, 0).await?;
+    anyhow::ensure!(denied.status() == reqwest::StatusCode::FORBIDDEN);
 
     let _ = admin_put(
         &client,
@@ -971,7 +1299,7 @@ async fn mode3_jwt_every_request_enforces_profile_scoped_and_tenant_wide_oidc_bi
     .await?;
 
     let init_p1 =
-        mcp_initialize_with_jwt_allow_error(&client, &gw.data_base, &p1_id, &jwt, 1).await?;
+        mcp_initialize_with_jwt_allow_error(&client, &gw.data_base, &p1_id, &jwt_p1, 1).await?;
     anyhow::ensure!(init_p1.status().is_success());
     let session_id = init_p1
         .headers()
@@ -985,15 +1313,24 @@ async fn mode3_jwt_every_request_enforces_profile_scoped_and_tenant_wide_oidc_bi
         &client,
         &profile_mcp_url(&gw.data_base, &p1_id),
         Some(&session_id),
-        Some(&jwt),
+        Some(&jwt_p1),
         json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
     )
     .await?;
     anyhow::ensure!(list_ok.status().is_success());
 
+    let jwt_both = sign_rs256_jwt(
+        &pem,
+        kid,
+        "user1",
+        TEST_OAUTH_ISSUER,
+        json!([p1_resource, p2_resource]),
+        json!(["mcp:access"]),
+        now,
+    )?;
     let denied_p2 =
-        mcp_initialize_with_jwt_allow_error(&client, &gw.data_base, &p2_id, &jwt, 3).await?;
-    anyhow::ensure!(denied_p2.status() == reqwest::StatusCode::UNAUTHORIZED);
+        mcp_initialize_with_jwt_allow_error(&client, &gw.data_base, &p2_id, &jwt_both, 3).await?;
+    anyhow::ensure!(denied_p2.status() == reqwest::StatusCode::FORBIDDEN);
 
     let _ = admin_put(
         &client,
@@ -1004,7 +1341,22 @@ async fn mode3_jwt_every_request_enforces_profile_scoped_and_tenant_wide_oidc_bi
     .await?;
 
     let allowed_p2 =
-        mcp_initialize_with_jwt_allow_error(&client, &gw.data_base, &p2_id, &jwt, 4).await?;
+        mcp_initialize_with_jwt_allow_error(&client, &gw.data_base, &p2_id, &jwt_both, 4).await?;
     anyhow::ensure!(allowed_p2.status().is_success());
+
+    drop(gw);
+    match spawn_gateway(&pg.database_url, Some(ADMIN_TOKEN), SESSION_SECRET) {
+        Ok(spawned) => {
+            drop(KillOnDrop(spawned.child));
+            anyhow::bail!("gateway started without OAuth despite persisted OAuth profiles");
+        }
+        Err(error) => {
+            let detail = format!("{error:#}");
+            anyhow::ensure!(
+                detail.contains("persisted OAuth profiles exist"),
+                "unexpected startup error: {error:#}"
+            );
+        }
+    }
     Ok(())
 }

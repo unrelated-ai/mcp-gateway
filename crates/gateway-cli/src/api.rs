@@ -118,9 +118,9 @@ pub struct ToolPolicy {
 #[serde(rename_all = "camelCase")]
 pub enum DataPlaneAuthMode {
     Disabled,
-    ApiKeyInitializeOnly,
-    ApiKeyEveryRequest,
-    JwtEveryRequest,
+    ApiKey,
+    #[serde(rename = "oauth")]
+    OAuth,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
@@ -141,10 +141,42 @@ pub enum UpstreamNetworkClass {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DataPlaneAuthSettings {
-    pub mode: DataPlaneAuthMode,
-    pub accept_x_api_key: bool,
+#[serde(tag = "mode", rename_all = "camelCase")]
+pub enum DataPlaneAuthSettings {
+    Disabled,
+    ApiKey {
+        #[serde(default, rename = "acceptXApiKey")]
+        accept_x_api_key: bool,
+    },
+    #[serde(rename = "oauth")]
+    OAuth {
+        #[serde(rename = "requiredScopes")]
+        required_scopes: Vec<String>,
+    },
+}
+
+impl DataPlaneAuthSettings {
+    pub const fn mode(&self) -> DataPlaneAuthMode {
+        match self {
+            Self::Disabled => DataPlaneAuthMode::Disabled,
+            Self::ApiKey { .. } => DataPlaneAuthMode::ApiKey,
+            Self::OAuth { .. } => DataPlaneAuthMode::OAuth,
+        }
+    }
+
+    pub const fn accept_x_api_key(&self) -> bool {
+        match self {
+            Self::ApiKey { accept_x_api_key } => *accept_x_api_key,
+            _ => false,
+        }
+    }
+
+    pub fn required_scopes(&self) -> &[String] {
+        match self {
+            Self::OAuth { required_scopes } => required_scopes,
+            _ => &[],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

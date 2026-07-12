@@ -48,6 +48,7 @@ type InvalidationPublisher =
 #[derive(Debug, Clone)]
 struct ProfileAuthCore {
     accept_x_api_key: bool,
+    oauth_required_scopes: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +83,7 @@ struct AdminProfileFlags {
 #[derive(Debug, Clone)]
 struct AdminProfileAuth {
     accept_x_api_key: bool,
+    oauth_required_scopes: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +119,7 @@ struct ProfileUpsertFlags {
 
 struct ProfileUpsertAuth {
     accept_x_api_key: bool,
+    oauth_required_scopes: Vec<String>,
 }
 
 struct ProfileUpsertLimits {
@@ -190,6 +193,7 @@ select
   p.mcp_settings,
   p.data_plane_auth_mode,
   p.accept_x_api_key,
+  p.oauth_required_scopes,
   p.rate_limit_enabled,
   p.rate_limit_tool_calls_per_minute,
   p.quota_enabled,
@@ -225,6 +229,7 @@ where p.id = $1
         let data_plane_auth_mode = parse_data_plane_auth_mode(&data_plane_auth_mode)?;
 
         let accept_x_api_key: bool = row.try_get("accept_x_api_key")?;
+        let oauth_required_scopes: Vec<String> = row.try_get("oauth_required_scopes")?;
         let rate_limit_enabled: bool = row.try_get("rate_limit_enabled")?;
         let rate_limit_tool_calls_per_minute: Option<i32> =
             row.try_get("rate_limit_tool_calls_per_minute")?;
@@ -248,7 +253,10 @@ where p.id = $1
             transforms,
             mcp,
             data_plane_auth_mode,
-            auth: ProfileAuthCore { accept_x_api_key },
+            auth: ProfileAuthCore {
+                accept_x_api_key,
+                oauth_required_scopes,
+            },
             limits: ProfileLimitsCore {
                 rate_limit_enabled,
                 quota_enabled,
@@ -322,6 +330,7 @@ select
   mcp_settings,
   data_plane_auth_mode,
   accept_x_api_key,
+  oauth_required_scopes,
   rate_limit_enabled,
   rate_limit_tool_calls_per_minute,
   quota_enabled,
@@ -357,6 +366,7 @@ where id = $1
         let data_plane_auth_mode = parse_data_plane_auth_mode(&data_plane_auth_mode)?;
 
         let accept_x_api_key: bool = row.try_get("accept_x_api_key")?;
+        let oauth_required_scopes: Vec<String> = row.try_get("oauth_required_scopes")?;
         let rate_limit_enabled: bool = row.try_get("rate_limit_enabled")?;
         let rate_limit_tool_calls_per_minute: Option<i32> =
             row.try_get("rate_limit_tool_calls_per_minute")?;
@@ -386,7 +396,10 @@ where id = $1
             transforms,
             mcp,
             data_plane_auth_mode,
-            auth: AdminProfileAuth { accept_x_api_key },
+            auth: AdminProfileAuth {
+                accept_x_api_key,
+                oauth_required_scopes,
+            },
             limits: AdminProfileLimits {
                 rate_limit_enabled,
                 quota_enabled,
@@ -477,6 +490,7 @@ insert into profiles (
   mcp_settings,
   data_plane_auth_mode,
   accept_x_api_key,
+  oauth_required_scopes,
   rate_limit_enabled,
   rate_limit_tool_calls_per_minute,
   quota_enabled,
@@ -484,7 +498,7 @@ insert into profiles (
   tool_call_timeout_secs,
   tool_policies
 )
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 on conflict (id) do update
 set tenant_id = excluded.tenant_id,
     name = excluded.name,
@@ -496,6 +510,7 @@ set tenant_id = excluded.tenant_id,
     mcp_settings = excluded.mcp_settings,
     data_plane_auth_mode = excluded.data_plane_auth_mode,
     accept_x_api_key = excluded.accept_x_api_key,
+    oauth_required_scopes = excluded.oauth_required_scopes,
     rate_limit_enabled = excluded.rate_limit_enabled,
     rate_limit_tool_calls_per_minute = excluded.rate_limit_tool_calls_per_minute,
     quota_enabled = excluded.quota_enabled,
@@ -516,6 +531,7 @@ set tenant_id = excluded.tenant_id,
         .bind(serde_json::to_value(input.mcp)?)
         .bind(data_plane_auth_mode_to_db(input.data_plane_auth_mode))
         .bind(input.auth.accept_x_api_key)
+        .bind(input.auth.oauth_required_scopes)
         .bind(input.limits.rate_limit_enabled)
         .bind(input.rate_limit_tool_calls_per_minute)
         .bind(input.limits.quota_enabled)
@@ -807,6 +823,7 @@ impl Store for PostgresStore {
             enabled_tools: core.enabled_tools,
             data_plane_auth_mode: core.data_plane_auth_mode,
             accept_x_api_key: core.auth.accept_x_api_key,
+            oauth_required_scopes: core.auth.oauth_required_scopes,
             rate_limit_enabled: core.limits.rate_limit_enabled,
             rate_limit_tool_calls_per_minute: core.rate_limit_tool_calls_per_minute,
             quota_enabled: core.limits.quota_enabled,
@@ -1652,6 +1669,7 @@ select
   mcp_settings,
   data_plane_auth_mode,
   accept_x_api_key,
+  oauth_required_scopes,
   rate_limit_enabled,
   rate_limit_tool_calls_per_minute,
   quota_enabled,
@@ -1684,6 +1702,7 @@ order by created_at asc, id asc
                 enabled_tools: row.enabled_tools,
                 data_plane_auth_mode: row.data_plane_auth_mode,
                 accept_x_api_key: row.auth.accept_x_api_key,
+                oauth_required_scopes: row.auth.oauth_required_scopes,
                 rate_limit_enabled: row.limits.rate_limit_enabled,
                 rate_limit_tool_calls_per_minute: row.rate_limit_tool_calls_per_minute,
                 quota_enabled: row.limits.quota_enabled,
@@ -1721,6 +1740,7 @@ order by created_at asc, id asc
             enabled_tools: row.enabled_tools,
             data_plane_auth_mode: row.data_plane_auth_mode,
             accept_x_api_key: row.auth.accept_x_api_key,
+            oauth_required_scopes: row.auth.oauth_required_scopes,
             rate_limit_enabled: row.limits.rate_limit_enabled,
             rate_limit_tool_calls_per_minute: row.rate_limit_tool_calls_per_minute,
             quota_enabled: row.limits.quota_enabled,
@@ -1808,6 +1828,7 @@ where id = $1
                 data_plane_auth_mode: input.data_plane_auth.mode,
                 auth: ProfileUpsertAuth {
                     accept_x_api_key: input.data_plane_auth.accept_x_api_key,
+                    oauth_required_scopes: input.data_plane_auth.oauth_required_scopes,
                 },
                 limits: ProfileUpsertLimits {
                     rate_limit_enabled: input.limits.rate_limit_enabled,
@@ -3143,9 +3164,8 @@ where tenant_id = $1
 fn parse_data_plane_auth_mode(mode: &str) -> anyhow::Result<DataPlaneAuthMode> {
     match mode {
         "disabled" => Ok(DataPlaneAuthMode::Disabled),
-        "api_key_initialize_only" => Ok(DataPlaneAuthMode::ApiKeyInitializeOnly),
-        "api_key_every_request" => Ok(DataPlaneAuthMode::ApiKeyEveryRequest),
-        "jwt_every_request" => Ok(DataPlaneAuthMode::JwtEveryRequest),
+        "api_key" => Ok(DataPlaneAuthMode::ApiKey),
+        "oauth" => Ok(DataPlaneAuthMode::OAuth),
         other => Err(anyhow::anyhow!("unknown data_plane_auth_mode '{other}'")),
     }
 }
@@ -3153,9 +3173,8 @@ fn parse_data_plane_auth_mode(mode: &str) -> anyhow::Result<DataPlaneAuthMode> {
 const fn data_plane_auth_mode_to_db(mode: DataPlaneAuthMode) -> &'static str {
     match mode {
         DataPlaneAuthMode::Disabled => "disabled",
-        DataPlaneAuthMode::ApiKeyInitializeOnly => "api_key_initialize_only",
-        DataPlaneAuthMode::ApiKeyEveryRequest => "api_key_every_request",
-        DataPlaneAuthMode::JwtEveryRequest => "jwt_every_request",
+        DataPlaneAuthMode::ApiKey => "api_key",
+        DataPlaneAuthMode::OAuth => "oauth",
     }
 }
 

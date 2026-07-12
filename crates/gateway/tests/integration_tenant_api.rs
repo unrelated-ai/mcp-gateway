@@ -648,9 +648,7 @@ async fn tenant_can_create_upstream_and_attach_to_profile() -> anyhow::Result<()
 
     // Data-plane initialize + tools/list should succeed.
     let mcp = McpSession::connect(format!("{data_base}/{profile_id}/mcp"), Some(secret)).await?;
-    let tools = mcp
-        .request_value_no_auth(1, "tools/list", json!({}))
-        .await?;
+    let tools = mcp.request_value(1, "tools/list", json!({})).await?;
     let arr = tools
         .get("result")
         .and_then(|r| r.get("tools"))
@@ -748,7 +746,7 @@ async fn tenant_tool_source_requires_secret_and_appears_in_tools_list_after_put_
         .context("create profile response missing id")?
         .to_string();
 
-    // Mode 3 data-plane requires an API key (profile default: ApiKeyInitializeOnly).
+    // Mode 3 data-plane requires an API key by default.
     let create_key_resp = client
         .post(format!("{admin_base}/tenant/v1/api-keys"))
         .header("Authorization", format!("Bearer {t1_token}"))
@@ -776,10 +774,7 @@ async fn tenant_tool_source_requires_secret_and_appears_in_tools_list_after_put_
     .await?;
 
     // tools/list: should be empty because the required secret is missing (source cannot be built).
-    // (ApiKeyInitializeOnly → follow-ups should work without auth.)
-    let tools_msg = session
-        .request_value_no_auth(1, "tools/list", json!({}))
-        .await?;
+    let tools_msg = session.request_value(1, "tools/list", json!({})).await?;
     let tools = tools_msg
         .get("result")
         .and_then(|r| r.get("tools"))
@@ -798,9 +793,7 @@ async fn tenant_tool_source_requires_secret_and_appears_in_tools_list_after_put_
     anyhow::ensure!(put_secret_resp.status().is_success());
 
     // tools/list: now the tool source can be built and the tool should appear.
-    let tools_msg = session
-        .request_value_no_auth(2, "tools/list", json!({}))
-        .await?;
+    let tools_msg = session.request_value(2, "tools/list", json!({})).await?;
     let tools = tools_msg
         .get("result")
         .and_then(|r| r.get("tools"))

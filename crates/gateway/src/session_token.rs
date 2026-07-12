@@ -171,7 +171,7 @@ pub struct TokenPayloadV1 {
     pub bindings: Vec<UpstreamSessionBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<TokenAuthV1>,
-    /// Optional OIDC principal binding for `jwtEveryRequest` data-plane auth.
+    /// Optional issuer/subject binding for OAuth data-plane auth.
     ///
     /// When present, the Gateway will reject requests whose bearer JWT principal does not match.
     #[serde(default, skip_serializing_if = "Option::is_none")]

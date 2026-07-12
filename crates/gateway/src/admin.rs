@@ -1,8 +1,7 @@
 use crate::audit::{AuditActor, AuditError, AuditEvent, HttpAuditEvent, duration_ms};
 use crate::profile_http::{
     DataPlaneAuthSettings, DataPlaneLimitsSettings, NullableString, NullableU64,
-    default_data_plane_auth_mode, resolve_nullable_u64, validate_tool_allowlist,
-    validate_tool_timeout_and_policies,
+    resolve_nullable_u64, validate_tool_allowlist, validate_tool_timeout_and_policies,
 };
 use crate::serde_helpers::default_true;
 use crate::store::{
@@ -35,7 +34,7 @@ use unrelated_openapi_tools::config::ApiServerConfig;
 use unrelated_tool_transforms::TransformPipeline;
 use uuid::{Uuid, Version};
 
-const OIDC_NOT_CONFIGURED_MSG: &str = "JWT/OIDC is unavailable because OIDC is not configured on the Gateway (missing UNRELATED_GATEWAY_OIDC_ISSUER). Configure OIDC or choose a different mode.";
+const OAUTH_NOT_CONFIGURED_MSG: &str = "OAuth is unavailable because data-plane OAuth is not configured on the Gateway. Configure UNRELATED_GATEWAY_PUBLIC_DATA_BASE_URL and UNRELATED_GATEWAY_OAUTH_ISSUER, or choose a different mode.";
 type BoxResponse = Box<axum::response::Response>;
 
 #[derive(Debug, Clone, Default)]
@@ -267,8 +266,9 @@ async fn create_bootstrap_profile(
             enabled_tools: &[],
             data_plane_auth: PutProfileDataPlaneAuth {
                 // Security posture: strict mode by default for newly created starter profiles.
-                mode: DataPlaneAuthMode::ApiKeyEveryRequest,
+                mode: DataPlaneAuthMode::ApiKey,
                 accept_x_api_key: false,
+                oauth_required_scopes: Vec::new(),
             },
             limits: PutProfileLimits {
                 rate_limit_enabled: false,
@@ -1537,21 +1537,15 @@ fn resolve_data_plane_auth_settings(
         Some(v) => v,
         None => {
             if is_update {
-                existing.map_or(
-                    DataPlaneAuthSettings {
-                        mode: default_data_plane_auth_mode(),
-                        accept_x_api_key: false,
-                    },
-                    |p| DataPlaneAuthSettings {
-                        mode: p.data_plane_auth_mode,
-                        accept_x_api_key: p.accept_x_api_key,
-                    },
-                )
+                existing.map_or_else(DataPlaneAuthSettings::default, |p| {
+                    DataPlaneAuthSettings::from_parts(
+                        p.data_plane_auth_mode,
+                        p.accept_x_api_key,
+                        p.oauth_required_scopes.clone(),
+                    )
+                })
             } else {
-                DataPlaneAuthSettings {
-                    mode: default_data_plane_auth_mode(),
-                    accept_x_api_key: false,
-                }
+                DataPlaneAuthSettings::default()
             }
         }
     }
@@ -1663,13 +1657,13 @@ fn resolve_profile_description(
     }
 }
 
-fn validate_oidc_configured_if_needed(
+fn validate_oauth_configured_if_needed(
     oidc_issuer: Option<&str>,
     mode: DataPlaneAuthMode,
 ) -> Result<(), BoxResponse> {
-    if mode == DataPlaneAuthMode::JwtEveryRequest && oidc_issuer.is_none() {
+    if mode == DataPlaneAuthMode::OAuth && oidc_issuer.is_none() {
         return Err(Box::new(
-            (StatusCode::BAD_REQUEST, OIDC_NOT_CONFIGURED_MSG).into_response(),
+            (StatusCode::BAD_REQUEST, OAUTH_NOT_CONFIGURED_MSG).into_response(),
         ));
     }
     Ok(())
@@ -1708,8 +1702,9 @@ async fn put_profile_in_store(
             transforms: &req.transforms,
             enabled_tools: input.enabled_tools,
             data_plane_auth: PutProfileDataPlaneAuth {
-                mode: input.data_plane_auth.mode,
-                accept_x_api_key: input.data_plane_auth.accept_x_api_key,
+                mode: input.data_plane_auth.mode(),
+                accept_x_api_key: input.data_plane_auth.accept_x_api_key(),
+                oauth_required_scopes: input.data_plane_auth.required_scopes().to_vec(),
             },
             limits: PutProfileLimits {
                 rate_limit_enabled: input.data_plane_limits.rate_limit_enabled,
@@ -1827,14 +1822,23 @@ async fn admin_put_profile_inner_impl(
 
     let description = resolve_profile_description(req.description.as_ref(), existing.as_ref());
     let enabled_tools = req.tools.as_deref().unwrap_or(&[]);
-    let data_plane_auth =
+    let mut data_plane_auth =
         resolve_data_plane_auth_settings(req.data_plane_auth.clone(), existing.as_ref(), is_update);
+    if let Err(message) = data_plane_auth.validate() {
+        return Err(Box::new(AdminPutProfileInnerError {
+            resp: (StatusCode::BAD_REQUEST, message.clone()).into_response(),
+            profile_uuid: Some(profile_uuid),
+            profile_id: Some(profile_id),
+            name: Some(name),
+            error: AuditError::new("bad_request", message),
+        }));
+    }
     admin_put_profile_validate_oidc(
         profile_uuid,
         profile_id.clone(),
         name.clone(),
         oidc_issuer,
-        data_plane_auth.mode,
+        data_plane_auth.mode(),
     )?;
 
     let data_plane_limits = admin_put_profile_resolve_data_plane_limits(
@@ -1981,7 +1985,7 @@ fn admin_put_profile_validate_oidc(
     oidc_issuer: Option<&str>,
     mode: DataPlaneAuthMode,
 ) -> AdminPutProfileInnerResult<()> {
-    if let Err(resp) = validate_oidc_configured_if_needed(oidc_issuer, mode) {
+    if let Err(resp) = validate_oauth_configured_if_needed(oidc_issuer, mode) {
         let status = resp.status();
         return Err(Box::new(AdminPutProfileInnerError {
             resp: *resp,
@@ -2322,10 +2326,11 @@ fn profile_to_admin_response(profile: AdminProfile) -> ProfileResponse {
         sources: profile.source_ids,
         transforms: profile.transforms,
         tools: profile.enabled_tools,
-        data_plane_auth: DataPlaneAuthSettings {
-            mode: profile.data_plane_auth_mode,
-            accept_x_api_key: profile.accept_x_api_key,
-        },
+        data_plane_auth: DataPlaneAuthSettings::from_parts(
+            profile.data_plane_auth_mode,
+            profile.accept_x_api_key,
+            profile.oauth_required_scopes,
+        ),
         data_plane_limits: DataPlaneLimitsSettings {
             rate_limit_enabled: profile.rate_limit_enabled,
             rate_limit_tool_calls_per_minute: profile.rate_limit_tool_calls_per_minute,
@@ -2987,7 +2992,7 @@ async fn list_oidc_principals(
     let Some(issuer) = state.oidc_issuer.as_deref() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            "OIDC not configured (set UNRELATED_GATEWAY_OIDC_ISSUER)",
+            "OAuth not configured (set UNRELATED_GATEWAY_OAUTH_ISSUER)",
         )
             .into_response();
     };
@@ -3020,7 +3025,7 @@ async fn put_oidc_principal(
     let Some(issuer) = state.oidc_issuer.as_deref() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            "OIDC not configured (set UNRELATED_GATEWAY_OIDC_ISSUER)",
+            "OAuth not configured (set UNRELATED_GATEWAY_OAUTH_ISSUER)",
         )
             .into_response();
     };
@@ -3084,7 +3089,7 @@ async fn delete_oidc_principal(
     let Some(issuer) = state.oidc_issuer.as_deref() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            "OIDC not configured (set UNRELATED_GATEWAY_OIDC_ISSUER)",
+            "OAuth not configured (set UNRELATED_GATEWAY_OAUTH_ISSUER)",
         )
             .into_response();
     };
@@ -3502,6 +3507,19 @@ async fn put_profile_audit_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oauth_profiles_require_runtime_configuration() {
+        assert!(validate_oauth_configured_if_needed(None, DataPlaneAuthMode::OAuth).is_err());
+        assert!(
+            validate_oauth_configured_if_needed(
+                Some("https://login.example.com"),
+                DataPlaneAuthMode::OAuth
+            )
+            .is_ok()
+        );
+        assert!(validate_oauth_configured_if_needed(None, DataPlaneAuthMode::ApiKey).is_ok());
+    }
 
     #[test]
     fn managed_mcp_status_filter_defaults_to_pending_and_reconciling() {

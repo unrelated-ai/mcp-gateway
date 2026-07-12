@@ -12,47 +12,27 @@ import {
   Toggle,
 } from "@/components/ui";
 import { InfoIconAlt, LockIcon } from "@/components/icons";
+import {
+  authSettingsFromDraft,
+  buildMcpClientConfig,
+  type AuthDraft,
+} from "@/src/lib/data-plane-auth";
 
 function getMcpJsonText(
   clientKey: string,
   mcpUrl: string,
   profile: Profile | null,
-  authOverride: { mode: Profile["dataPlaneAuth"]["mode"]; acceptXApiKey: boolean } | null,
+  authOverride: AuthDraft | null,
 ): string {
-  const noteFromProfileDescription = profile?.description?.trim() || null;
-
-  const entry: Record<string, unknown> = {
-    type: "streamable-http",
-    url: mcpUrl,
-  };
-
-  const effectiveAuth = authOverride ?? profile?.dataPlaneAuth ?? null;
-  const mode = effectiveAuth?.mode ?? null;
-  if (mode && mode !== "disabled") {
-    if (mode.startsWith("apiKey")) {
-      const headers: Record<string, string> = { Authorization: "Bearer <api_key_secret>" };
-      if (effectiveAuth?.acceptXApiKey) {
-        headers["x-api-key"] = "<api_key_secret>";
-      }
-      entry.headers = headers;
-      entry.note = noteFromProfileDescription
-        ? noteFromProfileDescription
-        : mode === "apiKeyInitializeOnly"
-          ? "Unrelated MCP Gateway profile (API key required only for initialize; compatibility mode, not recommended)"
-          : "Unrelated MCP Gateway profile (API key required on every request)";
-    } else if (mode.startsWith("jwt")) {
-      entry.headers = { Authorization: "Bearer <jwt>" };
-      entry.note = noteFromProfileDescription
-        ? noteFromProfileDescription
-        : "Unrelated MCP Gateway profile (JWT required on every request)";
-    }
-  } else {
-    entry.note = noteFromProfileDescription
-      ? noteFromProfileDescription
-      : "Unrelated MCP Gateway profile (no auth)";
-  }
-
-  return JSON.stringify({ mcpServers: { [clientKey]: entry } }, null, 2);
+  const effectiveAuth = authOverride
+    ? authSettingsFromDraft(authOverride)
+    : (profile?.dataPlaneAuth ?? null);
+  return buildMcpClientConfig(
+    clientKey,
+    mcpUrl,
+    profile?.description?.trim() || null,
+    effectiveAuth,
+  );
 }
 
 const InfoIcon = InfoIconAlt;
@@ -76,7 +56,7 @@ export function ConnectionInfoCard({
   onEditAuth: () => void;
   onOpenAuthHelp: () => void;
   showAuthSettings: boolean;
-  authDraft: { mode: Profile["dataPlaneAuth"]["mode"]; acceptXApiKey: boolean } | null;
+  authDraft: AuthDraft | null;
 }) {
   const authModeLabel = formatDataPlaneAuthMode(profile?.dataPlaneAuth.mode);
 

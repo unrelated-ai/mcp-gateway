@@ -4,12 +4,18 @@ import { useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
 import type { Profile } from "@/src/lib/types";
+import {
+  authDraftFromSettings,
+  authSettingsFromDraft,
+  type AuthDraft,
+} from "@/src/lib/data-plane-auth";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Button,
   Callout,
   ConfirmModal,
   IconButton,
+  Input,
   Modal,
   ModalActions,
   Select,
@@ -44,14 +50,8 @@ export default function ProfileDetailPage() {
   const [showMcpAuthHelp, setShowMcpAuthHelp] = useState(false);
   const [showAuthSettings, setShowAuthSettings] = useState(false);
   const [editingMeta, setEditingMeta] = useState(false);
-  const [authDraft, setAuthDraft] = useState<{
-    mode: "disabled" | "apiKeyInitializeOnly" | "apiKeyEveryRequest" | "jwtEveryRequest";
-    acceptXApiKey: boolean;
-  } | null>(null);
-  const [confirmWeakAuthMode, setConfirmWeakAuthMode] = useState<{
-    mode: "disabled" | "apiKeyInitializeOnly" | "apiKeyEveryRequest" | "jwtEveryRequest";
-    acceptXApiKey: boolean;
-  } | null>(null);
+  const [authDraft, setAuthDraft] = useState<AuthDraft | null>(null);
+  const [confirmWeakAuthMode, setConfirmWeakAuthMode] = useState<AuthDraft | null>(null);
   const mcpUrl = `${GATEWAY_DATA_BASE}/${profileId}/mcp`;
 
   const queryClient = useQueryClient();
@@ -61,8 +61,9 @@ export default function ProfileDetailPage() {
     | {
         ok: true;
         status: {
-          oidcConfigured?: boolean;
-          oidcIssuer?: string;
+          oauthConfigured?: boolean;
+          oauthIssuer?: string;
+          publicDataBaseUrl?: string;
         };
       }
     | { ok: false; error?: string; status?: number };
@@ -77,12 +78,19 @@ export default function ProfileDetailPage() {
       return (await res.json()) as GatewayStatusResponse;
     },
   });
-  const oidcConfigured =
+  const oauthConfigured =
     gatewayStatusQuery.isPending || !gatewayStatusQuery.data
       ? null
       : gatewayStatusQuery.data.ok
-        ? (gatewayStatusQuery.data.status.oidcConfigured ?? null)
+        ? (gatewayStatusQuery.data.status.oauthConfigured ?? null)
         : null;
+  const publicDataBaseUrl =
+    gatewayStatusQuery.data?.ok === true
+      ? gatewayStatusQuery.data.status.publicDataBaseUrl?.replace(/\/$/, "")
+      : undefined;
+  const protectedResourceMetadataUrl = publicDataBaseUrl
+    ? `${publicDataBaseUrl}/.well-known/oauth-protected-resource/${profileId}/mcp`
+    : null;
 
   const profileQuery = useQuery({
     queryKey: qk.profile(profileId),
@@ -132,12 +140,12 @@ export default function ProfileDetailPage() {
   }, [apiKeysQuery.data, profileId]);
 
   const updateAuthMutation = useMutation({
-    mutationFn: async (next: {
-      mode: Profile["dataPlaneAuth"]["mode"];
-      acceptXApiKey: boolean;
-    }) => {
+    mutationFn: async (next: AuthDraft) => {
       if (!profile) throw new Error("Profile not loaded");
-      await tenantApi.putProfile(profile.id, buildPutProfileBody(profile, { dataPlaneAuth: next }));
+      await tenantApi.putProfile(
+        profile.id,
+        buildPutProfileBody(profile, { dataPlaneAuth: authSettingsFromDraft(next) }),
+      );
       return next;
     },
     onSuccess: async (next) => {
@@ -157,8 +165,7 @@ export default function ProfileDetailPage() {
   const authIsDirty = useMemo(() => {
     if (!profile || !authDraft) return false;
     return (
-      authDraft.mode !== profile.dataPlaneAuth.mode ||
-      authDraft.acceptXApiKey !== profile.dataPlaneAuth.acceptXApiKey
+      JSON.stringify(authSettingsFromDraft(authDraft)) !== JSON.stringify(profile.dataPlaneAuth)
     );
   }, [authDraft, profile]);
 
@@ -471,10 +478,7 @@ export default function ProfileDetailPage() {
           }}
           onEditAuth={() => {
             if (profile) {
-              setAuthDraft({
-                mode: profile.dataPlaneAuth.mode,
-                acceptXApiKey: profile.dataPlaneAuth.acceptXApiKey,
-              });
+              setAuthDraft(authDraftFromSettings(profile.dataPlaneAuth));
             }
             setShowAuthSettings(true);
           }}
@@ -571,15 +575,15 @@ export default function ProfileDetailPage() {
         title={
           confirmWeakAuthMode?.mode === "disabled"
             ? "Disable profile auth?"
-            : "Use API key (init only)?"
+            : "Change profile auth?"
         }
         description={
           confirmWeakAuthMode?.mode === "disabled"
             ? "This will expose your MCP endpoint without authentication. Only do this for local/dev or behind a trusted reverse proxy/network boundary."
-            : "This is a compatibility mode and is not recommended for internet-exposed deployments. After initialize, the session token can be replayed until it expires."
+            : "Confirm this authentication change."
         }
-        requireText={confirmWeakAuthMode?.mode === "disabled" ? "disable auth" : "init-only"}
-        confirmLabel={confirmWeakAuthMode?.mode === "disabled" ? "Disable auth" : "Use init-only"}
+        requireText={confirmWeakAuthMode?.mode === "disabled" ? "disable auth" : undefined}
+        confirmLabel={confirmWeakAuthMode?.mode === "disabled" ? "Disable auth" : "Apply"}
         danger={confirmWeakAuthMode?.mode === "disabled"}
         loading={updateAuthMutation.isPending}
       />
@@ -589,10 +593,7 @@ export default function ProfileDetailPage() {
         onClose={() => {
           setShowAuthSettings(false);
           if (profile) {
-            setAuthDraft({
-              mode: profile.dataPlaneAuth.mode,
-              acceptXApiKey: profile.dataPlaneAuth.acceptXApiKey,
-            });
+            setAuthDraft(authDraftFromSettings(profile.dataPlaneAuth));
           }
         }}
         title="Profile auth"
@@ -613,35 +614,24 @@ export default function ProfileDetailPage() {
                 disabled={updateAuthMutation.isPending}
                 onChange={(e) => {
                   const nextMode = e.target.value as typeof authDraft.mode;
-                  const next = { ...authDraft, mode: nextMode };
+                  const next: AuthDraft = { ...authDraft, mode: nextMode };
                   setAuthDraft(next);
                 }}
               >
-                <option value="apiKeyEveryRequest">API key (every request) — recommended</option>
-                <option value="jwtEveryRequest">JWT/OIDC (every request) — recommended</option>
-                <option value="apiKeyInitializeOnly">
-                  API key (init only) — compatibility (not recommended)
+                <option value="apiKey">API key</option>
+                <option value="oauth" disabled={oauthConfigured === false}>
+                  OAuth
                 </option>
                 <option value="disabled">Disabled (not recommended)</option>
               </Select>
               <div className="text-xs text-faint">
-                API key modes accept <span className="font-mono">Authorization: Bearer</span> and
-                optionally <span className="font-mono">x-api-key</span>. JWT/OIDC requires a valid
-                bearer token on every request.
+                API keys and OAuth access tokens are checked on every request. Compatible MCP
+                clients discover and open the OAuth flow automatically.
               </div>
-              {authDraft.mode === "jwtEveryRequest" && oidcConfigured === false ? (
+              {authDraft.mode === "oauth" && oauthConfigured === false ? (
                 <Callout tone="info" className="mt-2">
-                  JWT/OIDC is unavailable because OIDC is not configured on the Gateway (missing
-                  UNRELATED_GATEWAY_OIDC_ISSUER). Configure OIDC or choose a different mode.
-                </Callout>
-              ) : null}
-
-              {authDraft.mode === "apiKeyInitializeOnly" ? (
-                <Callout tone="warn" title="Compatibility mode (not recommended)" className="mt-2">
-                  After <span className="font-mono">initialize</span>, the{" "}
-                  <span className="font-mono">Mcp-Session-Id</span> becomes sufficient for follow-up
-                  requests. If that session token is leaked, it can be replayed until it expires.
-                  Prefer “every request” modes for internet-exposed deployments.
+                  OAuth is unavailable. Configure UNRELATED_GATEWAY_PUBLIC_DATA_BASE_URL and
+                  UNRELATED_GATEWAY_OAUTH_ISSUER on the Gateway, or choose a different mode.
                 </Callout>
               ) : null}
 
@@ -653,16 +643,35 @@ export default function ProfileDetailPage() {
               ) : null}
             </div>
 
-            <Toggle
-              checked={authDraft.acceptXApiKey}
-              disabled={updateAuthMutation.isPending}
-              onChange={(checked) => {
-                const next = { ...authDraft, acceptXApiKey: checked };
-                setAuthDraft(next);
-              }}
-              label="Accept x-api-key header"
-              description="Allows clients to send x-api-key instead of Authorization."
-            />
+            {authDraft.mode === "apiKey" ? (
+              <Toggle
+                checked={authDraft.acceptXApiKey}
+                disabled={updateAuthMutation.isPending}
+                onChange={(checked) => {
+                  setAuthDraft({ ...authDraft, acceptXApiKey: checked });
+                }}
+                label="Accept x-api-key header"
+                description="Allows clients to use x-api-key instead of the preferred Authorization header."
+              />
+            ) : null}
+
+            {authDraft.mode === "oauth" ? (
+              <div className="space-y-2">
+                <Input
+                  label="Required scopes"
+                  value={authDraft.requiredScopes.join(" ")}
+                  onChange={(event) => {
+                    const requiredScopes = event.target.value.split(/[\s,]+/).filter(Boolean);
+                    setAuthDraft({ ...authDraft, requiredScopes });
+                  }}
+                  placeholder="mcp:access"
+                  disabled={updateAuthMutation.isPending}
+                />
+                <p className="text-xs text-faint">
+                  Every listed scope is required. Separate scopes with spaces or commas.
+                </p>
+              </div>
+            ) : null}
 
             <ModalActions>
               <Button
@@ -672,10 +681,7 @@ export default function ProfileDetailPage() {
                   // Cancel/discard changes.
                   setShowAuthSettings(false);
                   if (profile) {
-                    setAuthDraft({
-                      mode: profile.dataPlaneAuth.mode,
-                      acceptXApiKey: profile.dataPlaneAuth.acceptXApiKey,
-                    });
+                    setAuthDraft(authDraftFromSettings(profile.dataPlaneAuth));
                   }
                 }}
                 disabled={updateAuthMutation.isPending}
@@ -689,13 +695,13 @@ export default function ProfileDetailPage() {
                 disabled={
                   updateAuthMutation.isPending ||
                   !authIsDirty ||
-                  (authDraft.mode === "jwtEveryRequest" && oidcConfigured === false)
+                  (authDraft.mode === "oauth" &&
+                    (oauthConfigured === false || authDraft.requiredScopes.length === 0))
                 }
                 onClick={() => {
-                  if (authDraft.mode === "jwtEveryRequest" && oidcConfigured === false) return;
+                  if (authDraft.mode === "oauth" && oauthConfigured === false) return;
                   const changingMode = authDraft.mode !== profile.dataPlaneAuth.mode;
-                  const weak =
-                    authDraft.mode === "apiKeyInitializeOnly" || authDraft.mode === "disabled";
+                  const weak = authDraft.mode === "disabled";
                   if (changingMode && weak) {
                     setConfirmWeakAuthMode(authDraft);
                     return;
@@ -731,14 +737,13 @@ export default function ProfileDetailPage() {
           </Callout>
 
           <Callout tone="neutral" size="md" title="Recommended modes">
-            For production / internet-exposed profiles, prefer per-request authentication:
-            <span className="ml-1 font-medium text-fg">API key (every request)</span> or{" "}
-            <span className="font-medium text-fg">JWT/OIDC (every request)</span>.{" "}
-            <span className="font-medium text-fg">API key (init only)</span> is a compatibility mode
-            and is not recommended.
+            Both <span className="font-medium text-fg">API key</span> and{" "}
+            <span className="font-medium text-fg">OAuth</span> authenticate every request. Use OAuth
+            for standards-based login and centrally issued access tokens; use API keys for simpler
+            service credentials.
           </Callout>
 
-          {profile?.dataPlaneAuth.mode.startsWith("apiKey") ? (
+          {profile?.dataPlaneAuth.mode === "apiKey" ? (
             <Callout tone="neutral" size="md" title="API key header">
               <div className="text-sm text-muted">
                 Preferred:
@@ -754,30 +759,22 @@ export default function ProfileDetailPage() {
                   </>
                 ) : null}
               </div>
-              {profile.dataPlaneAuth.mode === "apiKeyInitializeOnly" ? (
-                <p className="mt-3 text-sm text-muted">
-                  Compatibility note: in “init only” mode the API key is required only for{" "}
-                  <code className="rounded bg-raised px-1.5 py-0.5 font-mono text-xs text-fg">
-                    initialize
-                  </code>
-                  . After that, the client uses{" "}
-                  <code className="rounded bg-raised px-1.5 py-0.5 font-mono text-xs text-fg">
-                    Mcp-Session-Id
-                  </code>{" "}
-                  for follow-up requests. This is less secure (session replay risk) and is not
-                  recommended for internet-exposed deployments.
-                </p>
-              ) : null}
             </Callout>
-          ) : profile?.dataPlaneAuth.mode.startsWith("jwt") ? (
-            <Callout tone="neutral" size="md" title="JWT header">
-              <div className="mt-1 rounded-md border border-edge bg-well p-3 font-mono text-xs text-fg">
-                Authorization: Bearer &lt;jwt&gt;
-              </div>
+          ) : profile?.dataPlaneAuth.mode === "oauth" ? (
+            <Callout tone="neutral" size="md" title="OAuth discovery">
               <div className="mt-3 text-sm text-muted">
-                OIDC/JWT auth is available when configured on the Gateway. If you need SSO, contact
-                your admin.
+                Compatible MCP clients discover this protected resource and open the OAuth flow
+                automatically. Do not add a manually supplied JWT header to the generated client
+                configuration.
               </div>
+              {protectedResourceMetadataUrl ? (
+                <div className="mt-3 break-all rounded-md border border-edge bg-well p-3 font-mono text-xs text-fg">
+                  {protectedResourceMetadataUrl}
+                </div>
+              ) : null}
+              <p className="mt-3 text-sm text-muted">
+                Required scopes: {profile.dataPlaneAuth.requiredScopes.join(" ")}
+              </p>
             </Callout>
           ) : (
             <Callout tone="neutral" size="md" title="No auth">
@@ -785,8 +782,7 @@ export default function ProfileDetailPage() {
                 This profile’s data-plane auth is disabled. No credentials are required.
               </p>
               <div className="mt-3 text-sm text-muted">
-                If you need SSO, the Gateway can support OIDC/JWT when configured (contact your
-                admin).
+                If you need SSO, ask your administrator to configure OAuth for the Gateway.
               </div>
             </Callout>
           )}

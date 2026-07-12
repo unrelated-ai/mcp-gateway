@@ -2,8 +2,7 @@ use crate::audit::{AuditActor, AuditError, HttpAuditEvent};
 use crate::managed_mcp::{ManagedMcpRuntimeConfig, ManagedMcpWriteGuard, managed_mcp_write_guard};
 use crate::profile_http::{
     DataPlaneAuthSettings, DataPlaneLimitsSettings, NullableString, NullableU64,
-    default_data_plane_auth_mode, resolve_nullable_u64, validate_tool_allowlist,
-    validate_tool_timeout_and_policies,
+    resolve_nullable_u64, validate_tool_allowlist, validate_tool_timeout_and_policies,
 };
 use crate::serde_helpers::default_true;
 use crate::store::{
@@ -36,7 +35,7 @@ use unrelated_openapi_tools::runtime::OpenApiToolSource;
 use unrelated_tool_transforms::TransformPipeline;
 use uuid::{Uuid, Version};
 
-const OIDC_NOT_CONFIGURED_MSG: &str = "JWT/OIDC is unavailable because OIDC is not configured on the Gateway (missing UNRELATED_GATEWAY_OIDC_ISSUER). Configure OIDC or choose a different mode.";
+const OAUTH_NOT_CONFIGURED_MSG: &str = "OAuth is unavailable because data-plane OAuth is not configured on the Gateway. Configure UNRELATED_GATEWAY_PUBLIC_DATA_BASE_URL and UNRELATED_GATEWAY_OAUTH_ISSUER, or choose a different mode.";
 const DEFAULT_TENANT_MANAGED_MCP_DEPLOYMENT_LIST_LIMIT: u32 = 200;
 const MIN_MANAGED_MCP_REPLICAS: i32 = 0;
 const MAX_MANAGED_MCP_REPLICAS: i32 = 50;
@@ -1058,10 +1057,11 @@ fn profile_to_response(p: AdminProfile) -> ProfileResponse {
         transforms: p.transforms,
         tools: p.enabled_tools,
         data_plane_path: format!("/{id}/mcp"),
-        data_plane_auth: DataPlaneAuthSettings {
-            mode: p.data_plane_auth_mode,
-            accept_x_api_key: p.accept_x_api_key,
-        },
+        data_plane_auth: DataPlaneAuthSettings::from_parts(
+            p.data_plane_auth_mode,
+            p.accept_x_api_key,
+            p.oauth_required_scopes,
+        ),
         data_plane_limits: DataPlaneLimitsSettings {
             rate_limit_enabled: p.rate_limit_enabled,
             rate_limit_tool_calls_per_minute: p.rate_limit_tool_calls_per_minute,
@@ -1199,8 +1199,9 @@ async fn create_profile(
             transforms: &req.transforms,
             enabled_tools: &validated.enabled_tools,
             data_plane_auth: PutProfileDataPlaneAuth {
-                mode: validated.data_plane_auth.mode,
-                accept_x_api_key: validated.data_plane_auth.accept_x_api_key,
+                mode: validated.data_plane_auth.mode(),
+                accept_x_api_key: validated.data_plane_auth.accept_x_api_key(),
+                oauth_required_scopes: validated.data_plane_auth.required_scopes().to_vec(),
             },
             limits: PutProfileLimits {
                 rate_limit_enabled: validated.data_plane_limits.rate_limit_enabled,
@@ -1251,17 +1252,13 @@ fn validate_create_profile_settings(
     }
 
     let enabled_tools = req.tools.clone().unwrap_or_default();
-    let data_plane_auth = req
-        .data_plane_auth
-        .clone()
-        .unwrap_or(DataPlaneAuthSettings {
-            mode: default_data_plane_auth_mode(),
-            accept_x_api_key: false,
-        });
-    if data_plane_auth.mode == DataPlaneAuthMode::JwtEveryRequest && state.mcp_state.oidc.is_none()
-    {
+    let mut data_plane_auth = req.data_plane_auth.clone().unwrap_or_default();
+    if let Err(message) = data_plane_auth.validate() {
+        return Err(Box::new((StatusCode::BAD_REQUEST, message).into_response()));
+    }
+    if data_plane_auth.mode() == DataPlaneAuthMode::OAuth && state.mcp_state.oauth.is_none() {
         return Err(Box::new(
-            (StatusCode::BAD_REQUEST, OIDC_NOT_CONFIGURED_MSG).into_response(),
+            (StatusCode::BAD_REQUEST, OAUTH_NOT_CONFIGURED_MSG).into_response(),
         ));
     }
 
@@ -1656,18 +1653,32 @@ fn tenant_put_profile_resolve_auth(
     name_for_meta: &str,
     req: Option<DataPlaneAuthSettings>,
 ) -> TenantPutProfileStep<DataPlaneAuthSettings> {
-    let auth = req.unwrap_or(DataPlaneAuthSettings {
-        mode: existing.data_plane_auth_mode,
-        accept_x_api_key: existing.accept_x_api_key,
+    let mut auth = req.unwrap_or_else(|| {
+        DataPlaneAuthSettings::from_parts(
+            existing.data_plane_auth_mode,
+            existing.accept_x_api_key,
+            existing.oauth_required_scopes.clone(),
+        )
     });
-    if auth.mode == DataPlaneAuthMode::JwtEveryRequest && state.mcp_state.oidc.is_none() {
+    if let Err(message) = auth.validate() {
         return Err(Box::new(TenantPutProfileOutcome::fail(
             profile_id.to_string(),
             enabled_for_meta,
             Some(profile_uuid),
             StatusCode::BAD_REQUEST,
-            OIDC_NOT_CONFIGURED_MSG,
-            AuditError::new("bad_request", OIDC_NOT_CONFIGURED_MSG),
+            "invalid OAuth scopes",
+            AuditError::new("bad_request", message),
+            Some(name_for_meta.to_string()),
+        )));
+    }
+    if auth.mode() == DataPlaneAuthMode::OAuth && state.mcp_state.oauth.is_none() {
+        return Err(Box::new(TenantPutProfileOutcome::fail(
+            profile_id.to_string(),
+            enabled_for_meta,
+            Some(profile_uuid),
+            StatusCode::BAD_REQUEST,
+            OAUTH_NOT_CONFIGURED_MSG,
+            AuditError::new("bad_request", OAUTH_NOT_CONFIGURED_MSG),
             Some(name_for_meta.to_string()),
         )));
     }
@@ -1813,8 +1824,9 @@ async fn tenant_put_profile_store_put(
             transforms: input.transforms,
             enabled_tools: input.enabled_tools,
             data_plane_auth: PutProfileDataPlaneAuth {
-                mode: input.data_plane_auth.mode,
-                accept_x_api_key: input.data_plane_auth.accept_x_api_key,
+                mode: input.data_plane_auth.mode(),
+                accept_x_api_key: input.data_plane_auth.accept_x_api_key(),
+                oauth_required_scopes: input.data_plane_auth.required_scopes().to_vec(),
             },
             limits: PutProfileLimits {
                 rate_limit_enabled: input.data_plane_limits.rate_limit_enabled,
@@ -2041,6 +2053,7 @@ async fn get_upstream_surface(
         enabled_tools: vec![],
         data_plane_auth_mode: DataPlaneAuthMode::Disabled,
         accept_x_api_key: false,
+        oauth_required_scopes: Vec::new(),
         rate_limit_enabled: false,
         rate_limit_tool_calls_per_minute: None,
         quota_enabled: false,
@@ -2122,6 +2135,7 @@ async fn get_profile_surface(
         enabled_tools: admin_profile.enabled_tools,
         data_plane_auth_mode: admin_profile.data_plane_auth_mode,
         accept_x_api_key: admin_profile.accept_x_api_key,
+        oauth_required_scopes: admin_profile.oauth_required_scopes,
         rate_limit_enabled: admin_profile.rate_limit_enabled,
         rate_limit_tool_calls_per_minute: admin_profile.rate_limit_tool_calls_per_minute,
         quota_enabled: admin_profile.quota_enabled,

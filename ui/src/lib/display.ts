@@ -5,12 +5,10 @@ export function formatDataPlaneAuthMode(mode: string | undefined | null): string
   switch (mode) {
     case "disabled":
       return "No auth";
-    case "apiKeyInitializeOnly":
-      return "API key (init only)";
-    case "apiKeyEveryRequest":
-      return "API key (every request)";
-    case "jwtEveryRequest":
-      return "JWT (every request)";
+    case "apiKey":
+      return "API key";
+    case "oauth":
+      return "OAuth";
     default:
       return mode;
   }
@@ -18,8 +16,8 @@ export function formatDataPlaneAuthMode(mode: string | undefined | null): string
 
 export function authModeTone(mode: string | undefined | null): Tone {
   if (!mode) return "neutral";
-  if (mode.startsWith("apiKey")) return "info";
-  if (mode.startsWith("jwt")) return "accent";
+  if (mode === "apiKey") return "info";
+  if (mode === "oauth") return "accent";
   if (mode === "disabled") return "warn";
   return "neutral";
 }

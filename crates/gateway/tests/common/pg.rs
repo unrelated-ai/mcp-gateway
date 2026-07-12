@@ -45,6 +45,32 @@ fn strip_sql_line_comments(sql: &str) -> String {
 }
 
 pub async fn apply_dbmate_migrations(database_url: &str) -> anyhow::Result<()> {
+    apply_dbmate_migrations_filtered(database_url, |_| true).await
+}
+
+pub async fn apply_dbmate_migrations_before(
+    database_url: &str,
+    filename: &str,
+) -> anyhow::Result<()> {
+    apply_dbmate_migrations_filtered(database_url, |path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name < filename)
+    })
+    .await
+}
+
+pub async fn apply_dbmate_migration_file(database_url: &str, filename: &str) -> anyhow::Result<()> {
+    apply_dbmate_migrations_filtered(database_url, |path| {
+        path.file_name().and_then(|name| name.to_str()) == Some(filename)
+    })
+    .await
+}
+
+async fn apply_dbmate_migrations_filtered(
+    database_url: &str,
+    include: impl Fn(&std::path::Path) -> bool,
+) -> anyhow::Result<()> {
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
         .connect(database_url)
@@ -64,6 +90,7 @@ pub async fn apply_dbmate_migrations(database_url: &str) -> anyhow::Result<()> {
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|ext| ext == "sql"))
+        .filter(|p| include(p))
         .collect();
     paths.sort();
 

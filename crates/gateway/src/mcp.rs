@@ -1,7 +1,7 @@
 use crate::audit::AuditSink;
 use crate::catalog::SharedCatalog;
 use crate::contracts::ContractTracker;
-use crate::oidc::OidcValidator;
+use crate::oauth::OAuthRuntime;
 use crate::session_token::{
     SessionSigner, SessionTokenVerifyError, SessionTokenVerifyErrorKind, TokenAuthV1, TokenOidcV1,
     TokenPayloadV1, UpstreamSessionBinding,
@@ -50,7 +50,7 @@ mod surface;
 mod tool_call;
 mod upstream;
 use auth::{
-    authenticate_api_key_on_initialize, authorize_jwt_request, enforce_data_plane_auth,
+    authenticate_api_key_on_initialize, authorize_oauth_request, enforce_data_plane_auth,
     unauthorized,
 };
 use ids::{make_proxied_request_id, parse_proxied_request_id, resource_collision_urn};
@@ -167,7 +167,7 @@ pub struct McpState {
     pub store: Arc<dyn Store>,
     pub signer: SessionSigner,
     pub http: reqwest::Client,
-    pub oidc: Option<OidcValidator>,
+    pub oauth: Option<OAuthRuntime>,
     pub shutdown: CancellationToken,
     pub audit: Arc<dyn AuditSink>,
     pub catalog: Arc<SharedCatalog>,
@@ -186,12 +186,43 @@ pub fn router(state: Arc<McpState>) -> axum::Router {
                 .get(get_mcp)
                 .delete(delete_mcp),
         )
+        .route(
+            "/.well-known/oauth-protected-resource/{profile_id}/mcp",
+            axum::routing::get(protected_resource_metadata),
+        )
         // Hard cap to protect the process from unbounded request bodies.
         .layer(DefaultBodyLimit::max(
             usize::try_from(crate::transport_limits::HARD_MAX_POST_BODY_BYTES)
                 .unwrap_or(usize::MAX),
         ))
         .with_state(state)
+}
+
+async fn protected_resource_metadata(
+    Path(profile_id): Path<String>,
+    State(state): State<Arc<McpState>>,
+) -> Response {
+    if Uuid::parse_str(&profile_id)
+        .ok()
+        .and_then(|id| (id.get_version() == Some(Version::Random)).then_some(id))
+        .is_none()
+    {
+        return (StatusCode::NOT_FOUND, "profile not found").into_response();
+    }
+    let Ok(Some(profile)) = state.store.get_profile(&profile_id).await else {
+        return (StatusCode::NOT_FOUND, "profile not found").into_response();
+    };
+    if profile.data_plane_auth_mode != DataPlaneAuthMode::OAuth {
+        return (StatusCode::NOT_FOUND, "profile not found").into_response();
+    }
+    let Some(oauth) = state.oauth.as_ref() else {
+        return (StatusCode::NOT_FOUND, "profile not found").into_response();
+    };
+    (
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        axum::Json(oauth.metadata(&profile.id, &profile.oauth_required_scopes)),
+    )
+        .into_response()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -557,13 +588,13 @@ async fn handle_initialize(
     let (auth, oidc): (Option<TokenAuthV1>, Option<TokenOidcV1>) =
         match profile.data_plane_auth_mode {
             DataPlaneAuthMode::Disabled => (None, None),
-            DataPlaneAuthMode::ApiKeyInitializeOnly | DataPlaneAuthMode::ApiKeyEveryRequest => (
+            DataPlaneAuthMode::ApiKey => (
                 Some(authenticate_api_key_on_initialize(state, &profile, headers).await?),
                 None,
             ),
-            DataPlaneAuthMode::JwtEveryRequest => (
+            DataPlaneAuthMode::OAuth => (
                 None,
-                Some(authorize_jwt_request(state, &profile, headers).await?),
+                Some(authorize_oauth_request(state, &profile, headers).await?),
             ),
         };
 
@@ -3348,6 +3379,7 @@ mod tests {
             enabled_tools: Vec::new(),
             data_plane_auth_mode: DataPlaneAuthMode::Disabled,
             accept_x_api_key: false,
+            oauth_required_scopes: Vec::new(),
             rate_limit_enabled: false,
             rate_limit_tool_calls_per_minute: None,
             quota_enabled: false,
@@ -3366,7 +3398,7 @@ mod tests {
             signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
                 .expect("signer"),
             http: reqwest::Client::default(),
-            oidc: None,
+            oauth: None,
             shutdown: CancellationToken::new(),
             audit: Arc::new(crate::audit::NoopAuditSink),
             catalog: Arc::new(SharedCatalog::default()),
@@ -3438,6 +3470,7 @@ mod tests {
             enabled_tools: Vec::new(),
             data_plane_auth_mode: DataPlaneAuthMode::Disabled,
             accept_x_api_key: false,
+            oauth_required_scopes: Vec::new(),
             rate_limit_enabled: false,
             rate_limit_tool_calls_per_minute: None,
             quota_enabled: false,
@@ -3456,7 +3489,7 @@ mod tests {
             signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
                 .expect("signer"),
             http: reqwest::Client::default(),
-            oidc: None,
+            oauth: None,
             shutdown: CancellationToken::new(),
             audit: Arc::new(crate::audit::NoopAuditSink),
             catalog: Arc::new(SharedCatalog::default()),
@@ -3514,6 +3547,7 @@ mod tests {
             enabled_tools: Vec::new(),
             data_plane_auth_mode: DataPlaneAuthMode::Disabled,
             accept_x_api_key: false,
+            oauth_required_scopes: Vec::new(),
             rate_limit_enabled: false,
             rate_limit_tool_calls_per_minute: None,
             quota_enabled: false,
@@ -3532,7 +3566,7 @@ mod tests {
             signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
                 .expect("signer"),
             http: reqwest::Client::default(),
-            oidc: None,
+            oauth: None,
             shutdown: CancellationToken::new(),
             audit: Arc::new(crate::audit::NoopAuditSink),
             catalog: Arc::new(SharedCatalog::default()),
@@ -3656,7 +3690,7 @@ mod tests {
             signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
                 .expect("signer"),
             http: reqwest::Client::default(),
-            oidc: None,
+            oauth: None,
             shutdown: CancellationToken::new(),
             audit: Arc::new(crate::audit::NoopAuditSink),
             catalog: Arc::new(SharedCatalog::default()),
@@ -3680,6 +3714,7 @@ mod tests {
             enabled_tools: Vec::new(),
             data_plane_auth_mode: DataPlaneAuthMode::Disabled,
             accept_x_api_key: false,
+            oauth_required_scopes: Vec::new(),
             rate_limit_enabled: false,
             rate_limit_tool_calls_per_minute: None,
             quota_enabled: false,
@@ -3769,7 +3804,7 @@ mod tests {
             signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
                 .expect("signer"),
             http: reqwest::Client::default(),
-            oidc: None,
+            oauth: None,
             shutdown: CancellationToken::new(),
             audit: Arc::new(crate::audit::NoopAuditSink),
             catalog: Arc::new(SharedCatalog::default()),
@@ -3805,6 +3840,7 @@ mod tests {
             enabled_tools: Vec::new(),
             data_plane_auth_mode: DataPlaneAuthMode::Disabled,
             accept_x_api_key: false,
+            oauth_required_scopes: Vec::new(),
             rate_limit_enabled: false,
             rate_limit_tool_calls_per_minute: None,
             quota_enabled: false,
@@ -4028,7 +4064,7 @@ sharedSources:
             signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
                 .expect("signer"),
             http: reqwest::Client::default(),
-            oidc: None,
+            oauth: None,
             shutdown: CancellationToken::new(),
             audit: Arc::new(crate::audit::NoopAuditSink),
             catalog: Arc::new(shared),
@@ -4056,6 +4092,7 @@ sharedSources:
             enabled_tools: Vec::new(),
             data_plane_auth_mode: DataPlaneAuthMode::Disabled,
             accept_x_api_key: false,
+            oauth_required_scopes: Vec::new(),
             rate_limit_enabled: false,
             rate_limit_tool_calls_per_minute: None,
             quota_enabled: false,
@@ -4126,7 +4163,7 @@ sharedSources:
             signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
                 .expect("signer"),
             http: reqwest::Client::default(),
-            oidc: None,
+            oauth: None,
             shutdown: CancellationToken::new(),
             audit: Arc::new(crate::audit::NoopAuditSink),
             catalog: Arc::new(shared),
@@ -4150,6 +4187,7 @@ sharedSources:
             enabled_tools: Vec::new(),
             data_plane_auth_mode: DataPlaneAuthMode::Disabled,
             accept_x_api_key: false,
+            oauth_required_scopes: Vec::new(),
             rate_limit_enabled: false,
             rate_limit_tool_calls_per_minute: None,
             quota_enabled: false,
@@ -4216,7 +4254,7 @@ sharedSources:
             signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
                 .expect("signer"),
             http: reqwest::Client::default(),
-            oidc: None,
+            oauth: None,
             shutdown: CancellationToken::new(),
             audit: Arc::new(crate::audit::NoopAuditSink),
             catalog: Arc::new(shared),
@@ -4240,6 +4278,7 @@ sharedSources:
             enabled_tools: Vec::new(),
             data_plane_auth_mode: DataPlaneAuthMode::Disabled,
             accept_x_api_key: false,
+            oauth_required_scopes: Vec::new(),
             rate_limit_enabled: false,
             rate_limit_tool_calls_per_minute: None,
             quota_enabled: false,
@@ -4340,7 +4379,7 @@ sharedSources:
             signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
                 .expect("signer"),
             http: reqwest::Client::default(),
-            oidc: None,
+            oauth: None,
             shutdown: CancellationToken::new(),
             audit: Arc::new(crate::audit::NoopAuditSink),
             catalog: Arc::new(SharedCatalog::default()),
@@ -4364,6 +4403,7 @@ sharedSources:
             enabled_tools: Vec::new(),
             data_plane_auth_mode: DataPlaneAuthMode::Disabled,
             accept_x_api_key: false,
+            oauth_required_scopes: Vec::new(),
             rate_limit_enabled: false,
             rate_limit_tool_calls_per_minute: None,
             quota_enabled: false,

@@ -827,7 +827,7 @@ async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
         .context("create profile response missing id")?
         .to_string();
 
-    // Mode 3 data-plane requires an API key (profile default: ApiKeyInitializeOnly).
+    // Mode 3 data-plane requires an API key by default.
     let t1_token = admin_issue_tenant_token(&client, &admin_base_a, "t1").await?;
     let api_key = tenant_create_api_key(&client, &admin_base_a, &t1_token, &profile_id).await?;
 
@@ -864,7 +864,7 @@ async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
                 &client,
                 &format!("{base}/{profile_id}/mcp"),
                 Some(&session_id),
-                None,
+                Some(&api_key),
                 json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}),
             )
             .await?,
@@ -876,7 +876,7 @@ async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
                 &client,
                 &format!("{base}/{profile_id}/mcp"),
                 Some(&session_id),
-                None,
+                Some(&api_key),
                 json!({"jsonrpc": "2.0", "id": 2, "method": "resources/list", "params": {}}),
             )
             .await?,
@@ -888,7 +888,7 @@ async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
                 &client,
                 &format!("{base}/{profile_id}/mcp"),
                 Some(&session_id),
-                None,
+                Some(&api_key),
                 json!({"jsonrpc": "2.0", "id": 3, "method": "prompts/list", "params": {}}),
             )
             .await?,
@@ -901,6 +901,7 @@ async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
         .get(format!("{data_base_a}/{profile_id}/mcp"))
         .header("Accept", "text/event-stream")
         .header("Mcp-Session-Id", &session_id)
+        .header("Authorization", format!("Bearer {api_key}"))
         .send()
         .await?
         .error_for_status()
@@ -914,7 +915,7 @@ async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
             &client,
             &format!("{data_base_b}/{profile_id}/mcp"),
             Some(&session_id),
-            None,
+            Some(&api_key),
             json!({"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {}}),
         )
         .await?,
@@ -926,7 +927,7 @@ async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
             &client,
             &format!("{data_base_b}/{profile_id}/mcp"),
             Some(&session_id),
-            None,
+            Some(&api_key),
             json!({"jsonrpc": "2.0", "id": 5, "method": "resources/list", "params": {}}),
         )
         .await?,
@@ -938,7 +939,7 @@ async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
             &client,
             &format!("{data_base_b}/{profile_id}/mcp"),
             Some(&session_id),
-            None,
+            Some(&api_key),
             json!({"jsonrpc": "2.0", "id": 6, "method": "prompts/list", "params": {}}),
         )
         .await?,
@@ -1096,7 +1097,7 @@ async fn pg_replay_replays_missed_contract_notifications() -> anyhow::Result<()>
         .context("create profile response missing id")?
         .to_string();
 
-    // Mode 3 data-plane requires an API key (profile default: ApiKeyInitializeOnly).
+    // Mode 3 data-plane requires an API key by default.
     let t1_token = admin_issue_tenant_token(&client, &admin_base, "t1").await?;
     let api_key = tenant_create_api_key(&client, &admin_base, &t1_token, &profile_id).await?;
 
@@ -1132,7 +1133,7 @@ async fn pg_replay_replays_missed_contract_notifications() -> anyhow::Result<()>
             &client,
             &format!("{data_base}/{profile_id}/mcp"),
             Some(&session_id),
-            None,
+            Some(&api_key),
             json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}),
         )
         .await?,
@@ -1144,6 +1145,7 @@ async fn pg_replay_replays_missed_contract_notifications() -> anyhow::Result<()>
         .get(format!("{data_base}/{profile_id}/mcp"))
         .header("Accept", "text/event-stream")
         .header("Mcp-Session-Id", &session_id)
+        .header("Authorization", format!("Bearer {api_key}"))
         .send()
         .await?
         .error_for_status()
@@ -1156,7 +1158,7 @@ async fn pg_replay_replays_missed_contract_notifications() -> anyhow::Result<()>
             &client,
             &format!("{data_base}/{profile_id}/mcp"),
             Some(&session_id),
-            None,
+            Some(&api_key),
             json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
         )
         .await?,
@@ -1177,7 +1179,7 @@ async fn pg_replay_replays_missed_contract_notifications() -> anyhow::Result<()>
             &client,
             &format!("{data_base}/{profile_id}/mcp"),
             Some(&session_id),
-            None,
+            Some(&api_key),
             json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}}),
         )
         .await?,
@@ -1189,6 +1191,7 @@ async fn pg_replay_replays_missed_contract_notifications() -> anyhow::Result<()>
         .get(format!("{data_base}/{profile_id}/mcp"))
         .header("Accept", "text/event-stream")
         .header("Mcp-Session-Id", &session_id)
+        .header("Authorization", format!("Bearer {api_key}"))
         .header("Last-Event-ID", &last_id)
         .send()
         .await?
