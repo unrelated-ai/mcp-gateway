@@ -1,16 +1,7 @@
 import { NextResponse } from "next/server";
+import { TENANT_EXP_COOKIE, TENANT_ID_COOKIE, TENANT_TOKEN_COOKIE } from "@/src/lib/tenant-session";
 
 export const dynamic = "force-dynamic";
-
-const TENANT_TOKEN_COOKIE = "ugw_tenant_token";
-const TENANT_ID_COOKIE = "ugw_tenant_id";
-const TENANT_EXP_COOKIE = "ugw_tenant_exp_unix";
-
-function sanitizeNextPath(raw: string | null): string {
-  if (!raw) return "/unlock";
-  if (!raw.startsWith("/") || raw.startsWith("//")) return "/unlock";
-  return raw;
-}
 
 function clearTenantCookies(res: NextResponse): NextResponse {
   for (const name of [TENANT_TOKEN_COOKIE, TENANT_ID_COOKIE, TENANT_EXP_COOKIE]) {
@@ -27,22 +18,8 @@ function clearTenantCookies(res: NextResponse): NextResponse {
   return res;
 }
 
-function redirectToPath(path: string): NextResponse {
-  // Use a relative Location header so redirects stay correct behind reverse proxies
-  // (docker-compose, k8s ingress, etc.) regardless of internal host/origin.
-  return new NextResponse(null, {
-    status: 307,
-    headers: { Location: path },
-  });
-}
-
-export async function GET(req: Request) {
-  const url = new URL(req.url);
-  const nextPath = sanitizeNextPath(url.searchParams.get("next"));
-  const res = redirectToPath(nextPath);
-  return clearTenantCookies(res);
-}
-
+// Logout is POST-only: clearing the session is a state change, and a GET
+// endpoint would be triggerable cross-site (forced logout via <img src=...>).
 export async function POST() {
   const res = NextResponse.json({ ok: true });
   return clearTenantCookies(res);

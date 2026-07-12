@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from "react";
 import type { ProfileSurface } from "@/src/lib/tenantApi";
 import type { RetryPolicy, ToolPolicy } from "@/src/lib/types";
-import { Checkbox, Input, Toggle } from "@/components/ui";
+import { Callout, Checkbox, Input, Toggle } from "@/components/ui";
 
 const KNOWN_NON_RETRYABLE_ERROR_TYPES = [
   "timeout",
@@ -163,8 +163,8 @@ function policySummary(p: ToolPolicy | null): ReactNode {
   const retry = p.retry ? `${p.retry.maximumAttempts} attempts` : "off";
   return (
     <span>
-      override timeout <span className="text-zinc-200">{timeout}</span>{" "}
-      <span className="text-zinc-600">·</span> retry <span className="text-zinc-200">{retry}</span>
+      override timeout <span className="text-fg">{timeout}</span>{" "}
+      <span className="text-faint">·</span> retry <span className="text-fg">{retry}</span>
     </span>
   );
 }
@@ -211,16 +211,8 @@ export function ToolPolicyEditor({
 
   return (
     <div className="space-y-4">
-      {error && (
-        <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200">
-          {error}
-        </div>
-      )}
-      {saveError && (
-        <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200">
-          {saveError}
-        </div>
-      )}
+      {error && <Callout tone="danger">{error}</Callout>}
+      {saveError && <Callout tone="danger">{saveError}</Callout>}
 
       <Input
         label="Timeout override (seconds, optional)"
@@ -239,7 +231,7 @@ export function ToolPolicyEditor({
         placeholder="e.g. 30"
       />
 
-      <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4 space-y-4">
+      <div className="rounded-lg border border-edge bg-well p-4 space-y-4">
         <Toggle
           checked={draft.retryEnabled}
           onChange={(checked) => {
@@ -322,7 +314,7 @@ export function ToolPolicyEditor({
             </div>
 
             <div className="space-y-2">
-              <div className="text-sm font-medium text-zinc-300">Non-retryable errors</div>
+              <div className="eyebrow">Non-retryable errors</div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {KNOWN_NON_RETRYABLE_ERROR_TYPES.map((t) => (
                   <Checkbox
@@ -357,7 +349,7 @@ export function ToolPolicyEditor({
       </div>
 
       <div className="flex items-center justify-between">
-        <div className="text-xs text-zinc-500">{policySummary(current)}</div>
+        <div className="text-xs text-faint">{policySummary(current)}</div>
       </div>
     </div>
   );

@@ -3,11 +3,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
 import { useQuery } from "@tanstack/react-query";
-import { ConfirmModal, CopyButton } from "@/components/ui";
+import { Button, ConfirmModal, CopyButton, Input, Select } from "@/components/ui";
 import { SectionCard, Toggle } from "@/components/ui";
 import { qk } from "@/src/lib/queryKeys";
 import { getTenantExpFromCookies, lockTenantSession } from "@/src/lib/tenant-session";
-import { LockIcon, ServerIconDevice, UserIcon } from "@/components/icons";
+import { LockIcon } from "@/components/icons";
 import { GATEWAY_DATA_BASE, UI_VERSION } from "@/src/lib/env";
 import { useToastStore } from "@/src/lib/toast-store";
 import { useMutation } from "@tanstack/react-query";
@@ -56,6 +56,9 @@ export default function SettingsPage() {
     queryKey: qk.gatewayStatus(),
     queryFn: async () => {
       const res = await fetch("/api/gateway/status", { cache: "no-store" });
+      if (!res.ok) {
+        return { ok: false, status: res.status } satisfies GatewayStatusResponse;
+      }
       return (await res.json()) as GatewayStatusResponse;
     },
   });
@@ -273,13 +276,13 @@ export default function SettingsPage() {
           right={
             <a
               href="/audit"
-              className="text-sm font-medium text-violet-400 hover:text-violet-300 transition-colors"
+              className="text-sm font-medium text-accent transition-colors hover:text-accent-hover"
             >
-              Open Audit →
+              Open audit →
             </a>
           }
         >
-          <div className="divide-y divide-zinc-800/40">
+          <div className="divide-y divide-edge">
             <div className="py-4 first:pt-0 last:pb-0">
               <SettingRow
                 label="Enable audit logging"
@@ -298,16 +301,18 @@ export default function SettingsPage() {
                   </>
                 }
                 right={
-                  <select
-                    value={draftDefaultLevel}
-                    onChange={(e) => setAuditDefaultLevelDraft(e.target.value)}
-                    className="w-[220px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500"
-                  >
-                    <option value="off">off</option>
-                    <option value="summary">summary</option>
-                    <option value="metadata">metadata</option>
-                    <option value="payload">payload</option>
-                  </select>
+                  <div className="w-[220px] max-w-full">
+                    <Select
+                      aria-label="Default detail level"
+                      value={draftDefaultLevel}
+                      onChange={(e) => setAuditDefaultLevelDraft(e.target.value)}
+                    >
+                      <option value="off">off</option>
+                      <option value="summary">summary</option>
+                      <option value="metadata">metadata</option>
+                      <option value="payload">payload</option>
+                    </Select>
+                  </div>
                 }
               />
             </div>
@@ -319,18 +324,17 @@ export default function SettingsPage() {
                 right={
                   <div className="flex flex-wrap justify-end gap-2">
                     {[1, 7, 30, 90, 365].map((d) => (
-                      <button
+                      <Button
                         key={d}
                         type="button"
+                        variant="secondary"
+                        size="sm"
+                        aria-pressed={draftRetentionDays === d}
                         onClick={() => setAuditRetentionDaysDraft(d)}
-                        className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                          draftRetentionDays === d
-                            ? "border-violet-500/50 bg-violet-500/15 text-violet-200"
-                            : "border-zinc-800/70 bg-zinc-950/40 text-zinc-300 hover:bg-zinc-800/40 hover:text-zinc-200"
-                        }`}
+                        className={draftRetentionDays === d ? "border-accent/60 text-accent" : ""}
                       >
                         {d}d
-                      </button>
+                      </Button>
                     ))}
                   </div>
                 }
@@ -340,11 +344,11 @@ export default function SettingsPage() {
             <div className="pt-4">
               <div className="flex items-center gap-3">
                 {saveAuditSettingsMutation.isPending ? (
-                  <span className="text-sm text-zinc-500">Saving…</span>
+                  <span className="text-sm text-faint">Saving…</span>
                 ) : auditSettingsQuery.isPending ? (
-                  <span className="text-sm text-zinc-500">Loading…</span>
+                  <span className="text-sm text-faint">Loading…</span>
                 ) : auditSettingsQuery.isError ? (
-                  <span className="text-sm text-red-300">Failed to load audit settings</span>
+                  <span className="text-sm text-danger">Failed to load audit settings</span>
                 ) : null}
               </div>
             </div>
@@ -355,7 +359,7 @@ export default function SettingsPage() {
           title="Transport limits"
           subtitle="Tenant-wide defaults for request/SSE payload limits (DoS hardening). Profiles can override."
         >
-          <div className="divide-y divide-zinc-800/40">
+          <div className="divide-y divide-edge">
             <div className="py-4 first:pt-0 last:pb-0">
               <SettingRow
                 label="Max POST body bytes"
@@ -369,35 +373,39 @@ export default function SettingsPage() {
                   </>
                 }
                 right={
-                  <div className="flex items-center gap-2">
-                    {[1, 4, 8, 16, 32].map((mib) => {
-                      const bytes = mib * 1024 * 1024;
-                      return (
-                        <button
-                          key={mib}
-                          type="button"
-                          onClick={() => setMaxPostBodyBytesDraft(bytes)}
-                          className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                            draftMaxPostBodyBytes === bytes
-                              ? "border-violet-500/50 bg-violet-500/15 text-violet-200"
-                              : "border-zinc-800/70 bg-zinc-950/40 text-zinc-300 hover:bg-zinc-800/40 hover:text-zinc-200"
-                          }`}
-                        >
-                          {mib} MiB
-                        </button>
-                      );
-                    })}
-                    <input
-                      type="number"
-                      min={1}
-                      step={1}
-                      value={draftMaxPostBodyBytes}
-                      onChange={(e) => {
-                        const parsed = parsePositiveIntegerInput(e.target.value);
-                        if (parsed !== null) setMaxPostBodyBytesDraft(parsed);
-                      }}
-                      className="w-[180px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500"
-                    />
+                  <div className="flex flex-col items-end gap-2">
+                    <div className="flex flex-wrap justify-end gap-2">
+                      {[1, 4, 8, 16, 32].map((mib) => {
+                        const bytes = mib * 1024 * 1024;
+                        const active = draftMaxPostBodyBytes === bytes;
+                        return (
+                          <Button
+                            key={mib}
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            aria-pressed={active}
+                            onClick={() => setMaxPostBodyBytesDraft(bytes)}
+                            className={active ? "border-accent/60 text-accent" : ""}
+                          >
+                            {mib} MiB
+                          </Button>
+                        );
+                      })}
+                    </div>
+                    <div className="w-[200px] max-w-full">
+                      <Input
+                        type="number"
+                        min={1}
+                        step={1}
+                        label="Custom value (bytes)"
+                        value={draftMaxPostBodyBytes}
+                        onChange={(e) => {
+                          const parsed = parsePositiveIntegerInput(e.target.value);
+                          if (parsed !== null) setMaxPostBodyBytesDraft(parsed);
+                        }}
+                      />
+                    </div>
                   </div>
                 }
               />
@@ -415,35 +423,39 @@ export default function SettingsPage() {
                   </>
                 }
                 right={
-                  <div className="flex items-center gap-2">
-                    {[1, 4, 8, 16, 32].map((mib) => {
-                      const bytes = mib * 1024 * 1024;
-                      return (
-                        <button
-                          key={mib}
-                          type="button"
-                          onClick={() => setMaxSseEventBytesDraft(bytes)}
-                          className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                            draftMaxSseEventBytes === bytes
-                              ? "border-violet-500/50 bg-violet-500/15 text-violet-200"
-                              : "border-zinc-800/70 bg-zinc-950/40 text-zinc-300 hover:bg-zinc-800/40 hover:text-zinc-200"
-                          }`}
-                        >
-                          {mib} MiB
-                        </button>
-                      );
-                    })}
-                    <input
-                      type="number"
-                      min={1}
-                      step={1}
-                      value={draftMaxSseEventBytes}
-                      onChange={(e) => {
-                        const parsed = parsePositiveIntegerInput(e.target.value);
-                        if (parsed !== null) setMaxSseEventBytesDraft(parsed);
-                      }}
-                      className="w-[180px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500"
-                    />
+                  <div className="flex flex-col items-end gap-2">
+                    <div className="flex flex-wrap justify-end gap-2">
+                      {[1, 4, 8, 16, 32].map((mib) => {
+                        const bytes = mib * 1024 * 1024;
+                        const active = draftMaxSseEventBytes === bytes;
+                        return (
+                          <Button
+                            key={mib}
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            aria-pressed={active}
+                            onClick={() => setMaxSseEventBytesDraft(bytes)}
+                            className={active ? "border-accent/60 text-accent" : ""}
+                          >
+                            {mib} MiB
+                          </Button>
+                        );
+                      })}
+                    </div>
+                    <div className="w-[200px] max-w-full">
+                      <Input
+                        type="number"
+                        min={1}
+                        step={1}
+                        label="Custom value (bytes)"
+                        value={draftMaxSseEventBytes}
+                        onChange={(e) => {
+                          const parsed = parsePositiveIntegerInput(e.target.value);
+                          if (parsed !== null) setMaxSseEventBytesDraft(parsed);
+                        }}
+                      />
+                    </div>
                   </div>
                 }
               />
@@ -459,51 +471,55 @@ export default function SettingsPage() {
                   </>
                 }
                 right={
-                  <div className="flex flex-wrap justify-end gap-2">
-                    <input
-                      type="number"
-                      min={1}
-                      step={1}
-                      placeholder="max depth"
-                      value={draftMaxJsonDepth ?? ""}
-                      onChange={(e) =>
-                        setMaxJsonDepthDraft(parsePositiveIntegerInput(e.target.value))
-                      }
-                      className="w-[140px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500"
-                    />
-                    <input
-                      type="number"
-                      min={1}
-                      step={1}
-                      placeholder="max array"
-                      value={draftMaxJsonArrayLen ?? ""}
-                      onChange={(e) =>
-                        setMaxJsonArrayLenDraft(parsePositiveIntegerInput(e.target.value))
-                      }
-                      className="w-[140px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500"
-                    />
-                    <input
-                      type="number"
-                      min={1}
-                      step={1}
-                      placeholder="max keys"
-                      value={draftMaxJsonObjectKeys ?? ""}
-                      onChange={(e) =>
-                        setMaxJsonObjectKeysDraft(parsePositiveIntegerInput(e.target.value))
-                      }
-                      className="w-[140px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500"
-                    />
-                    <input
-                      type="number"
-                      min={1}
-                      step={1}
-                      placeholder="max str bytes"
-                      value={draftMaxJsonStringBytes ?? ""}
-                      onChange={(e) =>
-                        setMaxJsonStringBytesDraft(parsePositiveIntegerInput(e.target.value))
-                      }
-                      className="w-[160px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500"
-                    />
+                  <div className="flex flex-wrap justify-end gap-3">
+                    <div className="w-[140px] max-w-full">
+                      <Input
+                        type="number"
+                        min={1}
+                        step={1}
+                        label="Max depth"
+                        value={draftMaxJsonDepth ?? ""}
+                        onChange={(e) =>
+                          setMaxJsonDepthDraft(parsePositiveIntegerInput(e.target.value))
+                        }
+                      />
+                    </div>
+                    <div className="w-[140px] max-w-full">
+                      <Input
+                        type="number"
+                        min={1}
+                        step={1}
+                        label="Max array length"
+                        value={draftMaxJsonArrayLen ?? ""}
+                        onChange={(e) =>
+                          setMaxJsonArrayLenDraft(parsePositiveIntegerInput(e.target.value))
+                        }
+                      />
+                    </div>
+                    <div className="w-[140px] max-w-full">
+                      <Input
+                        type="number"
+                        min={1}
+                        step={1}
+                        label="Max object keys"
+                        value={draftMaxJsonObjectKeys ?? ""}
+                        onChange={(e) =>
+                          setMaxJsonObjectKeysDraft(parsePositiveIntegerInput(e.target.value))
+                        }
+                      />
+                    </div>
+                    <div className="w-[160px] max-w-full">
+                      <Input
+                        type="number"
+                        min={1}
+                        step={1}
+                        label="Max string bytes"
+                        value={draftMaxJsonStringBytes ?? ""}
+                        onChange={(e) =>
+                          setMaxJsonStringBytesDraft(parsePositiveIntegerInput(e.target.value))
+                        }
+                      />
+                    </div>
                   </div>
                 }
               />
@@ -512,160 +528,145 @@ export default function SettingsPage() {
             <div className="pt-4">
               <div className="flex items-center gap-3">
                 {saveTransportLimitsMutation.isPending ? (
-                  <span className="text-sm text-zinc-500">Saving…</span>
+                  <span className="text-sm text-faint">Saving…</span>
                 ) : transportLimitsQuery.isPending ? (
-                  <span className="text-sm text-zinc-500">Loading…</span>
+                  <span className="text-sm text-faint">Loading…</span>
                 ) : transportLimitsQuery.isError ? (
-                  <span className="text-sm text-red-300">Failed to load transport limits</span>
+                  <span className="text-sm text-danger">Failed to load transport limits</span>
                 ) : null}
               </div>
             </div>
           </div>
         </SectionCard>
 
-        {/* Environment Info */}
-        <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 overflow-hidden">
-          <div className="px-5 py-4 border-b border-zinc-800/60">
-            <h2 className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
-              <ServerIconDevice className="w-5 h-5 text-violet-400" />
-              Gateway Environment
-            </h2>
-          </div>
-          <div className="p-5 space-y-4">
+        {/* Environment info */}
+        <SectionCard title="Gateway environment">
+          <div className="space-y-4">
             <ConfigRow
-              label="Data Plane URL"
+              label="Data plane URL"
               value={dataBase}
               description="Public URL for MCP client connections"
               copyable
             />
             <ConfigRow
-              label="Gateway Status"
+              label="Gateway status"
               value={
                 gatewayStatusQuery.isPending ? "loading" : gatewayStatus?.ok ? "online" : "error"
               }
               description="Derived from the Gateway control plane /status"
             />
             <ConfigRow
-              label="Operating Mode"
+              label="Operating mode"
               value="Mode 3 (Postgres)"
               description="Multi-tenant mode with Postgres backend"
             />
             <ConfigRow
-              label="Session Storage"
-              value="Browser cookie"
-              description="UI stores the tenant session in browser-set cookies (not httpOnly yet)"
+              label="Session storage"
+              value="HttpOnly browser cookie"
+              description="The tenant token is HttpOnly; only non-sensitive tenant ID and expiry helpers are client-readable"
             />
           </div>
-        </section>
+        </SectionCard>
 
-        {/* Current Tenant */}
-        <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 overflow-hidden">
-          <div className="px-5 py-4 border-b border-zinc-800/60">
-            <h2 className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
-              <UserIcon className="w-5 h-5 text-emerald-400" />
-              Current Tenant
-            </h2>
-          </div>
-          <div className="p-5 space-y-4">
+        {/* Current tenant */}
+        <SectionCard title="Current tenant">
+          <div className="space-y-4">
             <ConfigRow
-              label="Session Expires"
+              label="Session expires"
               value={expHuman}
               description="When the current unlock token expires"
             />
           </div>
-          <div className="px-5 py-4 border-t border-zinc-800/60 bg-zinc-950/40">
-            <button
-              onClick={() => setShowConfirmLock(true)}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 transition-colors"
-            >
-              <LockIcon className="w-4 h-4" />
-              Lock Tenant Session
-            </button>
+          <div className="mt-4 border-t border-edge pt-4">
+            <Button variant="secondary" size="sm" onClick={() => setShowConfirmLock(true)}>
+              <LockIcon className="size-4" />
+              Lock tenant session
+            </Button>
           </div>
-        </section>
+        </SectionCard>
 
         {/* About */}
-        <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-5">
+        <section className="rounded-lg border border-edge bg-surface p-5">
           <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-violet-500 to-violet-600 flex items-center justify-center shadow-lg shadow-violet-500/20">
-              <span className="text-white font-black text-xl leading-none tracking-tight">U</span>
+            <div className="flex size-12 items-center justify-center rounded-lg bg-accent-strong">
+              <span className="text-xl font-black leading-none tracking-tight text-white">U</span>
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-zinc-100">MCP Gateway</h3>
-              <div className="text-xs text-zinc-500 mt-0.5">
+              <h3 className="text-sm font-semibold text-fg">MCP Gateway</h3>
+              <div className="mt-0.5 text-xs text-faint">
                 by{" "}
                 <a
                   href="https://unrelated.ai"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-violet-400 hover:text-violet-300 transition-colors"
+                  className="text-accent transition-colors hover:text-accent-hover"
                 >
                   unrelated.ai
                 </a>
               </div>
             </div>
           </div>
-          <div className="mt-4 pt-4 border-t border-zinc-800/60 grid grid-cols-3 gap-4 text-center">
+          <div className="mt-4 grid grid-cols-3 gap-4 border-t border-edge pt-4 text-center">
             <div>
-              <div className="text-sm font-semibold text-zinc-200">{gatewayVersionLabel}</div>
-              <div className="text-xs text-zinc-500">Version</div>
+              <div className="font-mono text-sm font-medium text-fg">{gatewayVersionLabel}</div>
+              <div className="eyebrow mt-0.5">Version</div>
             </div>
             <div>
-              <div className="text-sm font-semibold text-zinc-200">{gatewayLicenseLabel}</div>
-              <div className="text-xs text-zinc-500">License</div>
+              <div className="font-mono text-sm font-medium text-fg">{gatewayLicenseLabel}</div>
+              <div className="eyebrow mt-0.5">License</div>
             </div>
             <div>
               <a
                 href="https://github.com/unrelated-ai/mcp-gateway"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-sm font-semibold text-violet-400 hover:text-violet-300 transition-colors"
+                className="text-sm font-semibold text-accent transition-colors hover:text-accent-hover"
               >
                 GitHub
               </a>
-              <div className="text-xs text-zinc-500">Repository</div>
+              <div className="eyebrow mt-0.5">Repository</div>
             </div>
           </div>
         </section>
 
         {/* Web UI */}
-        <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-5">
+        <section className="rounded-lg border border-edge bg-surface p-5">
           <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center shadow-lg shadow-emerald-500/20">
-              <span className="text-white font-black text-base leading-none tracking-tight">U</span>
+            <div className="flex size-12 items-center justify-center rounded-lg border border-edge-strong bg-raised">
+              <span className="text-base font-black leading-none tracking-tight text-muted">U</span>
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-zinc-100">Web UI</h3>
-              <div className="text-xs text-zinc-500 mt-0.5">
+              <h3 className="text-sm font-semibold text-fg">Web UI</h3>
+              <div className="mt-0.5 text-xs text-faint">
                 Dashboard for managing profiles and sources.
               </div>
             </div>
           </div>
-          <div className="mt-4 pt-4 border-t border-zinc-800/60 grid grid-cols-3 gap-4 text-center">
+          <div className="mt-4 grid grid-cols-3 gap-4 border-t border-edge pt-4 text-center">
             <div>
-              <div className="text-sm font-semibold text-zinc-200">{uiVersion}</div>
-              <div className="text-xs text-zinc-500">Version</div>
+              <div className="font-mono text-sm font-medium text-fg">{uiVersion}</div>
+              <div className="eyebrow mt-0.5">Version</div>
             </div>
             <div>
-              <div className="text-sm font-semibold text-zinc-200">MIT</div>
-              <div className="text-xs text-zinc-500">License</div>
+              <div className="font-mono text-sm font-medium text-fg">MIT</div>
+              <div className="eyebrow mt-0.5">License</div>
             </div>
             <div>
               <a
                 href="https://github.com/unrelated-ai/mcp-gateway"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-sm font-semibold text-emerald-400 hover:text-emerald-300 transition-colors"
+                className="text-sm font-semibold text-accent transition-colors hover:text-accent-hover"
               >
                 GitHub
               </a>
-              <div className="text-xs text-zinc-500">Repository</div>
+              <div className="eyebrow mt-0.5">Repository</div>
             </div>
           </div>
         </section>
       </PageContent>
 
-      {/* Lock Confirmation Modal */}
+      {/* Lock confirmation modal */}
       <ConfirmModal
         open={showConfirmLock}
         onClose={() => setShowConfirmLock(false)}
@@ -674,7 +675,7 @@ export default function SettingsPage() {
         }}
         title="Lock session?"
         description="This will clear your session and return you to the unlock screen. You'll need your tenant token to access the dashboard again."
-        confirmLabel="Lock Session"
+        confirmLabel="Lock session"
       />
     </AppShell>
   );
@@ -692,25 +693,19 @@ function ConfigRow({
   copyable?: boolean;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 py-2 border-b border-zinc-800/40 last:border-0 last:pb-0 first:pt-0">
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-zinc-200">{label}</div>
-        {description && <div className="text-xs text-zinc-500 mt-0.5">{description}</div>}
+    <div className="flex items-start justify-between gap-4 border-b border-edge py-2 first:pt-0 last:border-0 last:pb-0">
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium text-fg">{label}</div>
+        {description && <div className="mt-0.5 text-xs text-faint">{description}</div>}
       </div>
       <div className="flex items-center gap-2">
         <code
           title={value}
-          className="text-sm font-mono text-zinc-400 bg-zinc-800/60 px-2 py-1 rounded truncate max-w-[260px] sm:max-w-[360px] md:max-w-[520px] lg:max-w-[680px]"
+          className="max-w-[260px] truncate rounded bg-well px-2 py-1 font-mono text-sm text-muted sm:max-w-[360px] md:max-w-[520px] lg:max-w-[680px]"
         >
           {value}
         </code>
-        {copyable && (
-          <CopyButton
-            text={value}
-            variant="icon"
-            className="text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
-          />
-        )}
+        {copyable && <CopyButton value={value} variant="icon" />}
       </div>
     </div>
   );
@@ -727,9 +722,9 @@ function SettingRow({
 }) {
   return (
     <div className="flex items-start justify-between gap-4">
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-zinc-200">{label}</div>
-        {description ? <div className="text-xs text-zinc-500 mt-0.5">{description}</div> : null}
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium text-fg">{label}</div>
+        {description ? <div className="mt-0.5 text-xs text-faint">{description}</div> : null}
       </div>
       <div className="shrink-0">{right}</div>
     </div>

@@ -1,8 +1,10 @@
 "use client";
 
-import { type ReactNode, useEffect, useCallback, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { WarningIcon, XIcon } from "@/components/icons";
 import { Button } from "./button";
+import { IconButton } from "./button";
 import { Input } from "./input";
 import { CopyBlock } from "./copy-block";
 
@@ -22,65 +24,89 @@ const sizeStyles = {
   xl: "max-w-xl",
 };
 
+const FOCUSABLE =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 export function Modal({ open, onClose, children, title, description, size = "md" }: ModalProps) {
   const hasHeader = Boolean(title || description);
-  const handleEscape = useCallback(
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+
+  const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.key === "Tab" && panelRef.current) {
+        const focusables = panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE);
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        const active = document.activeElement;
+        if (e.shiftKey && (active === first || active === panelRef.current)) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && active === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     },
     [onClose],
   );
 
   useEffect(() => {
-    if (open) {
-      document.addEventListener("keydown", handleEscape);
-      document.body.style.overflow = "hidden";
-    }
+    if (!open) return;
+    document.addEventListener("keydown", handleKeyDown);
+    document.body.style.overflow = "hidden";
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    panelRef.current?.focus();
     return () => {
-      document.removeEventListener("keydown", handleEscape);
+      document.removeEventListener("keydown", handleKeyDown);
       document.body.style.overflow = "";
+      previouslyFocused?.focus?.();
     };
-  }, [open, handleEscape]);
+  }, [open, handleKeyDown]);
 
   if (!open) return null;
-
   if (typeof document === "undefined") return null;
 
   return createPortal(
     <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
       {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
-        onClick={onClose}
-      />
+      <div className="absolute inset-0 animate-fade bg-black/60" onClick={onClose} />
 
-      {/* Modal */}
+      {/* Panel */}
       <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={title ? titleId : undefined}
+        tabIndex={-1}
         className={`
           relative w-full ${sizeStyles[size]}
           max-h-[calc(100vh-2rem)] overflow-y-auto
-          bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl shadow-black/50
-          animate-in fade-in zoom-in-95 duration-200
+          animate-rise rounded-xl border border-edge-strong bg-surface shadow-2xl shadow-black/50
+          focus:outline-none
         `}
       >
-        {/* Header */}
         {hasHeader && (
           <div className="px-6 pt-6 pb-4">
-            {title && <h2 className="text-lg font-semibold text-zinc-100">{title}</h2>}
-            {description && <p className="mt-1 text-sm text-zinc-400">{description}</p>}
+            {title && (
+              <h2 id={titleId} className="pr-8 text-base font-semibold text-fg">
+                {title}
+              </h2>
+            )}
+            {description && <p className="mt-1 text-sm text-muted">{description}</p>}
           </div>
         )}
 
-        {/* Content */}
         <div className={`px-6 pb-6 ${hasHeader ? "" : "pt-6"}`.trim()}>{children}</div>
 
-        {/* Close button */}
-        <button
-          onClick={onClose}
-          className="absolute top-4 right-4 p-1.5 rounded-lg text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
-        >
-          <XIcon className="w-5 h-5" />
-        </button>
+        <IconButton label="Close" size="sm" onClick={onClose} className="absolute right-4 top-4">
+          <XIcon className="size-4" />
+        </IconButton>
       </div>
     </div>,
     document.body,
@@ -95,14 +121,13 @@ interface ModalActionsProps {
 export function ModalActions({ children, className = "" }: ModalActionsProps) {
   return (
     <div
-      className={`flex items-center justify-end gap-3 mt-6 pt-4 border-t border-zinc-800 ${className}`}
+      className={`mt-6 flex items-center justify-end gap-3 border-t border-edge pt-4 ${className}`}
     >
       {children}
     </div>
   );
 }
 
-// Confirmation modal helper
 interface ConfirmModalProps {
   open: boolean;
   onClose: () => void;
@@ -116,8 +141,8 @@ interface ConfirmModalProps {
 }
 
 export function ConfirmModal({ open, ...rest }: ConfirmModalProps) {
-  // Lint rule in this repo discourages setState in effects; instead, we mount a fresh
-  // stateful inner component only when open.
+  // Mount a fresh stateful inner component only while open so the typed
+  // confirmation resets between uses (repo lint discourages setState in effects).
   if (!open) return null;
   return <ConfirmModalOpen {...rest} />;
 }
@@ -137,22 +162,14 @@ function ConfirmModalOpen({
   const isTypedOk = !requireText || typed === requireText;
 
   return (
-    <Modal open onClose={onClose} size="sm">
-      <div className="text-center">
-        <div
-          className={`
-            mx-auto w-12 h-12 rounded-full flex items-center justify-center
-            ${danger ? "bg-red-500/10" : "bg-violet-500/10"}
-          `}
-        >
-          {danger ? (
-            <AlertIcon className="w-6 h-6 text-red-400" />
-          ) : (
-            <QuestionIcon className="w-6 h-6 text-violet-400" />
-          )}
-        </div>
-        <h3 className="mt-4 text-lg font-semibold text-zinc-100">{title}</h3>
-        <p className="mt-2 text-sm text-zinc-400">{description}</p>
+    <Modal open onClose={onClose} size="sm" title={title}>
+      <div className="flex items-start gap-3">
+        {danger && (
+          <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md bg-danger/10">
+            <WarningIcon className="size-4 text-danger" />
+          </span>
+        )}
+        <p className="text-sm text-muted">{description}</p>
       </div>
 
       {requireText && (
@@ -165,9 +182,7 @@ function ConfirmModalOpen({
             onChange={(e) => setTyped(e.target.value)}
             className="font-mono"
           />
-          <p className="text-xs text-zinc-500 text-center">
-            Proceed is enabled only after an exact match.
-          </p>
+          <p className="text-xs text-faint">Proceed is enabled only after an exact match.</p>
         </div>
       )}
 
@@ -185,55 +200,5 @@ function ConfirmModalOpen({
         </Button>
       </ModalActions>
     </Modal>
-  );
-}
-
-function XIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth={2}
-    >
-      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-    </svg>
-  );
-}
-
-function AlertIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth={2}
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-      />
-    </svg>
-  );
-}
-
-function QuestionIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth={2}
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-      />
-    </svg>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 export function useQueuedAutosave<T>({
   isPending,
@@ -42,5 +42,8 @@ export function useQueuedAutosave<T>({
     commit(queued);
   }, [commit, isPending]);
 
-  return { commit, setLastSavedKey };
+  // Stable identity: consumers depend on this object in effects, and a fresh
+  // object every render would re-run those effects (resetting the saved-key
+  // baseline mid-flight).
+  return useMemo(() => ({ commit, setLastSavedKey }), [commit, setLastSavedKey]);
 }

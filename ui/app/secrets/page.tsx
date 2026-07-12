@@ -7,12 +7,17 @@ import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import {
+  Badge,
   Button,
+  Callout,
   ConfirmModal,
+  CopyBlock,
+  EmptyState,
   Input,
   Modal,
   ModalActions,
   SectionCard,
+  SkeletonRows,
   Textarea,
 } from "@/components/ui";
 import { qk } from "@/src/lib/queryKeys";
@@ -64,96 +69,88 @@ export default function SecretsPage() {
         title="Secrets"
         description="Securely store sensitive values like API keys and tokens"
         actions={
-          <button
-            onClick={createModal.onOpen}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-b from-violet-500 to-violet-600 text-white font-medium text-sm shadow-lg shadow-violet-500/25 hover:from-violet-400 hover:to-violet-500 transition-all duration-150"
-          >
-            <PlusIcon className="w-4 h-4" />
-            Add Secret
-          </button>
+          <Button onClick={createModal.onOpen}>
+            <PlusIcon className="size-4" />
+            Add secret
+          </Button>
         }
       />
 
       <PageContent>
         {secretsQuery.error && (
-          <div className="mb-6 rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200">
+          <Callout tone="danger" title="Failed to load secrets" size="md" className="mb-6">
             {secretsQuery.error instanceof Error
               ? secretsQuery.error.message
               : "Failed to load secrets"}
-          </div>
+          </Callout>
         )}
 
         {/* Info banner */}
-        <div className="mb-6 flex items-start gap-3 p-4 rounded-xl bg-violet-500/5 border border-violet-500/20">
-          <ShieldIcon className="w-5 h-5 text-violet-400 shrink-0 mt-0.5" />
-          <div>
-            <p className="text-sm font-medium text-violet-400">Write-only secrets</p>
-            <p className="mt-1 text-xs text-zinc-400">
-              Secret values are encrypted and cannot be viewed after creation. You can only update
-              or delete them. Use syntax like{" "}
-              <code className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">
-                ${"{secret:SECRET_NAME}"}
-              </code>{" "}
-              in tool sources to reference them.
-            </p>
-          </div>
-        </div>
+        <Callout tone="accent" title="Write-only secrets" size="md" className="mb-6">
+          Secret values are encrypted and cannot be viewed after creation. You can only update or
+          delete them. Use syntax like{" "}
+          <code className="rounded bg-raised px-1.5 py-0.5 font-mono text-muted">
+            ${"{secret:SECRET_NAME}"}
+          </code>{" "}
+          in tool sources to reference them.
+        </Callout>
 
-        {/* Secrets list */}
-        <SectionCard className="overflow-hidden" bodyClassName="p-0">
-          <div className="divide-y divide-zinc-800/40">
-            {secretsQuery.isPending ? (
-              <div className="p-5 text-sm text-zinc-400">Loading…</div>
-            ) : sortedSecrets.length === 0 ? (
-              <div className="p-5 text-sm text-zinc-500">No secrets yet.</div>
-            ) : (
-              sortedSecrets.map((secret) => (
-                <div key={secret.name} className="p-5 hover:bg-zinc-800/20 transition-colors">
+        {secretsQuery.isPending && <SkeletonRows rows={3} />}
+        {!secretsQuery.isPending && !secretsQuery.error && sortedSecrets.length === 0 && (
+          <EmptyState
+            icon={<ShieldIcon className="size-5" />}
+            title="No secrets yet"
+            description="Add your first secret to get started."
+            action={{ label: "Add secret", onClick: createModal.onOpen }}
+          />
+        )}
+        {!secretsQuery.isPending && !secretsQuery.error && sortedSecrets.length > 0 && (
+          <SectionCard className="overflow-hidden" bodyClassName="p-0">
+            <div className="divide-y divide-edge">
+              {sortedSecrets.map((secret) => (
+                <div
+                  key={secret.name}
+                  className="p-5 transition-colors duration-150 hover:bg-raised/40"
+                >
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex items-start gap-4">
-                      <div className="w-10 h-10 rounded-xl bg-zinc-800/60 flex items-center justify-center">
-                        <KeyIcon className="w-5 h-5 text-zinc-400" />
+                      <div className="flex size-10 items-center justify-center rounded-lg border border-edge bg-raised">
+                        <KeyIcon className="size-5 text-muted" />
                       </div>
                       <div>
                         <div className="flex items-center gap-3">
-                          <code className="text-sm font-semibold text-zinc-100">{secret.name}</code>
-                          <span className="px-2 py-0.5 rounded text-xs font-mono bg-zinc-800/60 text-zinc-500">
-                            ••••••••
-                          </span>
+                          <code className="font-mono text-sm font-semibold text-fg">
+                            {secret.name}
+                          </code>
+                          <Badge>••••••••</Badge>
                         </div>
-                        <div className="mt-2 text-xs text-zinc-500">
+                        <div className="mt-2 text-xs text-faint">
                           Write-only secret value (not readable).
                         </div>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <button
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         onClick={() => setShowUpdateModal(secret.name)}
-                        className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-300 hover:text-white hover:bg-zinc-800/60 transition-colors"
                       >
                         Update
-                      </button>
-                      <button
+                      </Button>
+                      <Button
+                        variant="danger"
+                        size="sm"
                         onClick={() => setShowDeleteModal(secret.name)}
-                        className="px-3 py-1.5 rounded-lg text-xs font-medium text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors"
                       >
                         Delete
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 </div>
-              ))
-            )}
-          </div>
-        </SectionCard>
-
-        {!secretsQuery.isPending && sortedSecrets.length === 0 && (
-          <div className="text-center py-12">
-            <ShieldIcon className="w-12 h-12 text-zinc-700 mx-auto mb-4" />
-            <h3 className="text-sm font-medium text-zinc-300">No secrets yet</h3>
-            <p className="mt-1 text-sm text-zinc-500">Add your first secret to get started.</p>
-          </div>
+              ))}
+            </div>
+          </SectionCard>
         )}
       </PageContent>
 
@@ -192,7 +189,7 @@ export default function SecretsPage() {
             ? `This will permanently delete "${showDeleteModal}". Any tool sources using this secret will fail.`
             : "This will permanently delete the secret."
         }
-        confirmLabel="Delete Secret"
+        confirmLabel="Delete secret"
         danger
         loading={deleteMutation.isPending}
       />
@@ -270,11 +267,11 @@ function CreateSecretModal({
       title={
         createdName
           ? isUpdate
-            ? "Secret Updated"
-            : "Secret Created"
+            ? "Secret updated"
+            : "Secret created"
           : isUpdate
-            ? "Update Secret"
-            : "Add Secret"
+            ? "Update secret"
+            : "Add secret"
       }
       description={
         createdName
@@ -287,14 +284,14 @@ function CreateSecretModal({
     >
       {createdName ? (
         <div>
-          <div className="flex items-center gap-2 text-sm font-medium text-emerald-400 mb-4">
-            <CheckCircleIcon className="w-5 h-5" />
+          <div className="mb-4 flex items-center gap-2 text-sm font-medium text-ok">
+            <CheckCircleIcon className="size-5" />
             {isUpdate ? "Secret updated" : "Secret stored securely"}
           </div>
-          <p className="text-sm text-zinc-400">Reference it in tool sources using:</p>
-          <code className="mt-3 block px-4 py-3 rounded-xl bg-zinc-950/80 border border-zinc-800 text-sm font-mono text-violet-400">
-            ${`{secret:${createdName}}`}
-          </code>
+          <p className="text-sm text-muted">Reference it in tool sources using:</p>
+          <div className="mt-3">
+            <CopyBlock value={`\${secret:${createdName}}`} />
+          </div>
           <div className="mt-6">
             <Button className="w-full" variant="secondary" onClick={close}>
               Done
@@ -307,33 +304,31 @@ function CreateSecretModal({
           onSubmit={handleSubmit((values) => createMutation.mutate(values))}
         >
           <Input
-            label="Secret Name"
-            placeholder="e.g., API_KEY"
+            label="Secret name"
+            placeholder="e.g. API_KEY"
             {...register("name")}
             error={errors.name?.message}
+            hint="Use SCREAMING_SNAKE_CASE for consistency."
             className="font-mono uppercase"
             disabled={isUpdate}
           />
-          <p className="text-xs text-zinc-500">Use SCREAMING_SNAKE_CASE for consistency.</p>
 
           <Textarea
-            label="Secret Value"
+            label="Secret value"
             rows={3}
             placeholder="Enter the secret value…"
             {...register("value")}
             error={errors.value?.message}
+            hint="This value will be encrypted and cannot be viewed again."
             className="font-mono"
           />
-          <p className="text-xs text-zinc-500">
-            This value will be encrypted and cannot be viewed again.
-          </p>
 
           <ModalActions>
             <Button type="button" variant="ghost" onClick={close} disabled={isSubmitting}>
               Cancel
             </Button>
             <Button type="submit" loading={createMutation.isPending}>
-              Save Secret
+              Save secret
             </Button>
           </ModalActions>
         </form>

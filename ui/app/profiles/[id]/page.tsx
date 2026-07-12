@@ -5,7 +5,18 @@ import { useParams, useRouter } from "next/navigation";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
 import type { Profile } from "@/src/lib/types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Callout, ConfirmModal, Modal, ModalActions, Toggle } from "@/components/ui";
+import {
+  Button,
+  Callout,
+  ConfirmModal,
+  IconButton,
+  Modal,
+  ModalActions,
+  Select,
+  Spinner,
+  Tabs,
+  Toggle,
+} from "@/components/ui";
 import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
 import type { ProfileSurface } from "@/src/lib/tenantApi";
@@ -60,6 +71,9 @@ export default function ProfileDetailPage() {
     queryKey: qk.gatewayStatus(),
     queryFn: async () => {
       const res = await fetch("/api/gateway/status", { cache: "no-store" });
+      if (!res.ok) {
+        return { ok: false, status: res.status } as GatewayStatusResponse;
+      }
       return (await res.json()) as GatewayStatusResponse;
     },
   });
@@ -391,17 +405,15 @@ export default function ProfileDetailPage() {
             <div className="flex items-center gap-3">
               <span className="truncate">{profile?.name ?? "Profile"}</span>
               {profile && !editingMeta && (
-                <button
-                  type="button"
+                <IconButton
+                  label="Edit profile name and description"
                   onClick={() => {
                     setMetaSaveError(null);
                     setEditingMeta(true);
                   }}
-                  className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors"
-                  aria-label="Edit profile name and description"
                 >
-                  <PencilIcon className="w-4 h-4" />
-                </button>
+                  <PencilIcon className="size-4" />
+                </IconButton>
               )}
             </div>
           )
@@ -413,28 +425,25 @@ export default function ProfileDetailPage() {
         ]}
         actions={
           <div className="flex items-center gap-2">
-            <button
+            <Button
               type="button"
+              variant="ghost"
               onClick={() => router.push(`/audit?profileId=${encodeURIComponent(profileId)}`)}
-              className="px-4 py-2 rounded-lg text-sm font-medium text-violet-300 hover:text-violet-200 hover:bg-violet-500/10 transition-colors"
             >
               Audit
-            </button>
-            <button
-              onClick={() => setShowDeleteModal(true)}
-              className="px-4 py-2 rounded-lg text-sm font-medium text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors"
-            >
+            </Button>
+            <Button variant="danger" onClick={() => setShowDeleteModal(true)}>
               Delete
-            </button>
+            </Button>
           </div>
         }
       />
 
       <PageContent>
         {error && (
-          <div className="mb-6 rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200">
+          <Callout tone="danger" size="md" className="mb-6">
             {error}
-          </div>
+          </Callout>
         )}
 
         {profile ? (
@@ -475,30 +484,20 @@ export default function ProfileDetailPage() {
         />
 
         {/* Tabs */}
-        <div className="flex items-center gap-1 border-b border-zinc-800/60 mb-6">
-          {(
+        <Tabs
+          className="mb-6"
+          items={
             [
-              { key: "tools", label: "Tools" },
-              { key: "sources", label: "Sources" },
-              { key: "keys", label: "API Keys" },
-              { key: "security", label: "Security" },
-              { key: "other", label: "MCP Settings" },
+              { value: "tools", label: "Tools" },
+              { value: "sources", label: "Sources" },
+              { value: "keys", label: "API keys" },
+              { value: "security", label: "Security" },
+              { value: "other", label: "MCP settings" },
             ] as const
-          ).map((tab) => (
-            <button
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              className={`px-4 py-2.5 text-sm font-medium transition-colors relative ${
-                activeTab === tab.key ? "text-white" : "text-zinc-500 hover:text-zinc-300"
-              }`}
-            >
-              <span className="inline-flex items-center gap-2">{tab.label}</span>
-              {activeTab === tab.key && (
-                <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-violet-500 rounded-full" />
-              )}
-            </button>
-          ))}
-        </div>
+          }
+          value={activeTab}
+          onChange={setActiveTab}
+        />
 
         {/* Tab Content */}
         {activeTab === "sources" && (
@@ -556,7 +555,7 @@ export default function ProfileDetailPage() {
         title="Delete profile?"
         description={`This will permanently delete "${profile?.name ?? profileId}". This action cannot be undone.`}
         requireText={deleteRequireText}
-        confirmLabel="Delete Profile"
+        confirmLabel="Delete profile"
         danger
         loading={deleteMutation.isPending}
       />
@@ -601,12 +600,15 @@ export default function ProfileDetailPage() {
         size="lg"
       >
         {!profile || !authDraft ? (
-          <div className="text-sm text-zinc-400">Loading…</div>
+          <div className="flex items-center gap-2 text-sm text-muted">
+            <Spinner size="sm" />
+            Loading…
+          </div>
         ) : (
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <label className="block text-sm font-medium text-zinc-300">Mode</label>
-              <select
+              <Select
+                label="Mode"
                 value={authDraft.mode}
                 disabled={updateAuthMutation.isPending}
                 onChange={(e) => {
@@ -614,33 +616,28 @@ export default function ProfileDetailPage() {
                   const next = { ...authDraft, mode: nextMode };
                   setAuthDraft(next);
                 }}
-                className="w-full rounded-lg border border-zinc-700/80 bg-zinc-900/50 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500/50 hover:border-zinc-600/80"
               >
-                <option value="apiKeyEveryRequest">API key (every request) — Recommended</option>
-                <option value="jwtEveryRequest">JWT/OIDC (every request) — Recommended</option>
+                <option value="apiKeyEveryRequest">API key (every request) — recommended</option>
+                <option value="jwtEveryRequest">JWT/OIDC (every request) — recommended</option>
                 <option value="apiKeyInitializeOnly">
-                  API key (init only) — Compatibility (not recommended)
+                  API key (init only) — compatibility (not recommended)
                 </option>
                 <option value="disabled">Disabled (not recommended)</option>
-              </select>
-              <div className="text-xs text-zinc-500">
+              </Select>
+              <div className="text-xs text-faint">
                 API key modes accept <span className="font-mono">Authorization: Bearer</span> and
                 optionally <span className="font-mono">x-api-key</span>. JWT/OIDC requires a valid
                 bearer token on every request.
               </div>
               {authDraft.mode === "jwtEveryRequest" && oidcConfigured === false ? (
-                <div className="mt-2 rounded-lg border border-zinc-800/60 bg-zinc-950/30 p-3 text-xs text-zinc-400">
+                <Callout tone="info" className="mt-2">
                   JWT/OIDC is unavailable because OIDC is not configured on the Gateway (missing
                   UNRELATED_GATEWAY_OIDC_ISSUER). Configure OIDC or choose a different mode.
-                </div>
+                </Callout>
               ) : null}
 
               {authDraft.mode === "apiKeyInitializeOnly" ? (
-                <Callout
-                  tone="warning"
-                  title="Compatibility mode (not recommended)"
-                  className="mt-2 rounded-lg"
-                >
+                <Callout tone="warn" title="Compatibility mode (not recommended)" className="mt-2">
                   After <span className="font-mono">initialize</span>, the{" "}
                   <span className="font-mono">Mcp-Session-Id</span> becomes sufficient for follow-up
                   requests. If that session token is leaked, it can be replayed until it expires.
@@ -649,11 +646,7 @@ export default function ProfileDetailPage() {
               ) : null}
 
               {authDraft.mode === "disabled" ? (
-                <Callout
-                  tone="danger"
-                  title="No auth (not recommended)"
-                  className="mt-2 rounded-lg"
-                >
+                <Callout tone="danger" title="No auth (not recommended)" className="mt-2">
                   Anyone with the profile URL can call tools. Use only for local/dev or when the
                   data plane is protected by a trusted reverse proxy/network boundary.
                 </Callout>
@@ -725,93 +718,84 @@ export default function ProfileDetailPage() {
         size="lg"
       >
         <div className="space-y-4">
-          <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/40 p-4">
-            <div className="text-sm font-semibold text-zinc-100">Where credentials go</div>
-            <p className="mt-2 text-sm text-zinc-400">
-              If auth is enabled, your MCP client sends credentials as HTTP headers to{" "}
-              <code className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">{mcpUrl}</code>.
-              Most clients configure headers per{" "}
-              <code className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">mcpServers</code>{" "}
-              entry, so you can have multiple servers in one file with different auth.
-            </p>
-          </div>
+          <Callout tone="neutral" size="md" title="Where credentials go">
+            If auth is enabled, your MCP client sends credentials as HTTP headers to{" "}
+            <code className="rounded bg-raised px-1.5 py-0.5 font-mono text-xs text-fg">
+              {mcpUrl}
+            </code>
+            . Most clients configure headers per{" "}
+            <code className="rounded bg-raised px-1.5 py-0.5 font-mono text-xs text-fg">
+              mcpServers
+            </code>{" "}
+            entry, so you can have multiple servers in one file with different auth.
+          </Callout>
 
-          <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/40 p-4">
-            <div className="text-sm font-semibold text-zinc-100">Recommended modes</div>
-            <p className="mt-2 text-sm text-zinc-400">
-              For production / internet-exposed profiles, prefer per-request authentication:
-              <span className="ml-1 font-medium text-zinc-200">
-                API key (every request)
-              </span> or <span className="font-medium text-zinc-200">JWT/OIDC (every request)</span>
-              . <span className="font-medium text-zinc-200">API key (init only)</span> is a
-              compatibility mode and is not recommended.
-            </p>
-          </div>
+          <Callout tone="neutral" size="md" title="Recommended modes">
+            For production / internet-exposed profiles, prefer per-request authentication:
+            <span className="ml-1 font-medium text-fg">API key (every request)</span> or{" "}
+            <span className="font-medium text-fg">JWT/OIDC (every request)</span>.{" "}
+            <span className="font-medium text-fg">API key (init only)</span> is a compatibility mode
+            and is not recommended.
+          </Callout>
 
           {profile?.dataPlaneAuth.mode.startsWith("apiKey") ? (
-            <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/40 p-4">
-              <div className="text-sm font-semibold text-zinc-100">API key header</div>
-              <div className="mt-2 text-sm text-zinc-400">
+            <Callout tone="neutral" size="md" title="API key header">
+              <div className="text-sm text-muted">
                 Preferred:
-                <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 font-mono text-xs text-zinc-200">
+                <div className="mt-2 rounded-md border border-edge bg-well p-3 font-mono text-xs text-fg">
                   Authorization: Bearer &lt;api_key_secret&gt;
                 </div>
                 {profile.dataPlaneAuth.acceptXApiKey ? (
                   <>
                     <div className="mt-3">Alternative (if enabled on this profile):</div>
-                    <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 font-mono text-xs text-zinc-200">
+                    <div className="mt-2 rounded-md border border-edge bg-well p-3 font-mono text-xs text-fg">
                       x-api-key: &lt;api_key_secret&gt;
                     </div>
                   </>
                 ) : null}
               </div>
               {profile.dataPlaneAuth.mode === "apiKeyInitializeOnly" ? (
-                <p className="mt-3 text-sm text-zinc-400">
+                <p className="mt-3 text-sm text-muted">
                   Compatibility note: in “init only” mode the API key is required only for{" "}
-                  <code className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">
+                  <code className="rounded bg-raised px-1.5 py-0.5 font-mono text-xs text-fg">
                     initialize
                   </code>
                   . After that, the client uses{" "}
-                  <code className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">
+                  <code className="rounded bg-raised px-1.5 py-0.5 font-mono text-xs text-fg">
                     Mcp-Session-Id
                   </code>{" "}
                   for follow-up requests. This is less secure (session replay risk) and is not
                   recommended for internet-exposed deployments.
                 </p>
               ) : null}
-            </div>
+            </Callout>
           ) : profile?.dataPlaneAuth.mode.startsWith("jwt") ? (
-            <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/40 p-4">
-              <div className="text-sm font-semibold text-zinc-100">JWT header</div>
-              <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 font-mono text-xs text-zinc-200">
+            <Callout tone="neutral" size="md" title="JWT header">
+              <div className="mt-1 rounded-md border border-edge bg-well p-3 font-mono text-xs text-fg">
                 Authorization: Bearer &lt;jwt&gt;
               </div>
-              <div className="mt-3 text-sm text-zinc-400">
+              <div className="mt-3 text-sm text-muted">
                 OIDC/JWT auth is available when configured on the Gateway. If you need SSO, contact
                 your admin.
               </div>
-            </div>
+            </Callout>
           ) : (
-            <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/40 p-4">
-              <div className="text-sm font-semibold text-zinc-100">No auth</div>
-              <p className="mt-2 text-sm text-zinc-400">
+            <Callout tone="neutral" size="md" title="No auth">
+              <p className="text-sm text-muted">
                 This profile’s data-plane auth is disabled. No credentials are required.
               </p>
-              <div className="mt-3 text-sm text-zinc-400">
+              <div className="mt-3 text-sm text-muted">
                 If you need SSO, the Gateway can support OIDC/JWT when configured (contact your
                 admin).
               </div>
-            </div>
+            </Callout>
           )}
 
-          <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/40 p-4">
-            <div className="text-sm font-semibold text-zinc-100">Troubleshooting</div>
-            <p className="mt-2 text-sm text-zinc-400">
-              Some MCP clients/tools may not support custom headers for streamable HTTP yet. If you
-              see auth failures even with the right token/key, try another client or a newer version
-              that supports per-server headers.
-            </p>
-          </div>
+          <Callout tone="neutral" size="md" title="Troubleshooting">
+            Some MCP clients/tools may not support custom headers for streamable HTTP yet. If you
+            see auth failures even with the right token/key, try another client or a newer version
+            that supports per-server headers.
+          </Callout>
 
           <ModalActions className="pt-0 border-t-0">
             <Button type="button" variant="primary" onClick={() => setShowMcpAuthHelp(false)}>

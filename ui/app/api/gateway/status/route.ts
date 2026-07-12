@@ -13,7 +13,16 @@ export async function GET() {
 
   // Control plane has /status (AppState) and /health endpoints.
   const url = `${base.replace(/\/+$/, "")}/status`;
-  const res = await fetch(url, { cache: "no-store" });
+  let res: Response;
+  try {
+    res = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(15_000) });
+  } catch (e) {
+    const timedOut = e instanceof Error && e.name === "TimeoutError";
+    return NextResponse.json(
+      { ok: false, error: timedOut ? "gateway request timed out" : "gateway unreachable" },
+      { status: 504 },
+    );
+  }
   const text = await res.text();
 
   if (!res.ok) {

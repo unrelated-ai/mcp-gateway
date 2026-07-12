@@ -111,7 +111,16 @@ function buildUnlockPath(nextPath?: string): string {
 export function lockTenantSession(nextPath?: string): void {
   if (typeof window === "undefined") return;
   const unlockPath = buildUnlockPath(nextPath);
-  window.location.href = `/api/session/logout?next=${encodeURIComponent(unlockPath)}`;
+  // POST (not GET): logout is a state change and must not be triggerable via
+  // a cross-site link or image. Navigate once the cookies are cleared.
+  void fetch("/api/session/logout", { method: "POST" })
+    .catch(() => {
+      // Even if the request fails, still send the user to /unlock — the
+      // protected pages will 401 and bounce back here anyway.
+    })
+    .finally(() => {
+      window.location.href = unlockPath;
+    });
 }
 
 export function forceReunlock(nextPath?: string): void {

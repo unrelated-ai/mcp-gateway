@@ -17,10 +17,9 @@ export function Providers({ children }: { children: ReactNode }) {
           },
         },
         mutations: {
-          retry: (failureCount, error) => {
-            if (isMissingTenantSessionError(error)) return false;
-            return failureCount < 1;
-          },
+          // Never auto-retry mutations: creates (secrets, API keys, tenants)
+          // are not idempotent and a retried POST can execute twice.
+          retry: false,
         },
       },
     });

@@ -4,7 +4,28 @@ import { useParams, useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
-import { Button, ConfirmModal, CopyButton, Input, QueryParamAuthWarning } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Callout,
+  Checkbox,
+  ConfirmModal,
+  EmptyState,
+  EndpointWell,
+  Input,
+  QueryParamAuthWarning,
+  SectionCard,
+  Select,
+  SkeletonRows,
+  StatusBadge,
+  Table,
+  Tabs,
+  TBody,
+  TD,
+  TH,
+  THead,
+  TR,
+} from "@/components/ui";
 import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
 import { useToastStore } from "@/src/lib/toast-store";
@@ -342,84 +363,72 @@ export default function UpstreamDetailPage() {
         ]}
         actions={
           canEdit ? (
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setShowDelete(true)}
-                className="px-4 py-2 rounded-lg text-sm font-medium text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors"
-              >
-                Delete
-              </button>
-            </div>
+            <Button variant="danger" onClick={() => setShowDelete(true)}>
+              Delete
+            </Button>
           ) : null
         }
       />
 
       <PageContent className="space-y-6">
         {!upstream ? (
-          <div className="text-sm text-zinc-400">
-            {upstreamQuery.isPending ? "Loading…" : "Not found"}
-          </div>
+          upstreamQuery.isPending ? (
+            <SkeletonRows rows={3} />
+          ) : (
+            <EmptyState
+              title="Upstream not found"
+              description="This upstream doesn't exist or was deleted."
+            />
+          )
         ) : (
           <>
             {isManagedUpstream ? (
-              <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-4">
-                <div className="text-xs font-medium text-zinc-400">Managed deployment</div>
-                <div className="mt-1 text-sm text-zinc-200">
+              <SectionCard title="Managed deployment">
+                <div className="text-sm text-fg">
                   {managedDeployable?.displayName ??
                     latestManagedRequest?.deployableId ??
                     "Managed MCP upstream"}
                 </div>
-                <div className="mt-1 text-xs text-zinc-500 space-y-1">
+                <div className="mt-2 space-y-1 text-xs text-faint">
                   {managedDeployable ? (
                     <div>
                       Deployable ID:{" "}
-                      <span className="font-mono text-zinc-300">{managedDeployable.id}</span>
+                      <span className="font-mono text-muted">{managedDeployable.id}</span>
                     </div>
                   ) : null}
                   <div>
-                    Upstream ID: <span className="font-mono text-zinc-300">{upstream.id}</span>
+                    Upstream ID: <span className="font-mono text-muted">{upstream.id}</span>
                   </div>
                 </div>
-              </section>
+              </SectionCard>
             ) : null}
 
-            <div className="flex items-center gap-1 border-b border-zinc-800/60">
-              {(
+            <Tabs
+              items={
                 [
-                  { key: "endpoints", label: "Endpoints" },
-                  { key: "discovery", label: "Discovery" },
+                  { value: "endpoints", label: "Endpoints" },
+                  { value: "discovery", label: "Discovery" },
                 ] as const
-              ).map((t) => (
-                <button
-                  key={t.key}
-                  onClick={() => setActiveTab(t.key)}
-                  className={`px-4 py-2.5 text-sm font-medium transition-colors relative ${
-                    activeTab === t.key ? "text-white" : "text-zinc-500 hover:text-zinc-300"
-                  }`}
-                >
-                  {t.label}
-                  {activeTab === t.key && (
-                    <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-violet-500 rounded-full" />
-                  )}
-                </button>
-              ))}
-            </div>
+              }
+              value={activeTab}
+              onChange={setActiveTab}
+            />
 
             {activeTab === "endpoints" && (
               <div className="space-y-4">
                 <div className="flex items-center justify-between gap-4">
                   <div className="space-y-1">
-                    <div className="text-sm text-zinc-400">
+                    <div className="text-sm text-muted">
                       {isManagedUpstream
                         ? "Managed endpoint used by the Gateway to connect to this deployment."
                         : "Endpoints used by the Gateway to connect to this upstream."}
                     </div>
                     {!isManagedUpstream ? (
-                      <div className="text-xs text-zinc-500">
+                      <div className="text-xs text-faint">
                         Network class:{" "}
-                        <span className="text-zinc-300">{upstream.networkClass}</span> · Session
-                        TTL:{" "}
-                        <span className="text-zinc-300">
+                        <span className="font-mono text-muted">{upstream.networkClass}</span> ·
+                        Session TTL:{" "}
+                        <span className="font-mono text-muted">
                           {sessionActivityQuery.data?.ttlSecs ?? 300}s
                         </span>
                       </div>
@@ -463,377 +472,369 @@ export default function UpstreamDetailPage() {
                   </div>
                 </div>
 
-                <div className="space-y-3">
-                  {(effectiveDraft ?? []).map((ep) => {
-                    const activity = sessionActivityByEndpoint.get(ep.id);
-                    const patchingThis =
-                      patchEndpointMutation.isPending &&
-                      patchEndpointMutation.variables?.endpointId === ep.id;
-                    const deletingThis =
-                      deleteEndpointMutation.isPending &&
-                      deleteEndpointMutation.variables === ep.id;
-                    const endpointBusy = patchingThis || deletingThis || saveMutation.isPending;
-                    const managedReadOnly = isManagedUpstream && !canEdit;
-                    const urlTone = ep.enabled
-                      ? "bg-emerald-500/5 border-emerald-500/25 text-emerald-200"
-                      : "bg-zinc-950/60 border-zinc-800 text-zinc-200";
-                    return (
-                      <div
-                        key={ep.id}
-                        className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-5"
-                      >
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="min-w-0">
-                            <div className="text-xs text-zinc-500">
-                              {managedReadOnly ? "Managed endpoint" : "Endpoint"}
-                            </div>
-                            {managedReadOnly ? (
-                              <>
-                                <div className="text-sm font-semibold text-zinc-200">
+                {(effectiveDraft ?? []).length === 0 ? (
+                  <EmptyState title="No endpoints" />
+                ) : (
+                  <div className="space-y-3">
+                    {(effectiveDraft ?? []).map((ep) => {
+                      const activity = sessionActivityByEndpoint.get(ep.id);
+                      const patchingThis =
+                        patchEndpointMutation.isPending &&
+                        patchEndpointMutation.variables?.endpointId === ep.id;
+                      const deletingThis =
+                        deleteEndpointMutation.isPending &&
+                        deleteEndpointMutation.variables === ep.id;
+                      const endpointBusy = patchingThis || deletingThis || saveMutation.isPending;
+                      const managedReadOnly = isManagedUpstream && !canEdit;
+                      return (
+                        <SectionCard
+                          key={ep.id}
+                          title={managedReadOnly ? "Managed endpoint" : "Endpoint"}
+                          subtitle={
+                            managedReadOnly ? (
+                              <div className="space-y-1">
+                                <div className="font-medium text-fg">
                                   {managedDeployable?.displayName ??
                                     latestManagedRequest?.deployableId ??
                                     "Managed MCP"}
                                 </div>
                                 {managedDeployable ? (
-                                  <div className="mt-1 text-xs text-zinc-500">
+                                  <div className="text-xs text-faint">
                                     Deployable ID:{" "}
-                                    <span className="font-mono text-zinc-300">
+                                    <span className="font-mono text-muted">
                                       {managedDeployable.id}
                                     </span>
                                   </div>
                                 ) : null}
-                                <div className="mt-1 text-xs text-zinc-500">
+                                <div className="text-xs text-faint">
                                   Revision:{" "}
-                                  <span className="font-mono text-zinc-300 break-all">{ep.id}</span>
+                                  <span className="break-all font-mono text-muted">{ep.id}</span>
                                 </div>
-                              </>
+                              </div>
                             ) : (
-                              <>
+                              <div className="space-y-1">
                                 {(effectiveDraft?.length ?? 0) > 1 || ep.id !== "e1" ? (
-                                  <div className="text-sm font-semibold text-zinc-200 font-mono">
-                                    {ep.id}
-                                  </div>
+                                  <div className="font-mono font-medium text-fg">{ep.id}</div>
                                 ) : (
-                                  <div className="text-sm font-semibold text-zinc-200">Primary</div>
+                                  <div className="font-medium text-fg">Primary</div>
                                 )}
-                                <div className="mt-1 text-xs text-zinc-500">
+                                <div className="text-xs text-faint">
                                   Active sessions:{" "}
-                                  <span className="text-zinc-300">
+                                  <span className="font-mono text-muted">
                                     {activity?.activeSessions ?? 0}
                                   </span>{" "}
                                   · last seen{" "}
-                                  <span className="text-zinc-300">
+                                  <span className="text-muted">
                                     {formatLastSeen(activity?.lastSeenUnix)}
                                   </span>
                                 </div>
-                              </>
-                            )}
-                          </div>
-                          {canEdit ? (
-                            <div className="flex items-center gap-2">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                disabled={endpointBusy}
-                                onClick={() =>
-                                  patchEndpointMutation.mutate({
-                                    endpointId: ep.id,
-                                    enabled: true,
-                                    lifecycle: "active",
-                                  })
-                                }
-                              >
-                                Activate
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                disabled={endpointBusy}
-                                onClick={() =>
-                                  patchEndpointMutation.mutate({
-                                    endpointId: ep.id,
-                                    lifecycle: "draining",
-                                  })
-                                }
-                              >
-                                Drain
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                disabled={endpointBusy}
-                                onClick={() =>
-                                  patchEndpointMutation.mutate({
-                                    endpointId: ep.id,
-                                    enabled: false,
-                                    lifecycle: "disabled",
-                                  })
-                                }
-                              >
-                                Disable
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                disabled={endpointBusy}
-                                onClick={() => setDeleteEndpointId(ep.id)}
-                              >
-                                Delete endpoint
-                              </Button>
-                            </div>
-                          ) : (
-                            <div className="text-xs text-zinc-500">read-only</div>
-                          )}
-                        </div>
-
-                        <div className="mt-4 space-y-4">
-                          {managedReadOnly ? (
-                            <div>
-                              <div className="text-xs font-medium text-zinc-400 mb-2">URL</div>
-                              <div className="flex items-center gap-2">
-                                <code
-                                  className={`flex-1 min-w-0 px-4 py-2.5 rounded-xl border text-sm font-mono break-all ${urlTone}`}
+                              </div>
+                            )
+                          }
+                          right={
+                            canEdit ? (
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  disabled={endpointBusy}
+                                  onClick={() =>
+                                    patchEndpointMutation.mutate({
+                                      endpointId: ep.id,
+                                      enabled: true,
+                                      lifecycle: "active",
+                                    })
+                                  }
                                 >
-                                  {ep.url}
-                                </code>
-                                <CopyButton text={ep.url} label="Copy URL" size="md" />
+                                  Activate
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  disabled={endpointBusy}
+                                  onClick={() =>
+                                    patchEndpointMutation.mutate({
+                                      endpointId: ep.id,
+                                      lifecycle: "draining",
+                                    })
+                                  }
+                                >
+                                  Drain
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  disabled={endpointBusy}
+                                  onClick={() =>
+                                    patchEndpointMutation.mutate({
+                                      endpointId: ep.id,
+                                      enabled: false,
+                                      lifecycle: "disabled",
+                                    })
+                                  }
+                                >
+                                  Disable
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  disabled={endpointBusy}
+                                  onClick={() => setDeleteEndpointId(ep.id)}
+                                >
+                                  Delete endpoint
+                                </Button>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-faint">Read-only</span>
+                            )
+                          }
+                        >
+                          <div className="space-y-4">
+                            {managedReadOnly ? (
+                              <div className="space-y-1.5">
+                                <div className="eyebrow">URL</div>
+                                <EndpointWell url={ep.url} live={ep.enabled} />
+                              </div>
+                            ) : null}
+
+                            <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                              {!managedReadOnly ? (
+                                <Input
+                                  label="URL"
+                                  value={ep.url}
+                                  disabled={!canEdit}
+                                  onChange={(e) =>
+                                    updateDraft((rows) =>
+                                      rows.map((r) =>
+                                        r.id === ep.id ? { ...r, url: e.target.value } : r,
+                                      ),
+                                    )
+                                  }
+                                  className="md:col-span-2"
+                                />
+                              ) : null}
+
+                              <div className={managedReadOnly ? "md:col-span-2" : ""}>
+                                {managedReadOnly ? (
+                                  <div className="space-y-1.5">
+                                    <div className="block text-sm font-medium text-fg">
+                                      Lifecycle
+                                    </div>
+                                    <div className="flex h-9 items-center">
+                                      <Badge tone="neutral">{ep.lifecycle}</Badge>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <Select
+                                    label="Lifecycle"
+                                    value={ep.lifecycle}
+                                    disabled={!canEdit}
+                                    onChange={(e) =>
+                                      updateDraft((rows) =>
+                                        rows.map((r) =>
+                                          r.id === ep.id
+                                            ? {
+                                                ...r,
+                                                lifecycle: e.target
+                                                  .value as tenantApi.UpstreamEndpointLifecycle,
+                                              }
+                                            : r,
+                                        ),
+                                      )
+                                    }
+                                  >
+                                    <option value="active">Active</option>
+                                    <option value="draining">Draining</option>
+                                    <option value="disabled">Disabled</option>
+                                  </Select>
+                                )}
+                              </div>
+
+                              <div className="space-y-1.5">
+                                <div className="block text-sm font-medium text-fg">Enabled</div>
+                                <div className="flex h-9 items-center">
+                                  {managedReadOnly ? (
+                                    <StatusBadge enabled={ep.enabled} />
+                                  ) : (
+                                    <Checkbox
+                                      checked={ep.enabled}
+                                      disabled={!canEdit}
+                                      size="sm"
+                                      label={ep.enabled ? "Enabled" : "Disabled"}
+                                      onChange={(checked) =>
+                                        updateDraft((rows) =>
+                                          rows.map((r) =>
+                                            r.id === ep.id ? { ...r, enabled: checked } : r,
+                                          ),
+                                        )
+                                      }
+                                    />
+                                  )}
+                                </div>
                               </div>
                             </div>
-                          ) : null}
 
-                          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                            {!managedReadOnly ? (
+                            <div>
+                              {managedReadOnly ? (
+                                <div className="space-y-1.5">
+                                  <div className="block text-sm font-medium text-fg">Auth</div>
+                                  <div className="flex h-9 items-center">
+                                    <Badge tone="neutral">{formatAuthTypeLabel(ep.authType)}</Badge>
+                                  </div>
+                                  <p className="text-xs text-faint">
+                                    Managed upstream auth is controlled by deployment settings.
+                                  </p>
+                                </div>
+                              ) : (
+                                <>
+                                  <Select
+                                    label="Auth"
+                                    hint="Used only for Gateway → upstream connections."
+                                    value={ep.authType}
+                                    disabled={!canEdit}
+                                    onChange={(e) =>
+                                      updateDraft((rows) =>
+                                        rows.map((r) =>
+                                          r.id === ep.id
+                                            ? {
+                                                ...r,
+                                                authType: e.target
+                                                  .value as EndpointDraft["authType"],
+                                              }
+                                            : r,
+                                        ),
+                                      )
+                                    }
+                                  >
+                                    <option value="none">None</option>
+                                    <option value="bearer">Bearer</option>
+                                    <option value="basic">Basic</option>
+                                    <option value="header">Header</option>
+                                    <option value="query">Query</option>
+                                  </Select>
+                                  {ep.authType === "query" ? (
+                                    <QueryParamAuthWarning className="mt-2" />
+                                  ) : null}
+                                </>
+                              )}
+                            </div>
+
+                            {!managedReadOnly && ep.authType === "bearer" && (
                               <Input
-                                label="URL"
-                                value={ep.url}
+                                label="Bearer token"
+                                type="password"
+                                value={ep.bearerToken}
                                 disabled={!canEdit}
                                 onChange={(e) =>
                                   updateDraft((rows) =>
                                     rows.map((r) =>
-                                      r.id === ep.id ? { ...r, url: e.target.value } : r,
+                                      r.id === ep.id ? { ...r, bearerToken: e.target.value } : r,
                                     ),
                                   )
                                 }
-                                className="md:col-span-2"
                               />
-                            ) : null}
-
-                            <div className={managedReadOnly ? "md:col-span-2" : ""}>
-                              <div className="text-xs font-medium text-zinc-400 mb-2">
-                                Lifecycle
-                              </div>
-                              {managedReadOnly ? (
-                                <div className="inline-flex items-center h-10 px-3 rounded-xl border border-zinc-800 bg-zinc-950/40 text-sm text-zinc-200">
-                                  {ep.lifecycle}
-                                </div>
-                              ) : (
-                                <select
-                                  value={ep.lifecycle}
+                            )}
+                            {!managedReadOnly && ep.authType === "basic" && (
+                              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                <Input
+                                  label="Username"
+                                  value={ep.basicUsername}
                                   disabled={!canEdit}
                                   onChange={(e) =>
                                     updateDraft((rows) =>
                                       rows.map((r) =>
                                         r.id === ep.id
-                                          ? {
-                                              ...r,
-                                              lifecycle: e.target
-                                                .value as tenantApi.UpstreamEndpointLifecycle,
-                                            }
+                                          ? { ...r, basicUsername: e.target.value }
                                           : r,
                                       ),
                                     )
                                   }
-                                  className="w-full h-10 rounded-xl bg-zinc-900 border border-zinc-800 px-3 text-sm text-zinc-200"
-                                >
-                                  <option value="active">active</option>
-                                  <option value="draining">draining</option>
-                                  <option value="disabled">disabled</option>
-                                </select>
-                              )}
-                            </div>
-
-                            <div>
-                              <div className="text-xs font-medium text-zinc-400 mb-2">Enabled</div>
-                              {managedReadOnly ? (
-                                <span className="inline-flex items-center h-10 px-3 rounded-xl border border-zinc-800 bg-zinc-950/40 text-sm text-zinc-200">
-                                  {ep.enabled ? "enabled" : "disabled"}
-                                </span>
-                              ) : (
-                                <label className="inline-flex items-center gap-2 text-sm text-zinc-300 h-10">
-                                  <input
-                                    type="checkbox"
-                                    checked={ep.enabled}
-                                    disabled={!canEdit}
-                                    onChange={(e) =>
-                                      updateDraft((rows) =>
-                                        rows.map((r) =>
-                                          r.id === ep.id ? { ...r, enabled: e.target.checked } : r,
-                                        ),
-                                      )
-                                    }
-                                    className="rounded border-zinc-700 bg-zinc-900"
-                                  />
-                                  {ep.enabled ? "enabled" : "disabled"}
-                                </label>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="mt-4">
-                          <div className="text-xs font-medium text-zinc-400 mb-2">Auth</div>
-                          {managedReadOnly ? (
-                            <>
-                              <div className="inline-flex items-center h-10 px-3 rounded-xl border border-zinc-800 bg-zinc-950/40 text-sm text-zinc-200">
-                                {formatAuthTypeLabel(ep.authType)}
+                                />
+                                <Input
+                                  label="Password"
+                                  type="password"
+                                  value={ep.basicPassword}
+                                  disabled={!canEdit}
+                                  onChange={(e) =>
+                                    updateDraft((rows) =>
+                                      rows.map((r) =>
+                                        r.id === ep.id
+                                          ? { ...r, basicPassword: e.target.value }
+                                          : r,
+                                      ),
+                                    )
+                                  }
+                                />
                               </div>
-                              <div className="mt-2 text-xs text-zinc-500">
-                                Managed upstream auth is controlled by deployment settings.
+                            )}
+                            {!managedReadOnly && ep.authType === "header" && (
+                              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                <Input
+                                  label="Header name"
+                                  value={ep.headerName}
+                                  disabled={!canEdit}
+                                  onChange={(e) =>
+                                    updateDraft((rows) =>
+                                      rows.map((r) =>
+                                        r.id === ep.id ? { ...r, headerName: e.target.value } : r,
+                                      ),
+                                    )
+                                  }
+                                />
+                                <Input
+                                  label="Header value"
+                                  type="password"
+                                  value={ep.headerValue}
+                                  disabled={!canEdit}
+                                  onChange={(e) =>
+                                    updateDraft((rows) =>
+                                      rows.map((r) =>
+                                        r.id === ep.id ? { ...r, headerValue: e.target.value } : r,
+                                      ),
+                                    )
+                                  }
+                                />
                               </div>
-                            </>
-                          ) : (
-                            <>
-                              <select
-                                value={ep.authType}
-                                disabled={!canEdit}
-                                onChange={(e) =>
-                                  updateDraft((rows) =>
-                                    rows.map((r) =>
-                                      r.id === ep.id
-                                        ? {
-                                            ...r,
-                                            authType: e.target.value as EndpointDraft["authType"],
-                                          }
-                                        : r,
-                                    ),
-                                  )
-                                }
-                                className="w-full h-10 rounded-xl bg-zinc-900 border border-zinc-800 px-3 text-sm text-zinc-200"
-                              >
-                                <option value="none">None</option>
-                                <option value="bearer">Bearer</option>
-                                <option value="basic">Basic</option>
-                                <option value="header">Header</option>
-                                <option value="query">Query</option>
-                              </select>
-                              <div className="mt-2 text-xs text-zinc-500">
-                                Used only for Gateway → upstream connections.
+                            )}
+                            {!managedReadOnly && ep.authType === "query" && (
+                              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                <Input
+                                  label="Query name"
+                                  value={ep.queryName}
+                                  disabled={!canEdit}
+                                  onChange={(e) =>
+                                    updateDraft((rows) =>
+                                      rows.map((r) =>
+                                        r.id === ep.id ? { ...r, queryName: e.target.value } : r,
+                                      ),
+                                    )
+                                  }
+                                />
+                                <Input
+                                  label="Query value"
+                                  type="password"
+                                  value={ep.queryValue}
+                                  disabled={!canEdit}
+                                  onChange={(e) =>
+                                    updateDraft((rows) =>
+                                      rows.map((r) =>
+                                        r.id === ep.id ? { ...r, queryValue: e.target.value } : r,
+                                      ),
+                                    )
+                                  }
+                                />
                               </div>
-                              {ep.authType === "query" ? (
-                                <QueryParamAuthWarning className="mt-2" />
-                              ) : null}
-                            </>
-                          )}
-                        </div>
-
-                        {!managedReadOnly && ep.authType === "bearer" && (
-                          <div className="mt-4">
-                            <Input
-                              label="Bearer token"
-                              type="password"
-                              value={ep.bearerToken}
-                              disabled={!canEdit}
-                              onChange={(e) =>
-                                updateDraft((rows) =>
-                                  rows.map((r) =>
-                                    r.id === ep.id ? { ...r, bearerToken: e.target.value } : r,
-                                  ),
-                                )
-                              }
-                            />
+                            )}
                           </div>
-                        )}
-                        {!managedReadOnly && ep.authType === "basic" && (
-                          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <Input
-                              label="Username"
-                              value={ep.basicUsername}
-                              disabled={!canEdit}
-                              onChange={(e) =>
-                                updateDraft((rows) =>
-                                  rows.map((r) =>
-                                    r.id === ep.id ? { ...r, basicUsername: e.target.value } : r,
-                                  ),
-                                )
-                              }
-                            />
-                            <Input
-                              label="Password"
-                              type="password"
-                              value={ep.basicPassword}
-                              disabled={!canEdit}
-                              onChange={(e) =>
-                                updateDraft((rows) =>
-                                  rows.map((r) =>
-                                    r.id === ep.id ? { ...r, basicPassword: e.target.value } : r,
-                                  ),
-                                )
-                              }
-                            />
-                          </div>
-                        )}
-                        {!managedReadOnly && ep.authType === "header" && (
-                          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <Input
-                              label="Header name"
-                              value={ep.headerName}
-                              disabled={!canEdit}
-                              onChange={(e) =>
-                                updateDraft((rows) =>
-                                  rows.map((r) =>
-                                    r.id === ep.id ? { ...r, headerName: e.target.value } : r,
-                                  ),
-                                )
-                              }
-                            />
-                            <Input
-                              label="Header value"
-                              type="password"
-                              value={ep.headerValue}
-                              disabled={!canEdit}
-                              onChange={(e) =>
-                                updateDraft((rows) =>
-                                  rows.map((r) =>
-                                    r.id === ep.id ? { ...r, headerValue: e.target.value } : r,
-                                  ),
-                                )
-                              }
-                            />
-                          </div>
-                        )}
-                        {!managedReadOnly && ep.authType === "query" && (
-                          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <Input
-                              label="Query name"
-                              value={ep.queryName}
-                              disabled={!canEdit}
-                              onChange={(e) =>
-                                updateDraft((rows) =>
-                                  rows.map((r) =>
-                                    r.id === ep.id ? { ...r, queryName: e.target.value } : r,
-                                  ),
-                                )
-                              }
-                            />
-                            <Input
-                              label="Query value"
-                              type="password"
-                              value={ep.queryValue}
-                              disabled={!canEdit}
-                              onChange={(e) =>
-                                updateDraft((rows) =>
-                                  rows.map((r) =>
-                                    r.id === ep.id ? { ...r, queryValue: e.target.value } : r,
-                                  ),
-                                )
-                              }
-                            />
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
+                        </SectionCard>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 
@@ -841,8 +842,8 @@ export default function UpstreamDetailPage() {
               <div className="space-y-4">
                 <div className="flex items-center justify-between gap-4">
                   <div>
-                    <div className="text-sm font-medium text-zinc-300">Discovered surface</div>
-                    <div className="text-xs text-zinc-500">
+                    <div className="text-sm font-medium text-fg">Discovered surface</div>
+                    <div className="text-xs text-faint">
                       Probes tools/resources/prompts via the Gateway (no browser MCP).
                     </div>
                   </div>
@@ -856,142 +857,151 @@ export default function UpstreamDetailPage() {
                   </Button>
                 </div>
 
-                {surfaceError ? (
-                  <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200">
-                    {surfaceError}
-                  </div>
-                ) : null}
+                {surfaceError ? <Callout tone="danger">{surfaceError}</Callout> : null}
 
                 {surface ? (
                   <div className="space-y-6">
-                    <div className="text-xs text-zinc-500">
-                      Tools: <span className="text-zinc-200">{surface.tools.length}</span> ·
-                      Resources: <span className="text-zinc-200">{surface.resources.length}</span> ·
-                      Prompts: <span className="text-zinc-200">{surface.prompts.length}</span>
+                    <div className="text-xs text-faint">
+                      Tools: <span className="font-mono text-fg">{surface.tools.length}</span> ·
+                      Resources:{" "}
+                      <span className="font-mono text-fg">{surface.resources.length}</span> ·
+                      Prompts: <span className="font-mono text-fg">{surface.prompts.length}</span>
                     </div>
 
-                    <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 overflow-hidden">
-                      <div className="px-5 py-4 border-b border-zinc-800/60">
-                        <div className="text-sm font-medium text-zinc-200">Sources</div>
-                        <div className="mt-1 text-xs text-zinc-500">
-                          Per-endpoint status and counts.
-                        </div>
-                      </div>
-                      <div className="divide-y divide-zinc-800/40">
-                        {surface.sources.map((s) => (
-                          <div key={s.sourceId} className="p-5">
-                            <div className="flex items-start justify-between gap-4">
-                              <div className="min-w-0">
-                                <div className="text-sm text-zinc-200 font-mono break-all">
-                                  {s.sourceId}
-                                </div>
+                    <SectionCard
+                      title="Sources"
+                      subtitle="Per-endpoint status and counts."
+                      className="overflow-hidden"
+                      bodyClassName="p-0"
+                    >
+                      <Table>
+                        <THead>
+                          <TR>
+                            <TH>Source</TH>
+                            <TH>Status</TH>
+                            <TH className="text-right">Tools</TH>
+                            <TH className="text-right">Resources</TH>
+                            <TH className="text-right">Prompts</TH>
+                          </TR>
+                        </THead>
+                        <TBody>
+                          {surface.sources.map((s) => (
+                            <TR key={s.sourceId}>
+                              <TD>
+                                <div className="break-all font-mono text-[13px]">{s.sourceId}</div>
                                 {!s.ok && s.error ? (
-                                  <div className="mt-1 text-xs text-red-200 break-words">
+                                  <div className="mt-1 break-words text-xs text-danger">
                                     {s.error}
                                   </div>
                                 ) : null}
-                              </div>
-                              <div className="text-xs text-zinc-500 shrink-0">
-                                tools {s.toolsCount} · res {s.resourcesCount} · prompts{" "}
-                                {s.promptsCount}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                              </TD>
+                              <TD>
+                                <Badge tone={s.ok ? "ok" : "danger"} dot>
+                                  {s.ok ? "OK" : "Error"}
+                                </Badge>
+                              </TD>
+                              <TD className="text-right font-mono">{s.toolsCount}</TD>
+                              <TD className="text-right font-mono">{s.resourcesCount}</TD>
+                              <TD className="text-right font-mono">{s.promptsCount}</TD>
+                            </TR>
+                          ))}
+                        </TBody>
+                      </Table>
+                    </SectionCard>
 
-                    <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 overflow-hidden">
-                      <div className="px-5 py-4 border-b border-zinc-800/60">
-                        <div className="text-sm font-medium text-zinc-200">Tools</div>
-                      </div>
-                      <div className="divide-y divide-zinc-800/40">
-                        {surface.tools.length === 0 ? (
-                          <div className="p-5 text-sm text-zinc-500">No tools discovered.</div>
-                        ) : (
-                          surface.tools.slice(0, 200).map((t) => (
-                            <div key={t.name} className="p-5">
-                              <div className="text-sm font-semibold text-violet-300 font-mono">
+                    <SectionCard title="Tools" className="overflow-hidden" bodyClassName="p-0">
+                      {surface.tools.length === 0 ? (
+                        <div className="p-5">
+                          <EmptyState title="No tools discovered" />
+                        </div>
+                      ) : (
+                        <div className="divide-y divide-edge">
+                          {surface.tools.slice(0, 200).map((t) => (
+                            <div key={t.name} className="px-5 py-4">
+                              <div className="font-mono text-sm font-medium text-accent">
                                 {t.name}
                               </div>
                               {t.description ? (
-                                <div className="mt-1 text-xs text-zinc-500">{t.description}</div>
+                                <div className="mt-1 text-xs text-faint">{t.description}</div>
                               ) : null}
                             </div>
-                          ))
-                        )}
-                      </div>
+                          ))}
+                        </div>
+                      )}
                       {surface.tools.length > 200 ? (
-                        <div className="px-5 py-3 text-xs text-zinc-500">
+                        <div className="border-t border-edge px-5 py-3 text-xs text-faint">
                           Showing first 200 tools.
                         </div>
                       ) : null}
-                    </div>
+                    </SectionCard>
 
                     <div className="grid gap-6 md:grid-cols-2">
-                      <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-5">
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="text-sm font-semibold text-zinc-100">Resources</div>
-                          <div className="text-xs text-zinc-500">{surface.resources.length}</div>
-                        </div>
+                      <SectionCard
+                        title="Resources"
+                        right={
+                          <span className="font-mono text-xs text-faint">
+                            {surface.resources.length}
+                          </span>
+                        }
+                      >
                         {surface.resources.length === 0 ? (
-                          <div className="text-sm text-zinc-500">No resources discovered.</div>
+                          <EmptyState title="No resources discovered" />
                         ) : (
                           <div className="space-y-2">
                             {surface.resources.slice(0, 50).map((r) => (
                               <div
                                 key={r.uri}
-                                className="rounded-lg border border-zinc-800/60 bg-zinc-950/40 px-3 py-2"
+                                className="rounded-md border border-edge bg-well px-3 py-2"
                               >
-                                <div className="font-mono text-xs text-zinc-200 break-all">
-                                  {r.uri}
-                                </div>
+                                <div className="break-all font-mono text-xs text-fg">{r.uri}</div>
                                 {r.name ? (
-                                  <div className="text-xs text-zinc-500 mt-1">{r.name}</div>
+                                  <div className="mt-1 text-xs text-faint">{r.name}</div>
                                 ) : null}
                               </div>
                             ))}
                             {surface.resources.length > 50 ? (
-                              <div className="text-xs text-zinc-500">Showing first 50.</div>
+                              <div className="text-xs text-faint">Showing first 50.</div>
                             ) : null}
                           </div>
                         )}
-                      </div>
+                      </SectionCard>
 
-                      <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-5">
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="text-sm font-semibold text-zinc-100">Prompts</div>
-                          <div className="text-xs text-zinc-500">{surface.prompts.length}</div>
-                        </div>
+                      <SectionCard
+                        title="Prompts"
+                        right={
+                          <span className="font-mono text-xs text-faint">
+                            {surface.prompts.length}
+                          </span>
+                        }
+                      >
                         {surface.prompts.length === 0 ? (
-                          <div className="text-sm text-zinc-500">No prompts discovered.</div>
+                          <EmptyState title="No prompts discovered" />
                         ) : (
                           <div className="space-y-2">
                             {surface.prompts.slice(0, 50).map((p) => (
                               <div
                                 key={p.name}
-                                className="rounded-lg border border-zinc-800/60 bg-zinc-950/40 px-3 py-2"
+                                className="rounded-md border border-edge bg-well px-3 py-2"
                               >
-                                <div className="font-mono text-xs text-zinc-200 break-all">
-                                  {p.name}
-                                </div>
+                                <div className="break-all font-mono text-xs text-fg">{p.name}</div>
                                 {p.description ? (
-                                  <div className="text-xs text-zinc-500 mt-1">{p.description}</div>
+                                  <div className="mt-1 text-xs text-faint">{p.description}</div>
                                 ) : null}
                               </div>
                             ))}
                             {surface.prompts.length > 50 ? (
-                              <div className="text-xs text-zinc-500">Showing first 50.</div>
+                              <div className="text-xs text-faint">Showing first 50.</div>
                             ) : null}
                           </div>
                         )}
-                      </div>
+                      </SectionCard>
                     </div>
                   </div>
                 ) : (
-                  <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-5 text-sm text-zinc-400">
-                    Click “Probe” to discover tools and other capabilities.
-                  </div>
+                  <EmptyState
+                    title="Nothing probed yet"
+                    description="Probe to discover tools and other capabilities."
+                  />
                 )}
               </div>
             )}

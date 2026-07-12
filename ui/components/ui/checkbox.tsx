@@ -21,8 +21,8 @@ export function Checkbox({
   size?: CheckboxSize;
   className?: string;
 }) {
-  const boxSize = size === "sm" ? "h-4 w-4" : "h-5 w-5";
-  const iconSize = size === "sm" ? "h-3 w-3" : "h-3.5 w-3.5";
+  const boxSize = size === "sm" ? "size-4" : "size-5";
+  const iconSize = size === "sm" ? "size-3" : "size-3.5";
 
   return (
     <label
@@ -37,22 +37,22 @@ export function Checkbox({
       />
       <span
         className={`
-          ${boxSize} shrink-0 rounded-md border flex items-center justify-center
-          transition-colors
-          border-zinc-700/80 bg-zinc-900/60
-          peer-checked:border-violet-500/60 peer-checked:bg-violet-500/15
-          peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-violet-500/50 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-zinc-900
+          ${boxSize} shrink-0 rounded flex items-center justify-center border
+          transition-colors duration-150
+          border-edge-strong bg-well
+          peer-checked:border-accent/60 peer-checked:bg-accent/15
+          peer-focus-visible:ring-2 peer-focus-visible:ring-accent peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-bg
         `}
       >
         <CheckIcon
-          className={`${iconSize} ${checked ? "opacity-100" : "opacity-0"} text-violet-300 transition-opacity`}
+          className={`${iconSize} ${checked ? "opacity-100" : "opacity-0"} text-accent transition-opacity duration-150`}
         />
       </span>
 
       {(label || description) && (
-        <div className="flex flex-col min-w-0">
-          {label ? <span className="text-sm font-medium text-zinc-200">{label}</span> : null}
-          {description ? <span className="text-xs text-zinc-500">{description}</span> : null}
+        <div className="flex min-w-0 flex-col">
+          {label ? <span className="text-sm font-medium text-fg">{label}</span> : null}
+          {description ? <span className="text-xs text-faint">{description}</span> : null}
         </div>
       )}
     </label>

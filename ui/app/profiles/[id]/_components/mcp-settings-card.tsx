@@ -2,7 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Button, Modal, ModalActions, SectionCard, Toggle } from "@/components/ui";
+import {
+  Button,
+  Callout,
+  Modal,
+  ModalActions,
+  SectionCard,
+  Spinner,
+  Toggle,
+} from "@/components/ui";
 import { InfoIcon } from "@/components/icons";
 import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
@@ -150,34 +158,40 @@ export function McpSettingsCard({ profile }: { profile: Profile | null }) {
       title="MCP proxy settings"
       subtitle="Controls which MCP capabilities are advertised for this profile."
       right={
-        saveMutation.isPending ? <div className="text-xs text-zinc-500 px-2">Saving…</div> : null
+        saveMutation.isPending ? (
+          <div className="flex items-center gap-1.5 px-2 text-xs text-faint">
+            <Spinner size="sm" />
+            Saving…
+          </div>
+        ) : null
       }
       bodyClassName="space-y-6"
     >
       {saveError ? (
-        <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200">
+        <Callout tone="danger" size="md">
           {saveError}
-        </div>
+        </Callout>
       ) : null}
 
       {/* Capabilities */}
       <div className="space-y-3">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <div className="text-sm font-semibold text-zinc-100">Capabilities</div>
-            <div className="mt-1 text-xs text-zinc-500">
+            <div className="text-sm font-semibold text-fg">Capabilities</div>
+            <div className="mt-1 text-xs text-faint">
               These toggles control what MCP features the Gateway advertises to clients.
             </div>
           </div>
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             onClick={() => setShowCapsHelp(true)}
-            className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors"
             aria-label="MCP capabilities help"
           >
-            <InfoIcon className="w-4 h-4" />
+            <InfoIcon className="size-4" />
             Help
-          </button>
+          </Button>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -193,22 +207,27 @@ export function McpSettingsCard({ profile }: { profile: Profile | null }) {
         </div>
       </div>
 
-      {!profile ? <div className="text-sm text-zinc-500">Loading profile…</div> : null}
+      {!profile ? (
+        <div className="flex items-center gap-2 text-sm text-muted">
+          <Spinner size="sm" />
+          Loading profile…
+        </div>
+      ) : null}
       <Modal open={showCapsHelp} onClose={() => setShowCapsHelp(false)} title="MCP capabilities">
-        <div className="space-y-4 text-sm text-zinc-300">
+        <div className="space-y-4 text-sm text-muted">
           <p>
             These toggles control what the Gateway advertises as supported capabilities for this
             profile. Disabling a capability hides it from clients and may prevent related behavior.
           </p>
           <div className="space-y-3">
             {ALL_CAPABILITIES.map((c) => (
-              <div key={c.key} className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4">
+              <div key={c.key} className="rounded-lg border border-edge bg-well p-4">
                 <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-semibold text-zinc-100">{c.label}</div>
-                  <div className="text-xs font-mono text-zinc-500">{c.key}</div>
+                  <div className="text-sm font-semibold text-fg">{c.label}</div>
+                  <div className="font-mono text-xs text-faint">{c.key}</div>
                 </div>
-                <div className="mt-1 text-xs text-zinc-500">{c.description}</div>
-                <div className="mt-2 text-sm text-zinc-300">{c.help}</div>
+                <div className="mt-1 text-xs text-faint">{c.description}</div>
+                <div className="mt-2 text-sm text-muted">{c.help}</div>
               </div>
             ))}
           </div>

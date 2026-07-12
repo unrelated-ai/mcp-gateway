@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="MCP Gateway">
+  <rect width="64" height="64" rx="13" fill="#595fe0"/>
+  <path
+    fill="#ffffff"
+    d="M16 14h9v24c0 5.5 2.5 8 7 8s7-2.5 7-8V14h9v24c0 10.3-6.1 16-16 16s-16-5.7-16-16V14Z"
+  />
+</svg>

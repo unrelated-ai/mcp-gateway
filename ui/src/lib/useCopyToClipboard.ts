@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export function useCopyToClipboard(
   value: string,
@@ -12,6 +12,12 @@ export function useCopyToClipboard(
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const timerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current != null) window.clearTimeout(timerRef.current);
+    };
+  }, []);
 
   const copy = useCallback(async (): Promise<boolean> => {
     setError(null);

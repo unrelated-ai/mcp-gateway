@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
-import { Badge, Button, Toggle } from "@/components/ui";
+import { Badge, Button, Callout, Input, Toggle } from "@/components/ui";
 import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
 import { useToastStore } from "@/src/lib/toast-store";
@@ -110,7 +110,7 @@ export default function NewProfileWizardPage() {
     setActiveStep(next);
   };
 
-  const nextLabel = activeStep === steps[steps.length - 1] ? "Create" : "Next";
+  const nextLabel = activeStep === steps[steps.length - 1] ? "Create profile" : "Next";
 
   const primaryDisabled =
     createMutation.isPending || (activeStep === "details" ? !canAdvanceFromDetails : false);
@@ -132,305 +132,271 @@ export default function NewProfileWizardPage() {
       <PageHeader
         title="Create profile"
         description="Step-by-step setup. You can adjust advanced settings after creation."
-        breadcrumb={[{ label: "Profiles", href: "/profiles" }, { label: "New profile" }]}
+        breadcrumb={[{ label: "Profiles", href: "/profiles" }, { label: "New" }]}
       />
 
-      <PageContent>
-        <div className="min-h-[70vh] flex items-start justify-center pt-6">
-          <div className="w-full max-w-2xl">
-            <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/60 backdrop-blur-sm overflow-hidden">
-              <div className="p-8">
-                <div className="flex items-center justify-between gap-4">
-                  <div className="text-sm text-zinc-400">
-                    Step {stepNumber} of {stepTotal}
-                  </div>
-                </div>
+      <PageContent width="2xl">
+        <div className="overflow-hidden rounded-lg border border-edge bg-surface">
+          <div className="p-6">
+            <div className="eyebrow">
+              Step {stepNumber} of {stepTotal}
+            </div>
 
-                <h1 className="mt-4 text-xl sm:text-2xl font-semibold text-white tracking-tight">
-                  {title}
-                </h1>
+            <h2 className="mt-3 text-lg font-semibold text-fg">{title}</h2>
 
-                {error ? (
-                  <div className="mt-5 rounded-xl bg-red-500/5 border border-red-500/20 p-4 text-sm text-red-300">
-                    <div className="font-medium">Could not continue</div>
-                    <div className="mt-1 text-xs text-red-300/80 break-words whitespace-pre-wrap">
-                      {error}
+            {error ? (
+              <Callout tone="danger" title="Could not continue" size="md" className="mt-5">
+                <div className="break-words whitespace-pre-wrap text-xs">{error}</div>
+              </Callout>
+            ) : null}
+
+            {activeStep === "details" ? (
+              <>
+                <p className="mt-2 text-sm text-muted">
+                  Give the profile a name and choose whether it should tolerate missing upstreams.
+                </p>
+
+                {!upstreamsQuery.isPending &&
+                !toolSourcesQuery.isPending &&
+                !upstreamsQuery.error &&
+                !toolSourcesQuery.error &&
+                upstreams.length === 0 &&
+                toolSources.length === 0 ? (
+                  <div className="mt-5 rounded-lg border border-edge bg-well p-4">
+                    <div className="text-sm font-medium text-fg">No sources yet</div>
+                    <div className="mt-1 text-xs text-faint">
+                      This profile will be created with no upstreams or tool sources attached, so it
+                      won’t expose any tools until you add at least one source.
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => router.push("/sources")}
+                      >
+                        Go to sources
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={() => router.push("/sources/new/openapi")}
+                      >
+                        Add OpenAPI source
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={() => router.push("/sources/new/upstream?kind=mcp")}
+                      >
+                        Add upstream
+                      </Button>
                     </div>
                   </div>
                 ) : null}
 
-                {activeStep === "details" ? (
-                  <>
-                    <p className="mt-3 text-base text-zinc-400 max-w-2xl">
-                      Give the profile a name and choose whether it should tolerate missing
-                      upstreams.
-                    </p>
+                <div className="mt-6 space-y-4">
+                  <Input
+                    label="Name"
+                    value={draft.name}
+                    onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
+                    placeholder="e.g., Telegram bot"
+                  />
 
-                    {!upstreamsQuery.isPending &&
-                    !toolSourcesQuery.isPending &&
-                    !upstreamsQuery.error &&
-                    !toolSourcesQuery.error &&
-                    upstreams.length === 0 &&
-                    toolSources.length === 0 ? (
-                      <div className="mt-5 rounded-xl border border-zinc-800/80 bg-zinc-950/30 p-4">
-                        <div className="text-sm font-medium text-zinc-200">No sources yet</div>
-                        <div className="mt-1 text-xs text-zinc-500">
-                          This profile will be created with no upstreams or tool sources attached,
-                          so it won’t expose any tools until you add at least one source.
-                        </div>
-                        <div className="mt-3 flex flex-wrap items-center gap-2">
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            onClick={() => router.push("/sources")}
-                          >
-                            Go to Sources
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            onClick={() => router.push("/sources/new/openapi")}
-                          >
-                            Add OpenAPI source
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            onClick={() => router.push("/sources/new/upstream?kind=mcp")}
-                          >
-                            Add upstream
-                          </Button>
-                        </div>
-                      </div>
-                    ) : null}
+                  <Input
+                    label="Description (optional)"
+                    value={draft.description}
+                    onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
+                    placeholder="Short note for humans"
+                  />
 
-                    <div className="mt-6 space-y-4">
+                  <div className="rounded-lg border border-edge bg-well p-4">
+                    <div className="flex items-center justify-between gap-4">
                       <div>
-                        <label className="block text-xs font-medium text-zinc-400 mb-2">Name</label>
-                        <input
-                          value={draft.name}
-                          onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
-                          placeholder="e.g., Telegram bot"
-                          className="w-full h-10 rounded-xl bg-zinc-900 border border-zinc-800 px-3 text-sm text-zinc-200"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-medium text-zinc-400 mb-2">
-                          Description (optional)
-                        </label>
-                        <input
-                          value={draft.description}
-                          onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
-                          placeholder="Short note for humans"
-                          className="w-full h-10 rounded-xl bg-zinc-900 border border-zinc-800 px-3 text-sm text-zinc-200"
-                        />
-                      </div>
-
-                      <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4">
-                        <div className="flex items-center justify-between gap-4">
-                          <div>
-                            <div className="text-sm font-semibold text-zinc-100">
-                              Allow partial upstreams
-                            </div>
-                            <div className="mt-1 text-xs text-zinc-500">
-                              If some upstream endpoints are down, still serve what’s available.
-                            </div>
-                          </div>
-                          <Toggle
-                            checked={draft.allowPartialUpstreams}
-                            onChange={(checked) =>
-                              setDraft((d) => ({ ...d, allowPartialUpstreams: checked }))
-                            }
-                          />
+                        <div className="text-sm font-semibold text-fg">Allow partial upstreams</div>
+                        <div className="mt-1 text-xs text-faint">
+                          If some upstream endpoints are down, still serve what’s available.
                         </div>
                       </div>
-
-                      {(upstreamsQuery.isPending || toolSourcesQuery.isPending) && (
-                        <div className="text-xs text-zinc-500">
-                          Loading upstreams and tool sources…
-                        </div>
-                      )}
+                      <Toggle
+                        checked={draft.allowPartialUpstreams}
+                        onChange={(checked) =>
+                          setDraft((d) => ({ ...d, allowPartialUpstreams: checked }))
+                        }
+                      />
                     </div>
-                  </>
-                ) : activeStep === "upstreams" ? (
-                  <>
-                    <p className="mt-3 text-base text-zinc-400 max-w-2xl">
-                      Select upstreams to attach to this profile. You can leave this empty and add
-                      upstreams later.
-                    </p>
+                  </div>
 
-                    <div className="mt-6 space-y-3">
-                      {upstreams.map((u) => {
-                        const selected = draft.upstreams.includes(u.id);
-                        return (
-                          <div
-                            key={`${u.owner}:${u.id}`}
-                            onClick={() =>
-                              setDraft((d) => ({
-                                ...d,
-                                upstreams: selected
-                                  ? d.upstreams.filter((x) => x !== u.id)
-                                  : [...d.upstreams, u.id],
-                              }))
-                            }
-                            className={`w-full text-left rounded-xl border p-4 transition-colors ${
-                              selected
-                                ? "border-violet-500/30 bg-violet-500/5"
-                                : "border-zinc-800/80 bg-zinc-950/30 hover:border-zinc-700/80"
-                            }`}
-                          >
-                            <div className="flex items-start justify-between gap-4">
-                              <div className="min-w-0">
-                                <div className="font-mono text-sm text-zinc-100 break-all">
-                                  {u.id}
-                                </div>
-                                <div className="mt-1 text-xs text-zinc-500">
-                                  owner: {u.owner} • status: {u.enabled ? "enabled" : "disabled"}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2 shrink-0">
-                                <div className="hidden sm:flex items-center gap-2">
-                                  <Badge variant={u.owner === "tenant" ? "violet" : "default"}>
-                                    {u.owner === "tenant" ? "tenant" : "global"}
-                                  </Badge>
-                                </div>
-                                <div
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="flex items-center gap-2"
-                                >
-                                  <span className="hidden sm:inline text-xs text-zinc-500">
-                                    Attach
-                                  </span>
-                                  <Toggle
-                                    checked={selected}
-                                    onChange={() =>
-                                      setDraft((d) => ({
-                                        ...d,
-                                        upstreams: selected
-                                          ? d.upstreams.filter((x) => x !== u.id)
-                                          : [...d.upstreams, u.id],
-                                      }))
-                                    }
-                                  />
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                      {upstreams.length === 0 ? (
-                        <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/30 p-4 text-sm text-zinc-500">
-                          No upstreams exist yet.
-                        </div>
-                      ) : null}
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <p className="mt-3 text-base text-zinc-400 max-w-2xl">
-                      Select local tool sources to attach to this profile. You can leave this empty
-                      and add sources later.
-                    </p>
-
-                    <div className="mt-6 space-y-3">
-                      {toolSources.map((s) => {
-                        const selected = draft.sources.includes(s.id);
-                        return (
-                          <div
-                            key={s.id}
-                            onClick={() =>
-                              setDraft((d) => ({
-                                ...d,
-                                sources: selected
-                                  ? d.sources.filter((x) => x !== s.id)
-                                  : [...d.sources, s.id],
-                              }))
-                            }
-                            className={`w-full text-left rounded-xl border p-4 transition-colors ${
-                              selected
-                                ? "border-emerald-500/30 bg-emerald-500/5"
-                                : "border-zinc-800/80 bg-zinc-950/30 hover:border-zinc-700/80"
-                            }`}
-                          >
-                            <div className="flex items-start justify-between gap-4">
-                              <div className="min-w-0">
-                                <div className="font-mono text-sm text-zinc-100 break-all">
-                                  {s.id}
-                                </div>
-                                <div className="mt-1 text-xs text-zinc-500">
-                                  type: {s.type} • status: {s.enabled ? "enabled" : "disabled"}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2 shrink-0">
-                                <div className="hidden sm:flex items-center gap-2">
-                                  <Badge variant={s.type === "openapi" ? "success" : "info"}>
-                                    {s.type}
-                                  </Badge>
-                                </div>
-                                <div
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="flex items-center gap-2"
-                                >
-                                  <span className="hidden sm:inline text-xs text-zinc-500">
-                                    Attach
-                                  </span>
-                                  <Toggle
-                                    checked={selected}
-                                    onChange={() =>
-                                      setDraft((d) => ({
-                                        ...d,
-                                        sources: selected
-                                          ? d.sources.filter((x) => x !== s.id)
-                                          : [...d.sources, s.id],
-                                      }))
-                                    }
-                                  />
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                      {toolSources.length === 0 ? (
-                        <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/30 p-4 text-sm text-zinc-500">
-                          No tool sources exist yet.
-                        </div>
-                      ) : null}
-                    </div>
-                  </>
-                )}
-              </div>
-
-              <div className="border-t border-zinc-800/80 bg-zinc-900/40 p-6 flex items-center justify-between gap-3">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={abort}
-                  disabled={createMutation.isPending}
-                >
-                  Abort
-                </Button>
-
-                <div className="flex items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    onClick={goBack}
-                    disabled={createMutation.isPending || activeStep === "details"}
-                  >
-                    Back
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={primaryAction}
-                    loading={createMutation.isPending && activeStep === steps[steps.length - 1]}
-                    disabled={primaryDisabled}
-                  >
-                    {nextLabel}
-                  </Button>
+                  {(upstreamsQuery.isPending || toolSourcesQuery.isPending) && (
+                    <div className="text-xs text-faint">Loading upstreams and tool sources…</div>
+                  )}
                 </div>
-              </div>
+              </>
+            ) : activeStep === "upstreams" ? (
+              <>
+                <p className="mt-2 text-sm text-muted">
+                  Select upstreams to attach to this profile. You can leave this empty and add
+                  upstreams later.
+                </p>
+
+                <div className="mt-6 space-y-3">
+                  {upstreams.map((u) => {
+                    const selected = draft.upstreams.includes(u.id);
+                    return (
+                      <div
+                        key={`${u.owner}:${u.id}`}
+                        onClick={() =>
+                          setDraft((d) => ({
+                            ...d,
+                            upstreams: selected
+                              ? d.upstreams.filter((x) => x !== u.id)
+                              : [...d.upstreams, u.id],
+                          }))
+                        }
+                        className={`w-full text-left rounded-lg border p-4 transition-colors duration-150 ${
+                          selected
+                            ? "border-accent/25 bg-accent/5"
+                            : "border-edge bg-well hover:border-edge-strong"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="min-w-0">
+                            <div className="font-mono text-sm text-fg break-all">{u.id}</div>
+                            <div className="mt-1 text-xs text-faint">
+                              owner: {u.owner} • status: {u.enabled ? "enabled" : "disabled"}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <div className="hidden sm:flex items-center gap-2">
+                              <Badge tone={u.owner === "tenant" ? "accent" : "neutral"}>
+                                {u.owner === "tenant" ? "tenant" : "global"}
+                              </Badge>
+                            </div>
+                            <div
+                              onClick={(e) => e.stopPropagation()}
+                              className="flex items-center gap-2"
+                            >
+                              <span className="hidden sm:inline text-xs text-faint">Attach</span>
+                              <Toggle
+                                checked={selected}
+                                onChange={() =>
+                                  setDraft((d) => ({
+                                    ...d,
+                                    upstreams: selected
+                                      ? d.upstreams.filter((x) => x !== u.id)
+                                      : [...d.upstreams, u.id],
+                                  }))
+                                }
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {upstreams.length === 0 ? (
+                    <div className="rounded-lg border border-edge bg-well p-4 text-sm text-faint">
+                      No upstreams exist yet.
+                    </div>
+                  ) : null}
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="mt-2 text-sm text-muted">
+                  Select local tool sources to attach to this profile. You can leave this empty and
+                  add sources later.
+                </p>
+
+                <div className="mt-6 space-y-3">
+                  {toolSources.map((s) => {
+                    const selected = draft.sources.includes(s.id);
+                    return (
+                      <div
+                        key={s.id}
+                        onClick={() =>
+                          setDraft((d) => ({
+                            ...d,
+                            sources: selected
+                              ? d.sources.filter((x) => x !== s.id)
+                              : [...d.sources, s.id],
+                          }))
+                        }
+                        className={`w-full text-left rounded-lg border p-4 transition-colors duration-150 ${
+                          selected
+                            ? "border-ok/25 bg-ok/5"
+                            : "border-edge bg-well hover:border-edge-strong"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="min-w-0">
+                            <div className="font-mono text-sm text-fg break-all">{s.id}</div>
+                            <div className="mt-1 text-xs text-faint">
+                              type: {s.type} • status: {s.enabled ? "enabled" : "disabled"}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <div className="hidden sm:flex items-center gap-2">
+                              <Badge tone={s.type === "openapi" ? "ok" : "info"}>{s.type}</Badge>
+                            </div>
+                            <div
+                              onClick={(e) => e.stopPropagation()}
+                              className="flex items-center gap-2"
+                            >
+                              <span className="hidden sm:inline text-xs text-faint">Attach</span>
+                              <Toggle
+                                checked={selected}
+                                onChange={() =>
+                                  setDraft((d) => ({
+                                    ...d,
+                                    sources: selected
+                                      ? d.sources.filter((x) => x !== s.id)
+                                      : [...d.sources, s.id],
+                                  }))
+                                }
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {toolSources.length === 0 ? (
+                    <div className="rounded-lg border border-edge bg-well p-4 text-sm text-faint">
+                      No tool sources exist yet.
+                    </div>
+                  ) : null}
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between gap-3 border-t border-edge p-5">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={abort}
+              disabled={createMutation.isPending}
+            >
+              Abort
+            </Button>
+
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={goBack}
+                disabled={createMutation.isPending || activeStep === "details"}
+              >
+                Back
+              </Button>
+              <Button
+                type="button"
+                onClick={primaryAction}
+                loading={createMutation.isPending && activeStep === steps[steps.length - 1]}
+                disabled={primaryDisabled}
+              >
+                {nextLabel}
+              </Button>
             </div>
           </div>
         </div>

@@ -2,67 +2,41 @@
 
 import { type ReactNode } from "react";
 
-type BadgeVariant = "default" | "success" | "warning" | "error" | "info" | "violet";
+export type Tone = "neutral" | "accent" | "ok" | "warn" | "danger" | "info";
 
 interface BadgeProps {
   children: ReactNode;
-  variant?: BadgeVariant;
+  tone?: Tone;
+  /** Square status LED in front of the text. Steady, never animated. */
   dot?: boolean;
   className?: string;
 }
 
-const variantStyles: Record<BadgeVariant, { bg: string; text: string; dot: string }> = {
-  default: {
-    bg: "bg-zinc-800/80",
-    text: "text-zinc-300",
-    dot: "bg-zinc-500",
-  },
-  success: {
-    bg: "bg-emerald-500/10",
-    text: "text-emerald-400",
-    dot: "bg-emerald-500",
-  },
-  warning: {
-    bg: "bg-amber-500/10",
-    text: "text-amber-400",
-    dot: "bg-amber-500",
-  },
-  error: {
-    bg: "bg-red-500/10",
-    text: "text-red-400",
-    dot: "bg-red-500",
-  },
-  info: {
-    bg: "bg-sky-500/10",
-    text: "text-sky-400",
-    dot: "bg-sky-500",
-  },
-  violet: {
-    bg: "bg-violet-500/10",
-    text: "text-violet-400",
-    dot: "bg-violet-500",
-  },
+const toneStyles: Record<Tone, string> = {
+  neutral: "bg-raised text-muted border-edge",
+  accent: "bg-accent/10 text-accent border-accent/25",
+  ok: "bg-ok/10 text-ok border-ok/25",
+  warn: "bg-warn/10 text-warn border-warn/25",
+  danger: "bg-danger/10 text-danger border-danger/25",
+  info: "bg-info/10 text-info border-info/25",
 };
 
-export function Badge({ children, variant = "default", dot = false, className = "" }: BadgeProps) {
-  const styles = variantStyles[variant];
-
+export function Badge({ children, tone = "neutral", dot = false, className = "" }: BadgeProps) {
   return (
     <span
       className={`
-        inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium
-        border border-transparent
-        ${styles.bg} ${styles.text}
+        inline-flex items-center gap-1.5 rounded px-1.5 py-0.5 border
+        font-mono text-[11px] font-medium uppercase tracking-wide whitespace-nowrap
+        ${toneStyles[tone]}
         ${className}
       `}
     >
-      {dot && <span className={`w-1.5 h-1.5 rounded-full ${styles.dot} animate-pulse`} />}
+      {dot && <span aria-hidden="true" className="size-1.5 rounded-[1px] bg-current" />}
       {children}
     </span>
   );
 }
 
-// Specialized status badge for enabled/disabled
 interface StatusBadgeProps {
   enabled: boolean;
   className?: string;
@@ -70,30 +44,28 @@ interface StatusBadgeProps {
 
 export function StatusBadge({ enabled, className = "" }: StatusBadgeProps) {
   return (
-    <Badge variant={enabled ? "success" : "default"} dot className={className}>
+    <Badge tone={enabled ? "ok" : "neutral"} dot className={className}>
       {enabled ? "Enabled" : "Disabled"}
     </Badge>
   );
 }
 
-// Auth mode badge
 interface AuthModeBadgeProps {
   mode: "disabled" | "apiKeyInitializeOnly" | "apiKeyEveryRequest" | "jwtEveryRequest";
   className?: string;
 }
 
-const authModeLabels: Record<AuthModeBadgeProps["mode"], { label: string; variant: BadgeVariant }> =
-  {
-    disabled: { label: "No Auth", variant: "warning" },
-    apiKeyInitializeOnly: { label: "API Key (init)", variant: "info" },
-    apiKeyEveryRequest: { label: "API Key (all)", variant: "info" },
-    jwtEveryRequest: { label: "JWT", variant: "violet" },
-  };
+const authModeLabels: Record<AuthModeBadgeProps["mode"], { label: string; tone: Tone }> = {
+  disabled: { label: "No auth", tone: "warn" },
+  apiKeyInitializeOnly: { label: "API key (init)", tone: "info" },
+  apiKeyEveryRequest: { label: "API key (all)", tone: "info" },
+  jwtEveryRequest: { label: "JWT", tone: "accent" },
+};
 
 export function AuthModeBadge({ mode, className = "" }: AuthModeBadgeProps) {
-  const { label, variant } = authModeLabels[mode];
+  const { label, tone } = authModeLabels[mode];
   return (
-    <Badge variant={variant} className={className}>
+    <Badge tone={tone} className={className}>
       {label}
     </Badge>
   );

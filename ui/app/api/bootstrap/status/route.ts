@@ -28,7 +28,17 @@ export async function GET() {
   }
 
   const url = `${base.replace(/\/+$/, "")}/bootstrap/v1/tenant/status`;
-  const res = await fetch(url, { cache: "no-store" });
+  let res: Response;
+  try {
+    res = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(15_000) });
+  } catch (e) {
+    const timedOut = e instanceof Error && e.name === "TimeoutError";
+    const resp: BootstrapStatusErr = {
+      ok: false,
+      error: timedOut ? "gateway request timed out" : "gateway unreachable",
+    };
+    return NextResponse.json(resp, { status: 504 });
+  }
   const text = await res.text();
 
   // Mirror gateway behavior: 404 means "bootstrap disabled / hidden".

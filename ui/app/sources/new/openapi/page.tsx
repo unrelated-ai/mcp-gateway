@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
-import { Button, Input } from "@/components/ui";
+import { Button, Callout, Input } from "@/components/ui";
 import * as tenantApi from "@/src/lib/tenantApi";
 
 type Step = 1 | 2 | 3 | 4;
@@ -158,178 +158,159 @@ export default function NewOpenApiSourceWizardPage() {
         breadcrumb={[{ label: "Sources", href: "/sources" }, { label: "New OpenAPI source" }]}
       />
       <PageContent>
-        <div className="min-h-[70vh] flex items-start justify-center pt-6">
-          <div className="w-full max-w-2xl">
-            <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/60 backdrop-blur-sm overflow-hidden">
-              <div className="p-8">
-                <div className="flex items-center justify-between gap-4">
-                  <div className="text-sm text-zinc-400">{nextStepLabel(step)}</div>
-                </div>
+        <div className="mx-auto max-w-2xl">
+          <div className="overflow-hidden rounded-lg border border-edge bg-surface">
+            <div className="p-6">
+              <div className="eyebrow">{nextStepLabel(step)}</div>
 
-                <h1 className="mt-4 text-xl sm:text-2xl font-semibold text-white tracking-tight">
-                  {title}
-                </h1>
+              <h2 className="mt-2 text-lg font-semibold text-fg">{title}</h2>
 
-                {error && (
-                  <div className="mt-5 rounded-xl bg-red-500/5 border border-red-500/20 p-4 text-sm text-red-300">
-                    <div className="font-medium">Could not continue</div>
-                    <div className="mt-1 text-xs text-red-300/80 break-words whitespace-pre-wrap">
-                      {error}
+              {error && (
+                <Callout tone="danger" size="md" title="Could not continue" className="mt-5">
+                  <span className="whitespace-pre-wrap break-words">{error}</span>
+                </Callout>
+              )}
+
+              {step === 1 && (
+                <>
+                  <p className="mt-2 text-sm text-muted">
+                    Paste the URL to an OpenAPI spec. The Gateway supports JSON or YAML over
+                    http(s).
+                  </p>
+                  <div className="mt-6">
+                    <Input
+                      label="OpenAPI spec URL"
+                      value={specUrl}
+                      onChange={(e) => setSpecUrl(e.target.value)}
+                      placeholder="https://example.com/openapi.yaml"
+                      className="font-mono"
+                      hint="File paths are not supported in the UI."
+                    />
+                  </div>
+                </>
+              )}
+
+              {step === 2 && inspect && (
+                <>
+                  <p className="mt-2 text-sm text-muted">
+                    We fetched and parsed your spec. Choose a source name.
+                  </p>
+
+                  <div className="mt-6 space-y-4">
+                    <Input
+                      label="Source name"
+                      value={sourceId}
+                      onChange={(e) => setSourceId(e.target.value)}
+                      placeholder="my_openapi_source"
+                      className="font-mono"
+                    />
+
+                    <div className="rounded-lg border border-edge bg-well p-4">
+                      <div className="eyebrow">Inferred base URL</div>
+                      <div className="mt-2 break-all font-mono text-xs text-fg">
+                        {inspect.inferredBaseUrl}
+                      </div>
+                      <div className="mt-2 text-xs text-faint">
+                        This is used for tool calls. You can adjust it after creation.
+                      </div>
                     </div>
                   </div>
-                )}
+                </>
+              )}
 
-                {step === 1 && (
-                  <>
-                    <p className="mt-3 text-base text-zinc-400 max-w-2xl">
-                      Paste the URL to an OpenAPI spec. The Gateway supports JSON or YAML over
-                      http(s).
-                    </p>
-                    <div className="mt-6">
-                      <Input
-                        label="OpenAPI spec URL"
-                        value={specUrl}
-                        onChange={(e) => setSpecUrl(e.target.value)}
-                        placeholder="https://example.com/openapi.yaml"
-                      />
-                      <div className="mt-2 text-xs text-zinc-500">
-                        Note: file paths are not supported in the UI.
+              {step === 3 && inspect && (
+                <>
+                  <p className="mt-2 text-sm text-muted">Tools discovered from your spec.</p>
+                  <div className="mt-6 overflow-hidden rounded-lg border border-edge bg-well">
+                    <div className="flex items-center justify-between border-b border-edge px-4 py-3">
+                      <div className="eyebrow">{inspect.tools.length} tools</div>
+                    </div>
+                    <div className="max-h-[420px] divide-y divide-edge overflow-y-auto">
+                      {inspect.tools.slice(0, 200).map((t) => (
+                        <div key={t.name} className="px-4 py-3">
+                          <div className="font-mono text-sm font-medium text-accent">{t.name}</div>
+                          {t.description ? (
+                            <div className="mt-1 text-xs text-faint">{t.description}</div>
+                          ) : null}
+                        </div>
+                      ))}
+                      {inspect.tools.length > 200 ? (
+                        <div className="px-4 py-3 text-xs text-faint">Showing first 200 tools.</div>
+                      ) : null}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {step === 4 && inspect && (
+                <>
+                  <p className="mt-2 text-sm text-muted">Ready to create the source.</p>
+                  <div className="mt-6 grid gap-3">
+                    <div className="rounded-lg border border-edge bg-well p-4">
+                      <div className="eyebrow">Source name</div>
+                      <div className="mt-1 break-all font-mono text-sm font-semibold text-fg">
+                        {sourceId.trim()}
                       </div>
                     </div>
-                  </>
-                )}
-
-                {step === 2 && inspect && (
-                  <>
-                    <p className="mt-3 text-base text-zinc-400 max-w-2xl">
-                      We fetched and parsed your spec. Choose a source name.
-                    </p>
-
-                    <div className="mt-6 space-y-4">
-                      <Input
-                        label="Source name"
-                        value={sourceId}
-                        onChange={(e) => setSourceId(e.target.value)}
-                        placeholder="my_openapi_source"
-                      />
-
-                      <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-4">
-                        <div className="text-sm font-medium text-zinc-200">Inferred base URL</div>
-                        <div className="mt-2 font-mono text-xs text-zinc-300 break-all">
-                          {inspect.inferredBaseUrl}
-                        </div>
-                        <div className="mt-2 text-xs text-zinc-500">
-                          This is used for tool calls. You can adjust it after creation.
-                        </div>
+                    <div className="rounded-lg border border-edge bg-well p-4">
+                      <div className="eyebrow">Spec URL</div>
+                      <div className="mt-1 break-all font-mono text-xs text-fg">
+                        {specUrl.trim()}
                       </div>
                     </div>
-                  </>
-                )}
-
-                {step === 3 && inspect && (
-                  <>
-                    <p className="mt-3 text-base text-zinc-400 max-w-2xl">
-                      Tools discovered from your spec.
-                    </p>
-                    <div className="mt-6 rounded-xl border border-zinc-800/80 bg-zinc-950/40 overflow-hidden">
-                      <div className="px-4 py-3 border-b border-zinc-800/80 flex items-center justify-between">
-                        <div className="text-sm font-medium text-zinc-200">
-                          {inspect.tools.length} tools
-                        </div>
-                      </div>
-                      <div className="max-h-[420px] overflow-y-auto divide-y divide-zinc-800/40">
-                        {inspect.tools.slice(0, 200).map((t) => (
-                          <div key={t.name} className="px-4 py-3">
-                            <div className="text-sm font-semibold text-violet-300 font-mono">
-                              {t.name}
-                            </div>
-                            {t.description ? (
-                              <div className="mt-1 text-xs text-zinc-500">{t.description}</div>
-                            ) : null}
-                          </div>
-                        ))}
-                        {inspect.tools.length > 200 ? (
-                          <div className="px-4 py-3 text-xs text-zinc-500">
-                            Showing first 200 tools.
-                          </div>
-                        ) : null}
+                    <div className="rounded-lg border border-edge bg-well p-4">
+                      <div className="eyebrow">Inferred base URL</div>
+                      <div className="mt-1 break-all font-mono text-xs text-fg">
+                        {inspect.inferredBaseUrl}
                       </div>
                     </div>
-                  </>
-                )}
-
-                {step === 4 && inspect && (
-                  <>
-                    <p className="mt-3 text-base text-zinc-400 max-w-2xl">
-                      Ready to create the source.
-                    </p>
-                    <div className="mt-6 grid gap-3">
-                      <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-4">
-                        <div className="text-xs text-zinc-500">Source name</div>
-                        <div className="mt-1 text-sm font-semibold text-zinc-200 font-mono break-all">
-                          {sourceId.trim()}
-                        </div>
+                    <div className="rounded-lg border border-edge bg-well p-4">
+                      <div className="eyebrow">Tools discovered</div>
+                      <div className="mt-1 font-mono text-sm font-semibold text-fg">
+                        {inspect.tools.length}
                       </div>
-                      <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-4">
-                        <div className="text-xs text-zinc-500">Spec URL</div>
-                        <div className="mt-1 text-xs text-zinc-300 font-mono break-all">
-                          {specUrl.trim()}
-                        </div>
-                      </div>
-                      <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-4">
-                        <div className="text-xs text-zinc-500">Inferred base URL</div>
-                        <div className="mt-1 text-xs text-zinc-300 font-mono break-all">
-                          {inspect.inferredBaseUrl}
-                        </div>
-                      </div>
-                      <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-4">
-                        <div className="text-xs text-zinc-500">Tools discovered</div>
-                        <div className="mt-1 text-sm font-semibold text-zinc-200">
-                          {inspect.tools.length}
-                        </div>
-                        <div className="mt-2 text-xs text-zinc-500">
-                          After creation, you can tune discovery/auth and other settings in the
-                          editor.
-                        </div>
+                      <div className="mt-2 text-xs text-faint">
+                        After creation, you can tune discovery/auth and other settings in the
+                        editor.
                       </div>
                     </div>
-                  </>
-                )}
-              </div>
+                  </div>
+                </>
+              )}
+            </div>
 
-              <div className="border-t border-zinc-800/80 bg-zinc-900/40 p-6 flex items-center justify-between gap-3">
-                <Button type="button" variant="ghost" onClick={abort} disabled={busy}>
-                  Abort
+            <div className="flex items-center justify-between gap-3 border-t border-edge px-6 py-4">
+              <Button type="button" variant="ghost" onClick={abort} disabled={busy}>
+                Abort
+              </Button>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setStep((s) => (s > 1 ? ((s - 1) as Step) : s))}
+                  disabled={busy || step === 1}
+                >
+                  Back
                 </Button>
 
-                <div className="flex items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    onClick={() => setStep((s) => (s > 1 ? ((s - 1) as Step) : s))}
-                    disabled={busy || step === 1}
-                  >
-                    Back
+                {step === 1 ? (
+                  <Button type="button" onClick={runInspect} loading={busy}>
+                    Next
                   </Button>
-
-                  {step === 1 ? (
-                    <Button type="button" onClick={runInspect} loading={busy}>
-                      Next
-                    </Button>
-                  ) : step === 2 ? (
-                    <Button type="button" onClick={validateIdAndContinue} loading={busy}>
-                      Next
-                    </Button>
-                  ) : step === 3 ? (
-                    <Button type="button" onClick={goToConfirm} disabled={busy}>
-                      Next
-                    </Button>
-                  ) : (
-                    <Button type="button" onClick={create} loading={busy} disabled={!inspect}>
-                      Create
-                    </Button>
-                  )}
-                </div>
+                ) : step === 2 ? (
+                  <Button type="button" onClick={validateIdAndContinue} loading={busy}>
+                    Next
+                  </Button>
+                ) : step === 3 ? (
+                  <Button type="button" onClick={goToConfirm} disabled={busy}>
+                    Next
+                  </Button>
+                ) : (
+                  <Button type="button" onClick={create} loading={busy} disabled={!inspect}>
+                    Create source
+                  </Button>
+                )}
               </div>
             </div>
           </div>

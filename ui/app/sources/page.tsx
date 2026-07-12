@@ -8,7 +8,20 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
-import { Button, ConfirmModal, Input, Modal, ModalActions } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Callout,
+  ConfirmModal,
+  EmptyState,
+  Input,
+  Modal,
+  ModalActions,
+  SectionCard,
+  SkeletonRows,
+  StatusBadge,
+  type Tone,
+} from "@/components/ui";
 import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
 import { useToastStore } from "@/src/lib/toast-store";
@@ -204,182 +217,163 @@ export default function SourcesPage() {
         title="Sources"
         description="Upstreams (MCP servers) and tool sources (HTTP/OpenAPI) for profiles"
         actions={
-          <button
-            onClick={addPicker.onOpen}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-b from-violet-500 to-violet-600 text-white font-medium text-sm shadow-lg shadow-violet-500/25 hover:from-violet-400 hover:to-violet-500 transition-all duration-150"
-          >
-            <PlusIcon className="w-4 h-4" />
-            Add Source
-          </button>
+          <Button onClick={addPicker.onOpen}>
+            <PlusIcon className="size-4" />
+            Add source
+          </Button>
         }
       />
 
       <PageContent className="space-y-6">
         {/* Upstreams */}
-        <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 overflow-hidden">
-          <div className="px-5 py-4 border-b border-zinc-800/60">
-            <h2 className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
-              <ServerIconWireframe className="w-5 h-5 text-violet-400" />
-              Upstreams
-            </h2>
-            <p className="mt-1 text-xs text-zinc-500">
-              MCP servers registered in Gateway. Profiles attach upstreams by name.
-            </p>
-          </div>
-          <div className="p-5">
-            {upstreamsQuery.isPending && <div className="text-sm text-zinc-400">Loading…</div>}
-            {upstreamsQuery.error && (
-              <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200">
-                {upstreamsQuery.error instanceof Error
-                  ? upstreamsQuery.error.message
-                  : "Failed to load upstreams"}
-              </div>
-            )}
-            {!upstreamsQuery.isPending && !upstreamsQuery.error && upstreams.length === 0 && (
-              <div className="text-sm text-zinc-500">No upstreams yet.</div>
-            )}
-            {!upstreamsQuery.isPending && !upstreamsQuery.error && upstreams.length > 0 && (
-              <div className="space-y-3">
-                {upstreams.map((u) => {
-                  const managedInfo = managedDisplayByUpstreamId.get(u.id);
-                  return (
-                    <Link
-                      key={`${u.owner}:${u.id}`}
-                      href={`/sources/upstreams/${encodeURIComponent(u.id)}`}
-                      className="block rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-5 hover:border-zinc-700/80 hover:bg-zinc-900/40 transition-all duration-150 group"
-                    >
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-3">
-                            <h3
-                              className={`text-base font-semibold text-zinc-100 ${managedInfo ? "" : "font-mono"}`}
-                            >
-                              {managedInfo?.displayName ?? u.id}
-                            </h3>
-                            <Badge tone={u.owner === "tenant" ? "violet" : "zinc"}>
-                              {u.owner === "tenant" ? "tenant" : "global"}
-                            </Badge>
-                            <Badge tone={u.enabled ? "emerald" : "zinc"}>
-                              {u.enabled ? "enabled" : "disabled"}
-                            </Badge>
-                          </div>
-                          {managedInfo ? (
-                            <div className="mt-1 text-xs text-zinc-500">
-                              Deployable ID:{" "}
-                              <span className="font-mono text-zinc-300">
-                                {managedInfo.deployableId}
-                              </span>{" "}
-                              · Upstream ID: <span className="font-mono text-zinc-300">{u.id}</span>
-                            </div>
-                          ) : null}
-                          <div className="mt-2 space-y-1 text-xs text-zinc-400">
-                            {u.endpoints.map((ep, idx) => (
-                              <div key={ep.id} className="flex items-center gap-2">
-                                {u.endpoints.length > 1 ? (
-                                  <span className="text-zinc-500">Endpoint {idx + 1}</span>
-                                ) : (
-                                  <span className="text-zinc-500">Endpoint</span>
-                                )}
-                                <span className="truncate">{ep.url}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2 shrink-0">
-                          {u.owner === "tenant" && (
-                            <button
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setDeleteTarget({ kind: "upstream", id: u.id });
-                              }}
-                              disabled={
-                                deleteUpstreamMutation.isPending && deletingUpstreamId === u.id
-                              }
-                              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-zinc-300 hover:text-white hover:bg-zinc-800/60 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                              <TrashIcon className="w-4 h-4" />
-                              Delete
-                            </button>
-                          )}
-                          <ChevronRightIcon className="w-5 h-5 text-zinc-600 group-hover:text-zinc-400 transition-colors shrink-0" />
-                        </div>
-                      </div>
-                    </Link>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </section>
-
-        {/* Tool Sources */}
-        <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 overflow-hidden">
-          <div className="px-5 py-4 border-b border-zinc-800/60">
-            <h2 className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
-              <SourcesIcon className="w-5 h-5 text-emerald-400" />
-              Tool Sources
-            </h2>
-            <p className="mt-1 text-xs text-zinc-500">
-              Gateway-local HTTP/OpenAPI sources. Profiles attach tool sources by name.
-            </p>
-          </div>
-          <div className="p-5">
-            {sourcesQuery.isPending ? (
-              <div className="text-sm text-zinc-400">Loading…</div>
-            ) : sourcesQuery.error ? (
-              <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200">
-                {sourcesQuery.error instanceof Error
-                  ? sourcesQuery.error.message
-                  : "Failed to load tool sources"}
-              </div>
-            ) : sources.length === 0 ? (
-              <div className="text-sm text-zinc-500">No tool sources yet.</div>
-            ) : (
-              <div className="space-y-3">
-                {sources.map((source) => (
-                  <Link
-                    key={source.id}
-                    href={`/sources/tool-sources/${source.id}`}
-                    className="block rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-5 hover:border-zinc-700/80 hover:bg-zinc-900/40 transition-all duration-150 group"
+        <SectionCard
+          title="Upstreams"
+          subtitle="MCP servers registered in Gateway. Profiles attach upstreams by name."
+        >
+          {upstreamsQuery.isPending && <SkeletonRows rows={2} />}
+          {upstreamsQuery.error && (
+            <Callout tone="danger" title="Failed to load upstreams" size="md">
+              {upstreamsQuery.error instanceof Error
+                ? upstreamsQuery.error.message
+                : "Unknown error"}
+            </Callout>
+          )}
+          {!upstreamsQuery.isPending && !upstreamsQuery.error && upstreams.length === 0 && (
+            <EmptyState
+              icon={<ServerIconWireframe className="size-5" />}
+              title="No upstreams yet"
+              description="Connect a remote MCP server or adapter to attach it to profiles."
+              action={{ label: "Add source", onClick: addPicker.onOpen }}
+            />
+          )}
+          {!upstreamsQuery.isPending && !upstreamsQuery.error && upstreams.length > 0 && (
+            <div className="space-y-3">
+              {upstreams.map((u) => {
+                const managedInfo = managedDisplayByUpstreamId.get(u.id);
+                return (
+                  // Stretched-link card: the title Link covers the card via
+                  // ::after; the delete control sits above it — no nested interactives.
+                  <div
+                    key={`${u.owner}:${u.id}`}
+                    className="group relative rounded-lg border border-edge bg-well p-5 transition-colors duration-150 hover:border-edge-strong"
                   >
                     <div className="flex items-center justify-between gap-4">
-                      <div className="flex items-center gap-4">
-                        <SourceTypeIcon type={source.type} />
-                        <div>
-                          <div className="flex items-center gap-3">
-                            <h3 className="text-base font-semibold text-zinc-100 group-hover:text-white transition-colors font-mono">
-                              {source.id}
-                            </h3>
-                            <TypeBadge type={source.type} />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-3">
+                          <Link
+                            href={`/sources/upstreams/${encodeURIComponent(u.id)}`}
+                            className={`text-base font-semibold text-fg after:absolute after:inset-0 after:rounded-lg focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-accent ${managedInfo ? "" : "font-mono"}`}
+                          >
+                            {managedInfo?.displayName ?? u.id}
+                          </Link>
+                          <Badge tone={u.owner === "tenant" ? "accent" : "neutral"}>
+                            {u.owner === "tenant" ? "tenant" : "global"}
+                          </Badge>
+                          <StatusBadge enabled={u.enabled} />
+                        </div>
+                        {managedInfo ? (
+                          <div className="mt-1 text-xs text-faint">
+                            Deployable ID:{" "}
+                            <span className="font-mono text-muted">{managedInfo.deployableId}</span>{" "}
+                            · Upstream ID: <span className="font-mono text-muted">{u.id}</span>
                           </div>
+                        ) : null}
+                        <div className="mt-2 space-y-1 text-xs text-muted">
+                          {u.endpoints.map((ep, idx) => (
+                            <div key={ep.id} className="flex items-center gap-2">
+                              {u.endpoints.length > 1 ? (
+                                <span className="text-faint">Endpoint {idx + 1}</span>
+                              ) : (
+                                <span className="text-faint">Endpoint</span>
+                              )}
+                              <span className="truncate font-mono">{ep.url}</span>
+                            </div>
+                          ))}
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setDeleteTarget({ kind: "toolSource", id: source.id });
-                          }}
-                          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-zinc-300 hover:text-white hover:bg-zinc-800/60 transition-all"
-                          title="Delete tool source"
-                        >
-                          <TrashIcon className="w-4 h-4" />
-                          Delete
-                        </button>
-                        <ChevronRightIcon className="w-5 h-5 text-zinc-600 group-hover:text-zinc-400 transition-colors shrink-0" />
+                      <div className="flex shrink-0 items-center gap-2">
+                        {u.owner === "tenant" && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="relative z-10"
+                            onClick={() => setDeleteTarget({ kind: "upstream", id: u.id })}
+                            disabled={
+                              deleteUpstreamMutation.isPending && deletingUpstreamId === u.id
+                            }
+                          >
+                            <TrashIcon className="size-4" />
+                            Delete
+                          </Button>
+                        )}
+                        <ChevronRightIcon className="size-5 shrink-0 text-faint transition-colors group-hover:text-muted" />
                       </div>
                     </div>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </SectionCard>
+
+        {/* Tool sources */}
+        <SectionCard
+          title="Tool sources"
+          subtitle="Gateway-local HTTP/OpenAPI sources. Profiles attach tool sources by name."
+        >
+          {sourcesQuery.isPending ? (
+            <SkeletonRows rows={2} />
+          ) : sourcesQuery.error ? (
+            <Callout tone="danger" title="Failed to load tool sources" size="md">
+              {sourcesQuery.error instanceof Error ? sourcesQuery.error.message : "Unknown error"}
+            </Callout>
+          ) : sources.length === 0 ? (
+            <EmptyState
+              icon={<SourcesIcon className="size-5" />}
+              title="No tool sources yet"
+              description="Add an HTTP DSL or OpenAPI source to generate tools for profiles."
+              action={{ label: "Add source", onClick: addPicker.onOpen }}
+            />
+          ) : (
+            <div className="space-y-3">
+              {sources.map((source) => (
+                <div
+                  key={source.id}
+                  className="group relative rounded-lg border border-edge bg-well p-5 transition-colors duration-150 hover:border-edge-strong"
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex min-w-0 items-center gap-4">
+                      <SourceTypeIcon type={source.type} />
+                      <div className="flex items-center gap-3">
+                        <Link
+                          href={`/sources/tool-sources/${source.id}`}
+                          className="font-mono text-base font-semibold text-fg after:absolute after:inset-0 after:rounded-lg focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-accent"
+                        >
+                          {source.id}
+                        </Link>
+                        <Badge tone={toolSourceTone(source.type)}>{source.type}</Badge>
+                      </div>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="relative z-10"
+                        onClick={() => setDeleteTarget({ kind: "toolSource", id: source.id })}
+                      >
+                        <TrashIcon className="size-4" />
+                        Delete
+                      </Button>
+                      <ChevronRightIcon className="size-5 shrink-0 text-faint transition-colors group-hover:text-muted" />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </SectionCard>
       </PageContent>
 
       <ConfirmModal
@@ -444,16 +438,14 @@ export default function SourcesPage() {
                 addPicker.onClose();
                 setCreateKind("tool_http");
               }}
-              className="p-4 rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-blue-500/30 hover:bg-blue-500/5 transition-all"
+              className="rounded-lg border border-edge bg-well p-4 transition-colors duration-150 hover:border-edge-strong hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
-              <GlobeIconSimple className="w-8 h-8 text-blue-400 mx-auto mb-2" />
-              <div className="text-sm font-medium text-zinc-200 inline-flex items-center gap-2 justify-center w-full">
+              <GlobeIconSimple className="mx-auto mb-2 size-8 text-muted" />
+              <div className="inline-flex w-full items-center justify-center gap-2 text-sm font-medium text-fg">
                 HTTP DSL
-                <span className="px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-violet-500/10 text-violet-300 border border-violet-500/20">
-                  Beta
-                </span>
+                <Badge tone="accent">Beta</Badge>
               </div>
-              <div className="text-xs text-zinc-500 mt-1">
+              <div className="mt-1 text-xs text-faint">
                 JSON-only editor for now (no validation yet)
               </div>
             </button>
@@ -463,11 +455,11 @@ export default function SourcesPage() {
                 addPicker.onClose();
                 router.push("/sources/new/openapi");
               }}
-              className="p-4 rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-green-500/30 hover:bg-green-500/5 transition-all"
+              className="rounded-lg border border-edge bg-well p-4 transition-colors duration-150 hover:border-edge-strong hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
-              <DocumentIcon className="w-8 h-8 text-green-400 mx-auto mb-2" />
-              <div className="text-sm font-medium text-zinc-200">OpenAPI</div>
-              <div className="text-xs text-zinc-500 mt-1">Generate tools from spec</div>
+              <DocumentIcon className="mx-auto mb-2 size-8 text-muted" />
+              <div className="text-sm font-medium text-fg">OpenAPI</div>
+              <div className="mt-1 text-xs text-faint">Generate tools from spec</div>
             </button>
             <button
               type="button"
@@ -475,11 +467,11 @@ export default function SourcesPage() {
                 addPicker.onClose();
                 router.push("/sources/new/upstream?kind=mcp");
               }}
-              className="p-4 rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-violet-500/30 hover:bg-violet-500/5 transition-all"
+              className="rounded-lg border border-edge bg-well p-4 transition-colors duration-150 hover:border-edge-strong hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
-              <ServerIconWireframe className="w-8 h-8 text-violet-400 mx-auto mb-2" />
-              <div className="text-sm font-medium text-zinc-200">Remote MCP</div>
-              <div className="text-xs text-zinc-500 mt-1">Connect an existing MCP endpoint</div>
+              <ServerIconWireframe className="mx-auto mb-2 size-8 text-muted" />
+              <div className="text-sm font-medium text-fg">Remote MCP</div>
+              <div className="mt-1 text-xs text-faint">Connect an existing MCP endpoint</div>
             </button>
             <button
               type="button"
@@ -487,11 +479,11 @@ export default function SourcesPage() {
                 addPicker.onClose();
                 router.push("/sources/new/upstream?kind=adapter");
               }}
-              className="p-4 rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-amber-500/30 hover:bg-amber-500/5 transition-all"
+              className="rounded-lg border border-edge bg-well p-4 transition-colors duration-150 hover:border-edge-strong hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
-              <BoltIcon className="w-8 h-8 text-amber-400 mx-auto mb-2" />
-              <div className="text-sm font-medium text-zinc-200">Adapter</div>
-              <div className="text-xs text-zinc-500 mt-1">unrelated.ai MCP adapter</div>
+              <BoltIcon className="mx-auto mb-2 size-8 text-muted" />
+              <div className="text-sm font-medium text-fg">Adapter</div>
+              <div className="mt-1 text-xs text-faint">unrelated.ai MCP adapter</div>
             </button>
           </div>
           <ModalActions>
@@ -608,9 +600,7 @@ function CreateToolSourceModal({
           error={errors.name?.message}
           className="font-mono"
         />
-        <p className="text-xs text-zinc-500">
-          Allowed characters: letters, digits, underscore, dash.
-        </p>
+        <p className="text-xs text-faint">Allowed characters: letters, digits, underscore, dash.</p>
 
         <ModalActions>
           <Button type="button" variant="ghost" onClick={onClose} disabled={isSubmitting}>
@@ -625,44 +615,30 @@ function CreateToolSourceModal({
   );
 }
 
-function TypeBadge({ type }: { type: string }) {
-  const tone =
-    type === "http"
-      ? "bg-blue-500/10 text-blue-400 border border-blue-500/20"
-      : type === "openapi"
-        ? "bg-green-500/10 text-green-400 border border-green-500/20"
-        : "bg-zinc-500/10 text-zinc-400 border border-zinc-500/20";
-  return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${tone}`}>{type}</span>;
+function toolSourceTone(type: string): Tone {
+  return type === "http"
+    ? "info"
+    : type === "openapi"
+      ? "ok"
+      : type === "managed"
+        ? "accent"
+        : "neutral";
 }
 
 function SourceTypeIcon({ type }: { type: string }) {
-  const bg =
-    type === "http" ? "bg-blue-500/10" : type === "openapi" ? "bg-green-500/10" : "bg-zinc-500/10";
   const icon =
     type === "http" ? (
-      <GlobeIconSimple className="w-5 h-5 text-blue-400" />
+      <GlobeIconSimple className="size-5 text-info" />
     ) : type === "openapi" ? (
-      <DocumentIcon className="w-5 h-5 text-green-400" />
+      <DocumentIcon className="size-5 text-ok" />
+    ) : type === "managed" ? (
+      <DatabaseIcon className="size-5 text-accent" />
     ) : (
-      <DatabaseIcon className="w-5 h-5 text-zinc-400" />
+      <DatabaseIcon className="size-5 text-muted" />
     );
   return (
-    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${bg}`}>{icon}</div>
+    <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-edge bg-raised">
+      {icon}
+    </div>
   );
-}
-
-function Badge({
-  tone,
-  children,
-}: {
-  tone: "violet" | "emerald" | "zinc";
-  children: React.ReactNode;
-}) {
-  const cls =
-    tone === "violet"
-      ? "bg-violet-500/10 text-violet-400 border border-violet-500/20"
-      : tone === "emerald"
-        ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-        : "bg-zinc-500/10 text-zinc-400 border border-zinc-500/20";
-  return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>{children}</span>;
 }

@@ -6,11 +6,19 @@ import { AppShell, PageContent, PageHeader } from "@/components/layout";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Button,
+  Callout,
   ConfirmModal,
+  EmptyState,
   Input,
   QueryParamAuthWarning,
+  SectionCard,
+  Select,
+  SkeletonRows,
+  Spinner,
+  Tabs,
   Textarea,
   Toggle,
+  type TabItem,
 } from "@/components/ui";
 import { qk } from "@/src/lib/queryKeys";
 import { useToastStore } from "@/src/lib/toast-store";
@@ -95,113 +103,65 @@ function ToolSourceEditor({ sourceId }: { sourceId: string }) {
     ? `${sourceId}:${detail.type}:${toolSourceQuery.dataUpdatedAt}`
     : sourceId;
 
+  const tabItems: TabItem<"settings" | "tools">[] = toolsTabEnabled
+    ? [
+        { value: "settings", label: "Settings" },
+        { value: "tools", label: "Tools" },
+      ]
+    : [{ value: "settings", label: "Settings" }];
+
   return (
-    <PageContent width="5xl">
-      <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/40 overflow-hidden">
-        <div className="px-6 py-4 border-b border-zinc-800/60 flex items-center justify-between gap-4">
-          <div>
-            <div className="text-sm font-semibold text-zinc-100">Source editor</div>
-            <div className="mt-1 text-xs text-zinc-500">
-              Configure this source and verify discovered tools.
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <TabButton active={activeTab === "settings"} onClick={() => setActiveTab("settings")}>
-              Settings
-            </TabButton>
-            {toolsTabEnabled ? (
-              <TabButton active={activeTab === "tools"} onClick={() => setActiveTab("tools")}>
-                Tools
-              </TabButton>
-            ) : null}
-          </div>
+    <PageContent width="5xl" className="space-y-6">
+      <Tabs items={tabItems} value={activeTab} onChange={setActiveTab} />
+
+      {toolSourceQuery.isPending && <SkeletonRows rows={3} />}
+      {toolSourceQuery.error && (
+        <Callout tone="danger">
+          {toolSourceQuery.error instanceof Error
+            ? toolSourceQuery.error.message
+            : "Failed to load tool source"}
+        </Callout>
+      )}
+
+      {!toolSourceQuery.isPending && !toolSourceQuery.error && !detail && (
+        <EmptyState title="Tool source not found" />
+      )}
+
+      {detail && detail.type === "openapi" && (
+        <OpenApiEditor
+          key={editorKey}
+          sourceId={sourceId}
+          initialSpec={detail.spec ?? {}}
+          enabled={detail.enabled}
+          activeTab={activeTab}
+          onSaved={() => setActiveTab("tools")}
+        />
+      )}
+
+      {detail && detail.type !== "openapi" && (
+        <div className="space-y-4">
+          {detail.type === "http" ? (
+            <Callout tone="accent" title="HTTP DSL (beta)">
+              For now this source type supports JSON-only editing via the advanced JSON editor. We
+              don’t validate or help with the schema yet. A full editor is planned.
+            </Callout>
+          ) : (
+            <Callout tone="neutral">
+              Dedicated editor for <span className="font-mono text-fg">{detail.type}</span> is not
+              implemented yet. For now, use the advanced JSON editor below.
+            </Callout>
+          )}
+          <AdvancedJsonEditor
+            key={editorKey}
+            sourceId={sourceId}
+            type={detail.type}
+            enabled={detail.enabled}
+            spec={detail.spec ?? {}}
+            onSaved={() => pushToast({ variant: "success", message: "Tool source saved" })}
+          />
         </div>
-
-        <div className="p-6">
-          {toolSourceQuery.isPending && <div className="text-sm text-zinc-400">Loading…</div>}
-          {toolSourceQuery.error && (
-            <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200">
-              {toolSourceQuery.error instanceof Error
-                ? toolSourceQuery.error.message
-                : "Failed to load tool source"}
-            </div>
-          )}
-
-          {!toolSourceQuery.isPending && !toolSourceQuery.error && !detail && (
-            <div className="text-sm text-zinc-500">Tool source not found.</div>
-          )}
-
-          {detail && detail.type === "openapi" && (
-            <OpenApiEditor
-              key={editorKey}
-              sourceId={sourceId}
-              initialSpec={detail.spec ?? {}}
-              enabled={detail.enabled}
-              activeTab={activeTab}
-              onSaved={() => setActiveTab("tools")}
-            />
-          )}
-
-          {detail && detail.type !== "openapi" && (
-            <div className="space-y-4">
-              {detail.type === "http" ? (
-                <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-semibold text-zinc-100">HTTP DSL (Beta)</div>
-                    <span className="px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-violet-500/10 text-violet-300 border border-violet-500/20">
-                      Beta
-                    </span>
-                  </div>
-                  <div className="mt-1 text-xs text-zinc-400">
-                    For now this source type supports JSON-only editing via the Advanced JSON
-                    editor. We don’t validate or help with the schema yet. A full editor is planned.
-                  </div>
-                </div>
-              ) : (
-                <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4 text-sm text-zinc-400">
-                  Dedicated editor for{" "}
-                  <span className="font-mono text-zinc-200">{detail.type}</span> is not implemented
-                  yet. For now, use the Advanced JSON editor below.
-                </div>
-              )}
-              <AdvancedJsonEditor
-                key={editorKey}
-                sourceId={sourceId}
-                type={detail.type}
-                enabled={detail.enabled}
-                spec={detail.spec ?? {}}
-                onSaved={() => pushToast({ variant: "success", message: "Tool source saved" })}
-              />
-            </div>
-          )}
-        </div>
-      </div>
+      )}
     </PageContent>
-  );
-}
-
-function TabButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
-        active
-          ? "bg-violet-500/15 text-violet-200 border border-violet-500/30"
-          : "bg-zinc-950/30 text-zinc-400 border border-zinc-800/60 hover:text-zinc-200 hover:border-zinc-700/80",
-      ].join(" ")}
-    >
-      {children}
-    </button>
   );
 }
 
@@ -420,11 +380,13 @@ function OpenApiEditor({
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between gap-4">
-          <div className="text-sm text-zinc-300">
+          <div className="text-sm text-muted">
             {toolsQuery.data ? (
               <>
                 Discovered tools:{" "}
-                <span className="text-zinc-100 font-semibold">{toolsQuery.data.tools.length}</span>
+                <span className="font-mono font-medium text-fg">
+                  {toolsQuery.data.tools.length}
+                </span>
               </>
             ) : (
               "Discovered tools"
@@ -442,32 +404,31 @@ function OpenApiEditor({
         </div>
 
         {toolsQuery.error && (
-          <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200">
+          <Callout tone="danger">
             {toolsQuery.error instanceof Error
               ? toolsQuery.error.message
               : "Failed to discover tools"}
-          </div>
+          </Callout>
         )}
 
         {toolsQuery.isFetching && !toolsQuery.data && (
-          <div className="text-sm text-zinc-400">Probing…</div>
-        )}
-
-        {toolsQuery.data && toolsQuery.data.tools.length === 0 && (
-          <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4 text-sm text-zinc-500">
-            No tools discovered.
+          <div className="flex items-center gap-2 text-sm text-muted">
+            <Spinner size="sm" />
+            Probing…
           </div>
         )}
 
+        {toolsQuery.data && toolsQuery.data.tools.length === 0 && (
+          <EmptyState title="No tools discovered" />
+        )}
+
         {toolsQuery.data && toolsQuery.data.tools.length > 0 && (
-          <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 overflow-hidden">
-            <div className="divide-y divide-zinc-800/40">
+          <div className="overflow-hidden rounded-lg border border-edge bg-surface">
+            <div className="divide-y divide-edge">
               {toolsQuery.data.tools.map((t) => (
                 <div key={t.name} className="px-4 py-3">
-                  <div className="text-sm font-semibold text-violet-300 font-mono">{t.name}</div>
-                  {t.description && (
-                    <div className="mt-1 text-xs text-zinc-500">{t.description}</div>
-                  )}
+                  <div className="font-mono text-sm font-medium text-accent">{t.name}</div>
+                  {t.description && <div className="mt-1 text-xs text-faint">{t.description}</div>}
                 </div>
               ))}
             </div>
@@ -481,7 +442,7 @@ function OpenApiEditor({
 
   return (
     <form onSubmit={form.handleSubmit((v) => saveMutation.mutate(v))} className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Input
           label="OpenAPI spec URL"
           placeholder="https://example.com/openapi.json"
@@ -497,27 +458,28 @@ function OpenApiEditor({
         />
       </div>
 
-      <Section title="Auth">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <SelectField
+      <SectionCard title="Auth" bodyClassName="space-y-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <Select
             label="Auth mode"
             value={authMode}
-            onChange={(v) => form.setValue("authMode", v as OpenApiFormValues["authMode"])}
-            options={[
-              { value: "none", label: "None" },
-              { value: "bearer", label: "Bearer token" },
-              { value: "header", label: "Custom header" },
-              { value: "basic", label: "Basic auth" },
-              { value: "query", label: "Query parameter" },
-            ]}
-          />
+            onChange={(e) =>
+              form.setValue("authMode", e.target.value as OpenApiFormValues["authMode"])
+            }
+          >
+            <option value="none">None</option>
+            <option value="bearer">Bearer token</option>
+            <option value="header">Custom header</option>
+            <option value="basic">Basic auth</option>
+            <option value="query">Query parameter</option>
+          </Select>
         </div>
 
         {authMode === "bearer" && (
           <Input label="Bearer token" placeholder="token" {...form.register("bearerToken")} />
         )}
         {authMode === "header" && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <Input
               label="Header name"
               placeholder="Authorization"
@@ -527,7 +489,7 @@ function OpenApiEditor({
           </div>
         )}
         {authMode === "basic" && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <Input label="Username" {...form.register("basicUsername")} />
             <Input label="Password" type="password" {...form.register("basicPassword")} />
           </div>
@@ -535,7 +497,7 @@ function OpenApiEditor({
         {authMode === "query" && (
           <>
             <QueryParamAuthWarning />
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <Input
                 label="Query param name"
                 placeholder="api_key"
@@ -545,13 +507,13 @@ function OpenApiEditor({
             </div>
           </>
         )}
-      </Section>
+      </SectionCard>
 
-      <Section title="Discovery">
+      <SectionCard title="Discovery" bodyClassName="space-y-4">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <div className="text-sm text-zinc-200">Auto-discover tools</div>
-            <div className="text-xs text-zinc-500">
+            <div className="text-sm text-fg">Auto-discover tools</div>
+            <div className="text-xs text-faint">
               Discover operations from the spec automatically.
             </div>
           </div>
@@ -564,7 +526,7 @@ function OpenApiEditor({
         </div>
 
         {autoDiscoverEnabled && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <Textarea
               label="Include patterns (optional)"
               hint="One per line. Leave empty to include everything."
@@ -579,10 +541,10 @@ function OpenApiEditor({
             />
           </div>
         )}
-      </Section>
+      </SectionCard>
 
-      <Section title="Defaults">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <SectionCard title="Defaults" bodyClassName="space-y-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <Input
             label="Default timeout (seconds)"
             placeholder="e.g. 30"
@@ -590,31 +552,32 @@ function OpenApiEditor({
             {...form.register("defaultsTimeoutSecs")}
             error={form.formState.errors.defaultsTimeoutSecs?.message}
           />
-          <SelectField
+          <Select
             label="Array style"
             value={defaultsArrayStyle ?? ""}
-            onChange={(v) =>
+            onChange={(e) =>
               form.setValue(
                 "defaultsArrayStyle",
-                v ? (v as NonNullable<OpenApiFormValues["defaultsArrayStyle"]>) : undefined,
+                e.target.value
+                  ? (e.target.value as NonNullable<OpenApiFormValues["defaultsArrayStyle"]>)
+                  : undefined,
                 { shouldDirty: true },
               )
             }
-            options={[
-              { value: "", label: "Default" },
-              { value: "form", label: "Comma-separated (form)" },
-              { value: "spaceDelimited", label: "Space-delimited" },
-              { value: "pipeDelimited", label: "Pipe-delimited" },
-              { value: "deepObject", label: "Deep object" },
-            ]}
-          />
+          >
+            <option value="">Default</option>
+            <option value="form">Comma-separated (form)</option>
+            <option value="spaceDelimited">Space-delimited</option>
+            <option value="pipeDelimited">Pipe-delimited</option>
+            <option value="deepObject">Deep object</option>
+          </Select>
         </div>
 
-        <div className="mt-4">
-          <div className="flex items-center justify-between gap-4 mb-2">
+        <div>
+          <div className="mb-2 flex items-center justify-between gap-4">
             <div>
-              <div className="text-sm font-medium text-zinc-300">Default headers</div>
-              <div className="text-xs text-zinc-500">Applied to every request.</div>
+              <div className="text-sm font-medium text-fg">Default headers</div>
+              <div className="text-xs text-faint">Applied to every request.</div>
             </div>
             <Button
               type="button"
@@ -631,12 +594,13 @@ function OpenApiEditor({
           </div>
 
           {headerRows.length === 0 ? (
-            <div className="text-sm text-zinc-500">No headers.</div>
+            <div className="text-sm text-faint">No headers.</div>
           ) : (
             <div className="space-y-3">
               {headerRows.map((row, idx) => (
-                <div key={idx} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-3">
+                <div key={idx} className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_auto]">
                   <Input
+                    aria-label={`Default header ${idx + 1} name`}
                     placeholder="Header name"
                     value={row.key}
                     onChange={(e) => {
@@ -646,6 +610,7 @@ function OpenApiEditor({
                     }}
                   />
                   <Input
+                    aria-label={`Default header ${idx + 1} value`}
                     placeholder="Header value"
                     value={row.value}
                     onChange={(e) => {
@@ -670,7 +635,7 @@ function OpenApiEditor({
             </div>
           )}
         </div>
-      </Section>
+      </SectionCard>
 
       <div className="flex items-center justify-end gap-3 pt-2">
         <Button type="submit" loading={saveMutation.isPending}>
@@ -720,31 +685,23 @@ function AdvancedJsonEditor({
   });
 
   return (
-    <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-5">
-      <div className="text-sm font-semibold text-zinc-100">Advanced JSON</div>
-      <div className="mt-1 text-xs text-zinc-500">
-        Direct payload editor (temporary). UI will replace this with dedicated editors per type.
-      </div>
+    <SectionCard
+      title="Advanced JSON"
+      subtitle="Direct payload editor (temporary). UI will replace this with dedicated editors per type."
+      bodyClassName="space-y-4"
+    >
+      {error && <Callout tone="danger">{error}</Callout>}
 
-      {error && (
-        <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200">
-          {error}
-        </div>
-      )}
+      <Textarea
+        value={text}
+        onChange={(e) => {
+          setError(null);
+          setText(e.target.value);
+        }}
+        rows={18}
+      />
 
-      <div className="mt-4">
-        <textarea
-          value={text}
-          onChange={(e) => {
-            setError(null);
-            setText(e.target.value);
-          }}
-          rows={18}
-          className="w-full rounded-lg bg-zinc-950/80 border border-zinc-800 px-3 py-2 text-xs text-zinc-200 font-mono focus:outline-none focus:ring-2 focus:ring-violet-500/50"
-        />
-      </div>
-
-      <div className="mt-4 flex items-center justify-end gap-3">
+      <div className="flex items-center justify-end gap-3">
         <Button
           type="button"
           variant="secondary"
@@ -754,52 +711,7 @@ function AdvancedJsonEditor({
           Save JSON
         </Button>
       </div>
-    </div>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-5">
-      <div className="text-sm font-semibold text-zinc-100">{title}</div>
-      <div className="mt-4 space-y-4">{children}</div>
-    </div>
-  );
-}
-
-function SelectField({
-  label,
-  value,
-  onChange,
-  options,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string }[];
-}) {
-  return (
-    <div className="space-y-1.5">
-      <label className="block text-sm font-medium text-zinc-300">{label}</label>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className={[
-          "w-full rounded-lg border border-zinc-700/80 bg-zinc-900/50",
-          "text-zinc-100 placeholder:text-zinc-500",
-          "transition-all duration-150",
-          "focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500/50",
-          "hover:border-zinc-600/80",
-          "px-3 py-2 text-sm",
-        ].join(" ")}
-      >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </div>
+    </SectionCard>
   );
 }
 

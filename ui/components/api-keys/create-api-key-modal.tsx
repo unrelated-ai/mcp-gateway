@@ -2,9 +2,8 @@
 
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Button, Input, Modal, ModalActions } from "@/components/ui";
-import { CheckCircleIcon, WarningIconAlt } from "@/components/icons";
-import { useCopyToClipboard } from "@/src/lib/useCopyToClipboard";
+import { Button, Callout, CopyBlock, Input, Modal, ModalActions } from "@/components/ui";
+import { CheckCircleIcon } from "@/components/icons";
 import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
 import { useToastStore } from "@/src/lib/toast-store";
@@ -59,29 +58,22 @@ export function CreateApiKeyModal({
     <Modal
       open
       onClose={close}
-      title={secret ? "API Key Created" : "Create API Key"}
+      title={secret ? "API key created" : "Create API key"}
       description="API key secrets are only displayed at creation time."
       size="lg"
     >
       {secret ? (
         <div>
-          <div className="flex items-center gap-2 text-sm font-medium text-emerald-400 mb-4">
-            <CheckCircleIcon className="w-5 h-5" />
+          <div className="mb-4 flex items-center gap-2 text-sm font-medium text-ok">
+            <CheckCircleIcon className="size-5" />
             Key created successfully
           </div>
 
-          <div className="p-4 rounded-xl bg-zinc-950/80 border border-zinc-800">
-            <div className="flex items-center justify-between gap-2 mb-2">
-              <span className="text-xs text-zinc-500">API Key Secret</span>
-              <CopyButton text={secret} />
-            </div>
-            <code className="text-sm font-mono text-emerald-400 break-all">{secret}</code>
-          </div>
+          <CopyBlock label="API key secret" value={secret} />
 
-          <div className="mt-4 flex items-start gap-2 text-xs text-amber-400">
-            <WarningIcon className="w-4 h-4 shrink-0 mt-0.5" />
-            <span>Copy this key now. You won&apos;t be able to see it again after closing.</span>
-          </div>
+          <Callout tone="warn" className="mt-4">
+            Copy this key now. You won&apos;t be able to see it again after closing.
+          </Callout>
 
           <div className="mt-6">
             <Button className="w-full" variant="secondary" onClick={close}>
@@ -98,32 +90,30 @@ export function CreateApiKeyModal({
           }}
         >
           {error && (
-            <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-200">
+            <Callout tone="danger" size="sm">
               {error}
-            </div>
+            </Callout>
           )}
 
           <Input
-            label="Key Name (optional)"
-            placeholder={scope === "tenant" ? "e.g., Tenant-wide key" : "e.g., Profile key"}
+            label="Key name (optional)"
+            placeholder={scope === "tenant" ? "e.g. Tenant-wide key" : "e.g. Profile key"}
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
 
-          <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4 text-sm text-zinc-400">
+          <div className="rounded-lg border border-edge bg-well p-4 text-sm">
             {scope === "tenant" ? (
               <>
-                <div className="text-zinc-200 font-medium">Tenant-wide key</div>
-                <div className="mt-1 text-xs text-zinc-500">
+                <div className="font-medium text-fg">Tenant-wide key</div>
+                <div className="mt-1 text-xs text-faint">
                   Can be used to authenticate to any profile in this tenant.
                 </div>
               </>
             ) : (
               <>
-                <div className="text-zinc-200 font-medium">Profile-scoped key</div>
-                <div className="mt-1 text-xs text-zinc-500">
-                  Works only for the selected profile.
-                </div>
+                <div className="font-medium text-fg">Profile-scoped key</div>
+                <div className="mt-1 text-xs text-faint">Works only for the selected profile.</div>
                 <div className="mt-3">
                   <Input label="Profile ID" value={fixedProfileId} disabled className="font-mono" />
                 </div>
@@ -145,7 +135,7 @@ export function CreateApiKeyModal({
               loading={createMutation.isPending}
               disabled={scope === "profile" && !fixedProfileId}
             >
-              Create Key
+              Create key
             </Button>
           </ModalActions>
         </form>
@@ -153,21 +143,3 @@ export function CreateApiKeyModal({
     </Modal>
   );
 }
-
-function CopyButton({ text }: { text: string }) {
-  const { copied, copy } = useCopyToClipboard(text);
-
-  return (
-    <button
-      type="button"
-      onClick={async () => {
-        await copy();
-      }}
-      className="px-2 py-1 rounded text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
-    >
-      {copied ? "Copied!" : "Copy"}
-    </button>
-  );
-}
-
-const WarningIcon = WarningIconAlt;

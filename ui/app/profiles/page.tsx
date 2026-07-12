@@ -1,26 +1,28 @@
 "use client";
 
 import { useMemo } from "react";
-import { AppShell, PageContent, PageHeader } from "@/components/layout";
-import type { Profile } from "@/src/lib/types";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AppShell, PageContent, PageHeader } from "@/components/layout";
+import {
+  Badge,
+  Button,
+  Callout,
+  EmptyState,
+  EndpointWell,
+  SkeletonRows,
+  Stat,
+  Toggle,
+} from "@/components/ui";
+import { ChevronRightIcon, GridIcon, PlusIcon } from "@/components/icons";
+import type { Profile } from "@/src/lib/types";
 import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
 import { useToastStore } from "@/src/lib/toast-store";
 import { authModeTone, formatDataPlaneAuthMode } from "@/src/lib/display";
 import { buildPutProfileBody } from "@/src/lib/profilePut";
 import { GATEWAY_DATA_BASE } from "@/src/lib/env";
-import { useCopyToClipboard } from "@/src/lib/useCopyToClipboard";
-import { Toggle } from "@/components/ui";
-import {
-  CheckCircleIcon,
-  CheckIcon,
-  ChevronRightIcon,
-  CopyIcon,
-  GridIcon,
-  PlusIcon,
-} from "@/components/icons";
 
 const EMPTY_PROFILES: Profile[] = [];
 
@@ -45,42 +47,35 @@ export default function ProfilesPage() {
         title="Profiles"
         description="Virtual MCP servers with their own endpoints, auth, and tool configurations"
         actions={
-          <button
-            onClick={() => router.push("/profiles/new")}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-b from-violet-500 to-violet-600 text-white font-medium text-sm shadow-lg shadow-violet-500/25 hover:from-violet-400 hover:to-violet-500 transition-all duration-150"
-          >
-            <PlusIcon className="w-4 h-4" />
-            Create Profile
-          </button>
+          <Button onClick={() => router.push("/profiles/new")}>
+            <PlusIcon className="size-4" />
+            Create profile
+          </Button>
         }
       />
 
       <PageContent>
         {/* Stats row */}
-        <div className="grid grid-cols-2 gap-4 mb-6">
-          <StatCard
-            label="Total Profiles"
-            value={stats.total.toString()}
-            icon={<GridIcon className="w-5 h-5" />}
-          />
-          <StatCard
-            label="Active"
-            value={stats.active.toString()}
-            icon={<CheckCircleIcon className="w-5 h-5" />}
-            color="emerald"
-          />
+        <div className="mb-6 grid grid-cols-2 gap-4">
+          <Stat label="Profiles" value={stats.total} />
+          <Stat label="Active" value={stats.active} tone={stats.active > 0 ? "ok" : "neutral"} />
         </div>
 
-        {/* Profiles list */}
-        {profilesQuery.isPending && <div className="text-sm text-zinc-400">Loading…</div>}
+        {profilesQuery.isPending && <SkeletonRows rows={3} />}
         {profilesQuery.error && (
-          <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200">
-            {profilesQuery.error instanceof Error
-              ? profilesQuery.error.message
-              : "Failed to load profiles"}
-          </div>
+          <Callout tone="danger" title="Failed to load profiles" size="md">
+            {profilesQuery.error instanceof Error ? profilesQuery.error.message : "Unknown error"}
+          </Callout>
         )}
-        {!profilesQuery.isPending && !profilesQuery.error && (
+        {!profilesQuery.isPending && !profilesQuery.error && profiles.length === 0 && (
+          <EmptyState
+            icon={<GridIcon className="size-5" />}
+            title="No profiles yet"
+            description="Create a profile to get an MCP endpoint your agents can connect to."
+            action={{ label: "Create profile", onClick: () => router.push("/profiles/new") }}
+          />
+        )}
+        {!profilesQuery.isPending && !profilesQuery.error && profiles.length > 0 && (
           <div className="space-y-3">
             {profiles.map((profile) => (
               <ProfileCard
@@ -96,37 +91,7 @@ export default function ProfilesPage() {
   );
 }
 
-function StatCard({
-  label,
-  value,
-  icon,
-  color = "violet",
-}: {
-  label: string;
-  value: string;
-  icon: React.ReactNode;
-  color?: "violet" | "emerald";
-}) {
-  const colorClasses = {
-    violet: "text-violet-400 bg-violet-500/10",
-    emerald: "text-emerald-400 bg-emerald-500/10",
-  };
-
-  return (
-    <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-4">
-      <div className="flex items-center gap-3">
-        <div className={`p-2 rounded-lg ${colorClasses[color]}`}>{icon}</div>
-        <div>
-          <div className="text-2xl font-bold text-white">{value}</div>
-          <div className="text-xs text-zinc-500">{label}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function ProfileCard({ profile, mcpUrl }: { profile: Profile; mcpUrl: string }) {
-  const { copied, copy } = useCopyToClipboard(mcpUrl);
   const queryClient = useQueryClient();
   const pushToast = useToastStore((s) => s.push);
 
@@ -159,110 +124,52 @@ function ProfileCard({ profile, mcpUrl }: { profile: Profile; mcpUrl: string }) 
     },
   });
 
-  const handleCopy = async () => {
-    await copy();
-  };
-
   const enabled = profile.enabled;
-  const tone = authModeTone(profile.dataPlaneAuth.mode);
-  const authLabel = formatDataPlaneAuthMode(profile.dataPlaneAuth.mode);
   const sourcesCount = profile.sources.length + profile.upstreams.length;
 
-  const cardCls = enabled
-    ? "border-emerald-500/20 bg-zinc-900/40 hover:border-emerald-500/30"
-    : "border-zinc-800/60 bg-zinc-900/30 hover:border-zinc-700/80";
-
-  const urlCls = enabled
-    ? "bg-emerald-500/5 border-emerald-500/25"
-    : "bg-zinc-950/40 border-zinc-800/60";
-
   return (
-    <a
-      href={`/profiles/${profile.id}`}
-      className={`block rounded-xl border p-5 transition-all duration-150 group ${cardCls}`}
-    >
+    // Stretched-link card: the title Link covers the card via ::after, and the
+    // interactive controls (toggle, copy) sit above it — no nested interactives.
+    <div className="group relative rounded-lg border border-edge bg-surface p-5 transition-colors duration-150 hover:border-edge-strong">
       <div className="flex items-start justify-between gap-4">
-        <div className="flex-1 min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-3">
-            <h3 className="text-base font-semibold text-zinc-100 group-hover:text-white transition-colors">
-              {profile.name}
-            </h3>
-            <span
-              className={`px-2 py-0.5 rounded-full text-xs font-medium border ${
-                tone === "violet"
-                  ? "bg-violet-500/10 text-violet-400 border-violet-500/20"
-                  : tone === "amber"
-                    ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
-                    : "bg-zinc-500/10 text-zinc-400 border-zinc-500/20"
-              }`}
+            <Link
+              href={`/profiles/${profile.id}`}
+              className="text-base font-semibold text-fg after:absolute after:inset-0 after:rounded-lg focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-accent"
             >
-              {authLabel}
-            </span>
+              {profile.name}
+            </Link>
+            <Badge tone={authModeTone(profile.dataPlaneAuth.mode)}>
+              {formatDataPlaneAuthMode(profile.dataPlaneAuth.mode)}
+            </Badge>
 
-            <div className="ml-auto flex items-center gap-2">
-              <div
-                onClick={(e) => {
-                  // Prevent the card link from navigating when toggling.
-                  e.preventDefault();
-                  e.stopPropagation();
-                }}
-              >
-                <Toggle
-                  checked={enabled}
-                  onChange={(next) => toggleEnabledMutation.mutate(next)}
-                  disabled={toggleEnabledMutation.isPending}
-                  label={enabled ? "Enabled" : "Disabled"}
-                  switchSide="right"
-                />
-              </div>
+            <div className="relative z-10 ml-auto flex items-center gap-2">
+              <Toggle
+                checked={enabled}
+                onChange={(next) => toggleEnabledMutation.mutate(next)}
+                disabled={toggleEnabledMutation.isPending}
+                label={enabled ? "Enabled" : "Disabled"}
+                switchSide="right"
+              />
             </div>
           </div>
-          {profile.description && (
-            <p className="mt-1 text-sm text-zinc-500">{profile.description}</p>
-          )}
+          {profile.description && <p className="mt-1 text-sm text-muted">{profile.description}</p>}
 
-          {/* MCP URL */}
-          <div className="mt-3 flex items-center gap-2">
-            <div className={`flex-1 min-w-0 px-4 py-2.5 rounded-lg border ${urlCls}`}>
-              <code
-                className={`text-sm font-mono truncate block ${
-                  enabled ? "text-emerald-200" : "text-zinc-300"
-                }`}
-              >
-                {mcpUrl}
-              </code>
-            </div>
-            <button
-              onClick={(e) => {
-                e.preventDefault();
-                handleCopy();
-              }}
-              className="shrink-0 px-3 py-2.5 rounded-lg bg-zinc-800 text-zinc-300 text-xs font-medium hover:bg-zinc-700 hover:text-white transition-colors"
-            >
-              {copied ? (
-                <span className="flex items-center gap-1.5">
-                  <CheckIcon className="w-3.5 h-3.5 text-emerald-400" />
-                  Copied
-                </span>
-              ) : (
-                <span className="flex items-center gap-1.5">
-                  <CopyIcon className="w-3.5 h-3.5" />
-                  Copy URL
-                </span>
-              )}
-            </button>
+          <div className="relative z-10 mt-3">
+            <EndpointWell url={mcpUrl} live={enabled} />
           </div>
         </div>
 
         {/* Stats */}
-        <div className="hidden sm:flex items-center gap-6 text-sm">
+        <div className="hidden items-center gap-5 self-center sm:flex">
           <div className="text-center">
-            <div className="text-lg font-semibold text-zinc-100">{sourcesCount}</div>
-            <div className="text-xs text-zinc-500">Sources</div>
+            <div className="font-mono text-lg font-medium text-fg">{sourcesCount}</div>
+            <div className="eyebrow">Sources</div>
           </div>
-          <ChevronRightIcon className="w-5 h-5 text-zinc-600 group-hover:text-zinc-400 transition-colors" />
+          <ChevronRightIcon className="size-5 text-faint transition-colors group-hover:text-muted" />
         </div>
       </div>
-    </a>
+    </div>
   );
 }

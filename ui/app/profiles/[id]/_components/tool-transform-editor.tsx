@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { ProfileSurface } from "@/src/lib/tenantApi";
-import { Input, Textarea, Toggle } from "@/components/ui";
+import { Button, Callout, Input, SectionCard, Textarea, Toggle } from "@/components/ui";
 
 // NOTE: `ui/src/lib/types.ts` defines `Profile.transforms` as `unknown`. We keep the
 // editor typed, but accept/emit `unknown`-compatible shapes.
@@ -214,19 +214,12 @@ export function ToolTransformEditor({
   return (
     <div className="space-y-5">
       {!enabled ? (
-        <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4 text-sm text-zinc-400">
-          This tool is currently disabled for this profile.
-        </div>
+        <Callout tone="neutral">This tool is currently disabled for this profile.</Callout>
       ) : null}
 
-      {error && (
-        <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-200">
-          {error}
-        </div>
-      )}
+      {error && <Callout tone="danger">{error}</Callout>}
 
-      <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4 space-y-3">
-        <div className="text-sm font-semibold text-zinc-100">Tool rename</div>
+      <SectionCard title="Tool rename" bodyClassName="space-y-3">
         <Input
           value={renameTool}
           onChange={(e) => {
@@ -241,13 +234,12 @@ export function ToolTransformEditor({
           }}
           placeholder="(optional) New exposed tool name"
         />
-        <div className="text-xs text-zinc-500">
-          Original name: <span className="font-mono text-zinc-200">{tool.originalName}</span>
+        <div className="text-xs text-faint">
+          Original name: <span className="font-mono text-fg">{tool.originalName}</span>
         </div>
-      </div>
+      </SectionCard>
 
-      <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4 space-y-3">
-        <div className="text-sm font-semibold text-zinc-100">Description override</div>
+      <SectionCard title="Description override" bodyClassName="space-y-3">
         <Textarea
           value={descriptionText}
           onChange={(e) => {
@@ -261,12 +253,14 @@ export function ToolTransformEditor({
           rows={3}
         />
         <div className="flex items-center justify-between gap-3">
-          <div className="text-xs text-zinc-500">
+          <div className="text-xs text-faint">
             {hasExistingDescriptionOverride ? "Editing override." : ""}
           </div>
           {hasExistingDescriptionOverride && (
-            <button
+            <Button
               type="button"
+              variant="secondary"
+              size="sm"
               onClick={() => {
                 setError(null);
                 setDescriptionText(originalDescription);
@@ -278,34 +272,21 @@ export function ToolTransformEditor({
                   descriptionTouched: true,
                 });
               }}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-300 bg-zinc-800/60 hover:bg-zinc-800 transition-colors"
             >
               Reset to original
-            </button>
+            </Button>
           )}
         </div>
-      </div>
+      </SectionCard>
 
-      <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4 space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold text-zinc-100">Arguments</div>
-            <div className="mt-1 text-xs text-zinc-500">
-              Rename, defaults, visibility, and null handling.
-            </div>
-          </div>
-        </div>
-
+      <SectionCard title="Arguments" subtitle="Rename, defaults, visibility, and null handling.">
         <div className="space-y-3">
           {paramRows.map((row) => (
-            <div
-              key={row.name}
-              className="rounded-xl border border-zinc-800/60 bg-zinc-900/30 p-3 space-y-3"
-            >
+            <div key={row.name} className="rounded-lg border border-edge bg-well p-3 space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="text-xs text-zinc-500">Argument</div>
-                  <div className="text-sm font-semibold text-zinc-200 font-mono break-all">
+                  <div className="eyebrow">Argument</div>
+                  <div className="text-sm font-semibold text-fg font-mono break-all">
                     {row.name}
                   </div>
                 </div>
@@ -379,7 +360,7 @@ export function ToolTransformEditor({
             </div>
           ))}
         </div>
-      </div>
+      </SectionCard>
     </div>
   );
 }

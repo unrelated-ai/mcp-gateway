@@ -6,7 +6,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { CheckCircleIconBold, CheckIcon, ExclamationIcon, UnlockIcon } from "@/components/icons";
-import { CopyBlock, Modal } from "@/components/ui";
+import { Button, CopyBlock, Modal } from "@/components/ui";
 import {
   decodeTenantTokenPayload,
   establishTenantSession,
@@ -18,6 +18,15 @@ const unlockSchema = z.object({
 });
 
 type UnlockForm = z.infer<typeof unlockSchema>;
+
+/**
+ * Only allow same-origin path redirects. `//evil.com` is a protocol-relative
+ * external URL and must not pass (open redirect).
+ */
+function safeNextPath(raw: string | null): string {
+  if (raw && raw.startsWith("/") && !raw.startsWith("//")) return raw;
+  return "/profiles";
+}
 
 export function UnlockTenantCard() {
   const router = useRouter();
@@ -81,7 +90,7 @@ export function UnlockTenantCard() {
         typeof window !== "undefined"
           ? new URLSearchParams(window.location.search).get("next")
           : null;
-      router.replace(next && next.startsWith("/") ? next : "/profiles");
+      router.replace(safeNextPath(next));
     } catch (e) {
       setError("token", {
         type: "validate",
@@ -93,13 +102,11 @@ export function UnlockTenantCard() {
   };
 
   return (
-    <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/60 backdrop-blur-sm overflow-hidden">
+    <div className="overflow-hidden rounded-lg border border-edge bg-surface">
       <div className="p-6">
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="text-sm font-semibold text-zinc-100">Unlock tenant</h2>
-        </div>
+        <div className="eyebrow">Unlock tenant</div>
 
-        <p className="mt-2 text-sm text-zinc-400">
+        <p className="mt-2 text-sm text-muted">
           Paste your tenant token to access the dashboard. This token grants administrative access
           to the tenant.
         </p>
@@ -115,76 +122,66 @@ export function UnlockTenantCard() {
           })}
           rows={4}
           placeholder="tv1.<payload_b64>.<sig_b64>"
-          className="w-full rounded-xl border border-zinc-800 bg-zinc-950/80 p-4 font-mono text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500/50 transition-all resize-none"
+          className="mt-4 w-full resize-none rounded-md border border-edge-strong bg-well p-4 font-mono text-sm text-fg transition-colors placeholder:text-faint hover:border-faint/40 focus:border-accent/60 focus:outline-none focus:ring-2 focus:ring-accent/60"
         />
-        <p className="mt-2 text-xs text-zinc-500">
+        <p className="mt-2 text-xs text-faint">
           Token format:{" "}
-          <code className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">
+          <code className="rounded bg-raised px-1.5 py-0.5 font-mono text-muted">
             tv1.&lt;payload_b64&gt;.&lt;sig_b64&gt;
           </code>
         </p>
 
         {errors.token?.message && (
-          <div className="mt-3 flex items-start gap-2 rounded-xl bg-red-500/5 border border-red-500/20 p-3 text-sm text-red-300">
-            <ExclamationIcon className="w-5 h-5 shrink-0 mt-0.5 text-red-400" />
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-danger/25 bg-danger/5 p-3 text-sm">
+            <ExclamationIcon className="mt-0.5 size-5 shrink-0 text-danger" />
             <div className="min-w-0">
-              <div className="font-medium text-red-300">Token invalid</div>
-              <div className="text-xs text-red-300/80 mt-0.5 break-words whitespace-pre-wrap">
+              <div className="font-medium text-danger">Token invalid</div>
+              <div className="mt-0.5 whitespace-pre-wrap break-words text-xs text-muted">
                 {errors.token.message}
               </div>
             </div>
           </div>
         )}
 
-        <button
+        <Button
+          variant="secondary"
           onClick={handleValidate}
-          disabled={!tokenDraft.trim() || isValidating}
-          className="mt-4 w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-zinc-800 text-zinc-100 font-medium border border-zinc-700 hover:bg-zinc-700 hover:border-zinc-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-150"
+          disabled={!tokenDraft.trim()}
+          loading={isValidating}
+          className="mt-4 w-full"
+          size="lg"
         >
-          {isValidating ? (
-            <>
-              <LoadingSpinner className="w-4 h-4" />
-              Validating...
-            </>
-          ) : (
-            <>
-              <CheckIcon className="w-4 h-4" />
-              Validate Token
-            </>
-          )}
-        </button>
+          {!isValidating && <CheckIcon className="size-4" />}
+          {isValidating ? "Validating…" : "Validate token"}
+        </Button>
       </div>
 
       {tokenInfo && (
-        <div className="border-t border-zinc-800/80 bg-zinc-900/40 p-6">
-          <div className="flex items-center gap-2 text-sm font-medium text-emerald-400 mb-4">
-            <CheckCircleIconBold className="w-5 h-5" />
-            Token validated successfully
+        <div className="border-t border-edge bg-raised/40 p-6">
+          <div className="mb-4 flex items-center gap-2 text-sm font-medium text-ok">
+            <CheckCircleIconBold className="size-5" />
+            Token validated
           </div>
 
-          <div className="space-y-3">
+          <div className="space-y-1">
             <InfoRow label="Tenant ID" value={tokenInfo.payload.tenant_id} highlight />
             <InfoRow label="Expires" value={formatDate(tokenInfo.expires_at)} />
           </div>
 
-          <button
-            onClick={handleUnlock}
-            disabled={isUnlocking}
-            className="mt-6 w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-b from-violet-500 to-violet-600 text-white font-medium shadow-lg shadow-violet-500/25 hover:from-violet-400 hover:to-violet-500 transition-all duration-150"
-          >
-            <UnlockIcon className="w-5 h-5" />
-            {isUnlocking ? "Unlocking..." : "Unlock & Enter Dashboard"}
-          </button>
+          <Button onClick={handleUnlock} loading={isUnlocking} className="mt-6 w-full" size="lg">
+            {!isUnlocking && <UnlockIcon className="size-4" />}
+            {isUnlocking ? "Unlocking…" : "Unlock and enter dashboard"}
+          </Button>
         </div>
       )}
 
-      <div className="border-t border-zinc-800/80 bg-zinc-950/30 p-4 text-xs text-zinc-500">
+      <div className="border-t border-edge bg-well/60 p-4 text-xs text-faint">
         Can&apos;t find your tenant token? If you want to start over, reset the DB and then revisit
         this page to re-run onboarding.{" "}
         <button
           type="button"
           onClick={() => setShowResetHelp(true)}
-          className="text-zinc-300 hover:text-white underline decoration-dotted underline-offset-4"
+          className="text-muted underline decoration-dotted underline-offset-4 transition-colors hover:text-fg"
         >
           I want to know how
         </button>
@@ -204,8 +201,8 @@ function ResetDbHelpModal({ open, onClose }: { open: boolean; onClose: () => voi
       description="This deletes ALL tenants and configuration in the docker-compose Postgres DB."
       size="lg"
     >
-      <div className="space-y-4 text-sm text-zinc-300">
-        <p className="text-zinc-400">
+      <div className="space-y-4 text-sm text-fg">
+        <p className="text-muted">
           If you manage the machine running the stack (local/dev), you can wipe the database so the
           Gateway boots into onboarding again.
         </p>
@@ -222,7 +219,7 @@ function ResetDbHelpModal({ open, onClose }: { open: boolean; onClose: () => voi
           value={`docker compose --profile manual run --rm gateway_db_reset\ndocker compose up -d --build`}
         />
 
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-faint">
           After resetting, refresh this page. Onboarding will appear only if bootstrap is enabled
           and the DB has zero tenants.
         </p>
@@ -241,11 +238,9 @@ function InfoRow({
   highlight?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 py-2 border-b border-zinc-800/40 last:border-0">
-      <span className="text-sm text-zinc-400">{label}</span>
-      <span
-        className={`text-sm font-mono ${highlight ? "text-white font-medium" : "text-zinc-300"}`}
-      >
+    <div className="flex items-center justify-between gap-4 border-b border-edge/60 py-2 last:border-0">
+      <span className="text-sm text-muted">{label}</span>
+      <span className={`font-mono text-sm ${highlight ? "font-medium text-fg" : "text-muted"}`}>
         {value}
       </span>
     </div>
@@ -260,17 +255,4 @@ function formatDate(iso: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-function LoadingSpinner({ className }: { className?: string }) {
-  return (
-    <svg className={`animate-spin ${className}`} fill="none" viewBox="0 0 24 24">
-      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-      <path
-        className="opacity-75"
-        fill="currentColor"
-        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-      />
-    </svg>
-  );
 }

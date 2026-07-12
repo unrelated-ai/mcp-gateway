@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { CheckIcon, CopyIcon, SparkIcon } from "@/components/icons";
+import { Button, Callout, CopyBlock } from "@/components/ui";
 import { useCopyToClipboard } from "@/src/lib/useCopyToClipboard";
 
 const STORAGE_KEY = "ugw_onboarding_step_v1";
@@ -150,160 +151,129 @@ export default function OnboardingPage() {
   };
 
   return (
-    <div className="min-h-full bg-zinc-950 flex items-center justify-center p-6">
-      {/* Background effects */}
-      <div className="fixed inset-0 bg-gradient-to-br from-emerald-500/5 via-transparent to-violet-500/5" />
-      <div className="fixed top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[450px] bg-emerald-500/10 blur-[110px] rounded-full" />
-
-      <div className="relative w-full max-w-2xl">
-        <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/60 backdrop-blur-sm overflow-hidden">
+    <div className="flex min-h-full items-center justify-center bg-bg p-6">
+      <div className="w-full max-w-2xl">
+        <div className="overflow-hidden rounded-lg border border-edge bg-surface">
           <div className="p-8">
             <div className="flex items-center justify-between gap-4">
-              <div className="text-sm text-zinc-400">{stepLabel}</div>
-              <div className="text-xs text-zinc-500">Fresh install onboarding</div>
+              <div className="eyebrow">{stepLabel}</div>
+              <div className="text-xs text-faint">Fresh install onboarding</div>
             </div>
 
-            <h1 className="mt-4 text-3xl sm:text-4xl font-bold text-white tracking-tight">
-              {title}
-            </h1>
+            <h1 className="mt-4 text-2xl font-semibold tracking-tight text-fg">{title}</h1>
 
             {step === 1 && (
-              <p className="mt-4 text-lg text-zinc-400 max-w-2xl">
-                A <b className="text-zinc-200">tenant</b> is an isolated configuration scope. Think
-                of it as a team of developers or a big isolated project: it owns its profiles,
-                upstreams, secrets, tool sources, and API keys.
+              <p className="mt-4 max-w-2xl text-sm text-muted">
+                A <b className="text-fg">tenant</b> is an isolated configuration scope. Think of it
+                as a team of developers or a big isolated project: it owns its profiles, upstreams,
+                secrets, tool sources, and API keys.
               </p>
             )}
 
             {step === 2 && (
-              <p className="mt-4 text-lg text-zinc-400 max-w-2xl">
-                A <b className="text-zinc-200">profile</b> is a tenant-owned MCP endpoint (a URL
-                path). It defines how requests are routed to upstream MCP servers, and lets you
-                transform, filter, and control what tools/resources/prompts are exposed.
+              <p className="mt-4 max-w-2xl text-sm text-muted">
+                A <b className="text-fg">profile</b> is a tenant-owned MCP endpoint (a URL path). It
+                defines how requests are routed to upstream MCP servers, and lets you transform,
+                filter, and control what tools/resources/prompts are exposed.
               </p>
             )}
 
             {step === 3 && (
               <>
-                <p className="mt-4 text-lg text-zinc-400 max-w-2xl">
+                <p className="mt-4 max-w-2xl text-sm text-muted">
                   You’re ready to create your first tenant. This will also create a starter profile
                   automatically.
                 </p>
 
                 {createError && (
-                  <div className="mt-5 rounded-xl bg-red-500/5 border border-red-500/20 p-4 text-sm text-red-300">
-                    <div className="font-medium">Could not create tenant</div>
-                    <div className="mt-1 text-xs text-red-300/80 break-words whitespace-pre-wrap">
-                      {createError}
-                    </div>
-                  </div>
+                  <Callout tone="danger" title="Could not create tenant" className="mt-5">
+                    <span className="whitespace-pre-wrap break-words">{createError}</span>
+                  </Callout>
                 )}
 
-                <button
+                <Button
                   onClick={createTenant}
-                  disabled={createLoading}
-                  className="mt-6 w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-gradient-to-b from-emerald-500 to-emerald-600 text-white font-semibold shadow-lg shadow-emerald-500/20 hover:from-emerald-400 hover:to-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-150"
+                  loading={createLoading}
+                  size="lg"
+                  className="mt-6 w-full"
                 >
-                  {createLoading ? (
-                    <>
-                      <LoadingSpinner className="w-4 h-4" />
-                      Creating tenant…
-                    </>
-                  ) : (
-                    <>
-                      <SparkIcon className="w-4 h-4" />
-                      Create first tenant
-                    </>
-                  )}
-                </button>
+                  {!createLoading && <SparkIcon className="size-4" />}
+                  {createLoading ? "Creating tenant…" : "Create first tenant"}
+                </Button>
 
-                <div className="mt-6 rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-4">
-                  <div className="text-sm font-medium text-zinc-200">More tenants later</div>
-                  <p className="mt-2 text-sm text-zinc-400">
-                    You can always create more tenants using the CLI.
+                <div className="mt-6 rounded-lg border border-edge p-4">
+                  <div className="text-sm font-medium text-fg">More tenants later</div>
+                  <p className="mt-2 text-sm text-muted">
+                    Additional tenants require Gateway admin credentials. For this repository&apos;s
+                    local Docker Compose stack, use the authenticated CLI helper:
                   </p>
-                  <div className="mt-3 text-xs text-zinc-400">Example:</div>
-                  <pre className="mt-2 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 text-xs text-zinc-200 overflow-x-auto">
-                    {`# Create a new tenant
-cargo run -p unrelated-gateway-admin -- tenants put my-tenant
+                  <div className="mt-3">
+                    <CopyBlock
+                      label="Local Docker Compose"
+                      language="bash"
+                      value={`# Create a new tenant
+make cli-dev CLI_ARGS="tenants put my-tenant"
 
 # Issue a tenant token
-cargo run -p unrelated-gateway-admin -- tenants issue-token my-tenant --ttl-seconds 3600`}
-                  </pre>
+make cli-dev CLI_ARGS="tenants issue-token my-tenant --ttl-seconds 3600"`}
+                    />
+                  </div>
                 </div>
               </>
             )}
 
             {step === 4 && (
               <>
-                <p className="mt-4 text-lg text-zinc-400 max-w-2xl">
-                  This is your <b className="text-zinc-200">tenant token</b>. Save it now — you
-                  won’t be able to view it again after you refresh this page or leave onboarding.
+                <p className="mt-4 max-w-2xl text-sm text-muted">
+                  This is your <b className="text-fg">tenant token</b>. Save it now — you won’t be
+                  able to view it again after you refresh this page or leave onboarding.
                 </p>
 
-                <div className="mt-6 rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
-                  <div className="text-xs text-zinc-400 mb-2">Tenant token</div>
-                  <div className="font-mono text-sm text-zinc-100 break-all select-none">
+                <div className="mt-6 rounded-lg border border-edge bg-well p-4">
+                  <div className="eyebrow mb-2">Tenant token</div>
+                  <div className="select-none break-all font-mono text-sm text-fg">
                     {token ?? "(token unavailable)"}
                   </div>
                 </div>
 
-                <button
+                <Button
+                  variant="secondary"
+                  size="lg"
                   onClick={copyToken}
                   disabled={!token}
-                  className="mt-4 w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-zinc-800 text-zinc-100 font-semibold border border-zinc-700 hover:bg-zinc-700 hover:border-zinc-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-150"
+                  className="mt-4 w-full"
                 >
                   {tokenCopied ? (
                     <>
-                      <CheckIcon className="w-5 h-5 text-emerald-400" />
+                      <CheckIcon className="size-4 text-ok" />
                       Token copied
                     </>
                   ) : (
                     <>
-                      <CopyIcon className="w-5 h-5" />
+                      <CopyIcon className="size-4" />
                       Copy token
                     </>
                   )}
-                </button>
+                </Button>
               </>
             )}
           </div>
 
           {step !== 3 && (
-            <div className="border-t border-zinc-800/80 bg-zinc-900/40 p-6">
+            <div className="border-t border-edge bg-raised/40 p-6">
               {step === 4 ? (
-                <button
-                  onClick={finish}
-                  disabled={!tokenCopied}
-                  className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-gradient-to-b from-emerald-500 to-emerald-600 text-white font-semibold shadow-lg shadow-emerald-500/20 hover:from-emerald-400 hover:to-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-150"
-                >
+                <Button onClick={finish} disabled={!tokenCopied} size="lg" className="w-full">
                   Next
-                </button>
+                </Button>
               ) : (
-                <button
-                  onClick={goNext}
-                  className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-gradient-to-b from-emerald-500 to-emerald-600 text-white font-semibold shadow-lg shadow-emerald-500/20 hover:from-emerald-400 hover:to-emerald-500 transition-all duration-150"
-                >
+                <Button onClick={goNext} size="lg" className="w-full">
                   Next
-                </button>
+                </Button>
               )}
             </div>
           )}
         </div>
       </div>
     </div>
-  );
-}
-
-function LoadingSpinner({ className }: { className?: string }) {
-  return (
-    <svg className={`animate-spin ${className}`} fill="none" viewBox="0 0 24 24">
-      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-      <path
-        className="opacity-75"
-        fill="currentColor"
-        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-      />
-    </svg>
   );
 }

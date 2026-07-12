@@ -6,24 +6,20 @@ import { ArrowLeftIcon, WarningIcon } from "@/components/icons";
 
 export default function UnlockPage() {
   return (
-    <div className="min-h-full bg-zinc-950 flex items-center justify-center p-6">
-      {/* Background effects */}
-      <div className="fixed inset-0 bg-gradient-to-br from-violet-500/5 via-transparent to-emerald-500/5" />
-      <div className="fixed top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[400px] bg-violet-500/10 blur-[100px] rounded-full" />
-
-      <div className="relative w-full max-w-2xl">
+    <div className="flex min-h-full items-center justify-center bg-bg p-6">
+      <div className="w-full max-w-2xl">
         {/* Header */}
-        <div className="text-center mb-8">
+        <div className="mb-8 text-center">
           <Link
             href="/"
-            className="inline-flex items-center gap-2 text-sm text-zinc-500 hover:text-zinc-300 transition-colors mb-6"
+            className="mb-6 inline-flex items-center gap-2 text-sm text-faint transition-colors hover:text-fg"
           >
-            <ArrowLeftIcon className="w-4 h-4" />
+            <ArrowLeftIcon className="size-4" />
             Back to home
           </Link>
 
-          <h1 className="text-2xl font-bold text-white">Unlock Tenant</h1>
-          <p className="mt-2 text-sm text-zinc-400 max-w-sm mx-auto">
+          <h1 className="text-2xl font-semibold text-fg">Unlock tenant</h1>
+          <p className="mx-auto mt-2 max-w-sm text-sm text-muted">
             Paste your tenant token to access the Gateway dashboard.
           </p>
         </div>
@@ -31,11 +27,11 @@ export default function UnlockPage() {
         <UnlockTenantCard />
 
         {/* Warning */}
-        <div className="mt-6 flex items-start gap-3 p-4 rounded-xl bg-amber-500/5 border border-amber-500/20">
-          <WarningIcon className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+        <div className="mt-6 flex items-start gap-3 rounded-lg border border-warn/25 bg-warn/5 p-4">
+          <WarningIcon className="mt-0.5 size-5 shrink-0 text-warn" />
           <div>
-            <p className="text-sm font-medium text-amber-400">Full Tenant Access</p>
-            <p className="mt-1 text-xs text-zinc-400">
+            <p className="text-sm font-medium text-warn">Full tenant access</p>
+            <p className="mt-1 text-xs text-muted">
               This token grants administrative privileges to the tenant. Keep it secure and avoid
               sharing it. This UI stores the session in this browser.
             </p>

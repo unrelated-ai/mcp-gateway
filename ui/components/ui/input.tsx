@@ -1,15 +1,57 @@
 "use client";
 
-import { forwardRef, type InputHTMLAttributes, type TextareaHTMLAttributes } from "react";
+import {
+  forwardRef,
+  useId,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type SelectHTMLAttributes,
+  type TextareaHTMLAttributes,
+} from "react";
 
-const baseStyles = `
-  w-full rounded-xl border border-zinc-700/80 bg-zinc-900/50
-  text-zinc-100 placeholder:text-zinc-500
-  transition-all duration-150
-  focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500/50
-  hover:border-zinc-600/80
+export const fieldControlStyles = `
+  w-full rounded-md border border-edge-strong bg-well
+  text-fg placeholder:text-faint
+  transition-colors duration-150
+  focus:outline-none focus:ring-2 focus:ring-accent/60 focus:border-accent/60
+  hover:border-faint/40
   disabled:opacity-50 disabled:cursor-not-allowed
 `;
+
+const errorControlStyles = "border-danger/50 focus:ring-danger/50 focus:border-danger/50";
+
+interface FieldProps {
+  label?: string;
+  hint?: string;
+  error?: string;
+  /** id of the control this field wraps */
+  htmlFor: string;
+  hintId: string;
+  children: ReactNode;
+}
+
+function Field({ label, hint, error, htmlFor, hintId, children }: FieldProps) {
+  return (
+    <div className="space-y-1.5">
+      {label && (
+        <label htmlFor={htmlFor} className="block text-sm font-medium text-fg">
+          {label}
+        </label>
+      )}
+      {children}
+      {hint && !error && (
+        <p id={hintId} className="text-xs text-faint">
+          {hint}
+        </p>
+      )}
+      {error && (
+        <p id={hintId} className="text-xs text-danger">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
 
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
@@ -19,24 +61,21 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(
   ({ className = "", label, hint, error, id, ...props }, ref) => {
-    const inputId = id || label?.toLowerCase().replace(/\s+/g, "-");
+    const autoId = useId();
+    const inputId = id ?? autoId;
+    const hintId = `${inputId}-hint`;
 
     return (
-      <div className="space-y-1.5">
-        {label && (
-          <label htmlFor={inputId} className="block text-sm font-medium text-zinc-300">
-            {label}
-          </label>
-        )}
+      <Field label={label} hint={hint} error={error} htmlFor={inputId} hintId={hintId}>
         <input
           ref={ref}
           id={inputId}
-          className={`${baseStyles} px-3 py-2 text-sm ${error ? "border-red-500/50 focus:ring-red-500/50 focus:border-red-500/50" : ""} ${className}`}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={hint || error ? hintId : undefined}
+          className={`${fieldControlStyles} h-9 px-3 text-sm ${error ? errorControlStyles : ""} ${className}`}
           {...props}
         />
-        {hint && !error && <p className="text-xs text-zinc-500">{hint}</p>}
-        {error && <p className="text-xs text-red-400">{error}</p>}
-      </div>
+      </Field>
     );
   },
 );
@@ -51,26 +90,66 @@ interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
 
 export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
   ({ className = "", label, hint, error, id, ...props }, ref) => {
-    const inputId = id || label?.toLowerCase().replace(/\s+/g, "-");
+    const autoId = useId();
+    const inputId = id ?? autoId;
+    const hintId = `${inputId}-hint`;
 
     return (
-      <div className="space-y-1.5">
-        {label && (
-          <label htmlFor={inputId} className="block text-sm font-medium text-zinc-300">
-            {label}
-          </label>
-        )}
+      <Field label={label} hint={hint} error={error} htmlFor={inputId} hintId={hintId}>
         <textarea
           ref={ref}
           id={inputId}
-          className={`${baseStyles} px-3 py-2 text-sm font-mono resize-none ${error ? "border-red-500/50" : ""} ${className}`}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={hint || error ? hintId : undefined}
+          className={`${fieldControlStyles} px-3 py-2 text-sm font-mono resize-none ${error ? errorControlStyles : ""} ${className}`}
           {...props}
         />
-        {hint && !error && <p className="text-xs text-zinc-500">{hint}</p>}
-        {error && <p className="text-xs text-red-400">{error}</p>}
-      </div>
+      </Field>
     );
   },
 );
 
 Textarea.displayName = "Textarea";
+
+interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
+  label?: string;
+  hint?: string;
+  error?: string;
+}
+
+export const Select = forwardRef<HTMLSelectElement, SelectProps>(
+  ({ className = "", label, hint, error, id, children, ...props }, ref) => {
+    const autoId = useId();
+    const inputId = id ?? autoId;
+    const hintId = `${inputId}-hint`;
+
+    return (
+      <Field label={label} hint={hint} error={error} htmlFor={inputId} hintId={hintId}>
+        <div className="relative">
+          <select
+            ref={ref}
+            id={inputId}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={hint || error ? hintId : undefined}
+            className={`${fieldControlStyles} h-9 appearance-none pl-3 pr-8 text-sm ${error ? errorControlStyles : ""} ${className}`}
+            {...props}
+          >
+            {children}
+          </select>
+          <svg
+            aria-hidden="true"
+            className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-faint"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 9l6 6 6-6" />
+          </svg>
+        </div>
+      </Field>
+    );
+  },
+);
+
+Select.displayName = "Select";

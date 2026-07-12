@@ -4,14 +4,14 @@ import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
-import { Button, Input, QueryParamAuthWarning } from "@/components/ui";
+import { Button, Callout, Input, QueryParamAuthWarning, Select } from "@/components/ui";
 import * as tenantApi from "@/src/lib/tenantApi";
 import { useToastStore } from "@/src/lib/toast-store";
 
 type WizardKind = "mcp" | "adapter";
 
 function kindLabel(kind: WizardKind) {
-  return kind === "adapter" ? "Adapter" : "MCP Server";
+  return kind === "adapter" ? "Adapter" : "MCP server";
 }
 
 function sanitizeIdBase(s: string): string {
@@ -64,7 +64,7 @@ export default function NewUpstreamWizardPage() {
           />
           <PageContent>
             <div className="mx-auto max-w-3xl">
-              <div className="rounded-2xl border border-zinc-800/60 bg-zinc-950/30 p-6 sm:p-8 text-sm text-zinc-400">
+              <div className="rounded-lg border border-edge bg-surface p-6 text-sm text-muted">
                 Loading…
               </div>
             </div>
@@ -175,21 +175,21 @@ function NewUpstreamWizardInner() {
 
       <PageContent>
         <div className="mx-auto max-w-3xl">
-          <div className="rounded-2xl border border-zinc-800/60 bg-zinc-950/30 overflow-hidden">
-            <div className="p-6 sm:p-8">
-              <div className="text-xs text-zinc-500">
+          <div className="overflow-hidden rounded-lg border border-edge bg-surface">
+            <div className="p-6">
+              <div className="eyebrow">
                 Step {step} of 2 · {kindLabel(kind)}
               </div>
-              <h1 className="mt-2 text-xl sm:text-2xl font-semibold text-zinc-100">{title}</h1>
-              <p className="mt-3 text-base text-zinc-400">
+              <h2 className="mt-2 text-lg font-semibold text-fg">{title}</h2>
+              <p className="mt-2 text-sm text-muted">
                 We’ll create a tenant-owned upstream. You can probe and edit endpoints later on the
                 upstream page.
               </p>
 
               {error ? (
-                <div className="mt-5 rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200">
+                <Callout tone="danger" size="md" className="mt-5">
                   {error}
-                </div>
+                </Callout>
               ) : null}
 
               {step === 1 ? (
@@ -207,9 +207,9 @@ function NewUpstreamWizardInner() {
                 </div>
               ) : (
                 <div className="mt-6 space-y-6">
-                  <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/30 p-4">
-                    <div className="text-xs text-zinc-500">Endpoint</div>
-                    <div className="mt-1 font-mono text-sm text-zinc-200 break-all">
+                  <div className="rounded-lg border border-edge bg-well p-4">
+                    <div className="eyebrow">Endpoint</div>
+                    <div className="mt-1 break-all font-mono text-sm text-fg">
                       {endpointUrl.trim()}
                     </div>
                   </div>
@@ -219,29 +219,22 @@ function NewUpstreamWizardInner() {
                     value={upstreamId}
                     onChange={(e) => setUpstreamId(e.target.value)}
                     className="font-mono"
-                    hint="Unique (case-insensitive). Used when attaching to profiles."
+                    hint="Unique (case-insensitive), used when attaching to profiles. Letters, digits, underscore, and dash only."
                   />
-                  <p className="text-xs text-zinc-500">
-                    Allowed characters: letters, digits, underscore, dash.
-                  </p>
 
                   <div className="space-y-2">
-                    <label className="block text-sm font-medium text-zinc-300">Upstream auth</label>
-                    <select
+                    <Select
+                      label="Upstream auth"
                       value={authType}
                       onChange={(e) => setAuthType(e.target.value as AuthDraft["type"])}
-                      className="w-full h-10 rounded-xl bg-zinc-900 border border-zinc-800 px-3 text-sm text-zinc-200"
+                      hint="Optional. Used only for Gateway → upstream connections; client auth is never forwarded."
                     >
                       <option value="none">None</option>
                       <option value="bearer">Bearer token (Authorization)</option>
                       <option value="header">Custom header (e.g. x-api-key)</option>
                       <option value="basic">Basic auth (Authorization)</option>
                       <option value="query">Query parameter</option>
-                    </select>
-                    <div className="text-xs text-zinc-500">
-                      Optional. Used only for Gateway → upstream connections; client auth is never
-                      forwarded.
-                    </div>
+                    </Select>
                     {authType === "query" ? <QueryParamAuthWarning /> : null}
                   </div>
 
@@ -312,7 +305,7 @@ function NewUpstreamWizardInner() {
               )}
             </div>
 
-            <div className="border-t border-zinc-800/60 bg-zinc-900/30 p-6 flex items-center justify-between gap-3">
+            <div className="flex items-center justify-between gap-3 border-t border-edge px-6 py-4">
               <Button
                 type="button"
                 variant="ghost"
@@ -361,7 +354,7 @@ function NewUpstreamWizardInner() {
                       createMutation.mutate();
                     }}
                   >
-                    Create
+                    Create upstream
                   </Button>
                 )}
               </div>

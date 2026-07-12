@@ -1,6 +1,7 @@
 "use client";
 
 import { forwardRef, type ButtonHTMLAttributes } from "react";
+import { Spinner } from "./spinner";
 
 type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 type ButtonSize = "sm" | "md" | "lg";
@@ -12,19 +13,17 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variantStyles: Record<ButtonVariant, string> = {
-  primary:
-    "bg-gradient-to-b from-violet-500 to-violet-600 text-white shadow-lg shadow-violet-500/25 hover:from-violet-400 hover:to-violet-500 active:from-violet-600 active:to-violet-700 border border-violet-400/50",
+  primary: "bg-accent-strong text-white hover:bg-accent-hover active:bg-accent-strong",
   secondary:
-    "bg-zinc-800/80 text-zinc-100 border border-zinc-700/80 hover:bg-zinc-700/80 hover:border-zinc-600/80 active:bg-zinc-800",
-  ghost: "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60 active:bg-zinc-800",
-  danger:
-    "bg-gradient-to-b from-red-500 to-red-600 text-white shadow-lg shadow-red-500/25 hover:from-red-400 hover:to-red-500 border border-red-400/50",
+    "bg-raised text-fg border border-edge-strong hover:bg-overlay hover:border-faint/40 active:bg-raised",
+  ghost: "text-muted hover:text-fg hover:bg-raised active:bg-overlay",
+  danger: "bg-danger/10 text-danger border border-danger/30 hover:bg-danger/20 active:bg-danger/10",
 };
 
 const sizeStyles: Record<ButtonSize, string> = {
-  sm: "px-3 py-1.5 text-xs gap-1.5",
-  md: "px-4 py-2 text-sm gap-2",
-  lg: "px-5 py-2.5 text-base gap-2",
+  sm: "h-8 px-3 text-xs gap-1.5",
+  md: "h-9 px-4 text-sm gap-2",
+  lg: "h-10 px-5 text-sm gap-2",
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
@@ -37,9 +36,9 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         ref={ref}
         disabled={disabled || loading}
         className={`
-          inline-flex items-center justify-center font-medium rounded-xl
-          transition-all duration-150 ease-out
-          focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900
+          inline-flex items-center justify-center font-medium rounded-md
+          transition-colors duration-150
+          focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg
           disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none
           ${variantStyles[variant]}
           ${sizeStyles[size]}
@@ -47,23 +46,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         `}
         {...props}
       >
-        {loading && (
-          <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-            <circle
-              className="opacity-25"
-              cx="12"
-              cy="12"
-              r="10"
-              stroke="currentColor"
-              strokeWidth="4"
-            />
-            <path
-              className="opacity-75"
-              fill="currentColor"
-              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-            />
-          </svg>
-        )}
+        {loading && <Spinner size="sm" />}
         {children}
       </button>
     );
@@ -71,3 +54,35 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
 );
 
 Button.displayName = "Button";
+
+interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  /** Accessible name; required because the button has no visible text. */
+  label: string;
+  size?: "sm" | "md";
+}
+
+export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
+  ({ className = "", label, size = "md", children, ...props }, ref) => {
+    return (
+      <button
+        ref={ref}
+        aria-label={label}
+        title={label}
+        className={`
+          inline-flex items-center justify-center rounded-md
+          text-muted hover:text-fg hover:bg-raised
+          transition-colors duration-150
+          focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg
+          disabled:opacity-50 disabled:cursor-not-allowed
+          ${size === "sm" ? "size-7" : "size-8"}
+          ${className}
+        `}
+        {...props}
+      >
+        {children}
+      </button>
+    );
+  },
+);
+
+IconButton.displayName = "IconButton";

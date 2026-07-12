@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Toggle } from "@/components/ui";
+import { Callout, SectionCard, Skeleton, SkeletonRows, Toggle } from "@/components/ui";
 import type { Profile } from "@/src/lib/types";
 import * as tenantApi from "@/src/lib/tenantApi";
 import { qk } from "@/src/lib/queryKeys";
@@ -90,7 +90,7 @@ export function SourcesTab({
   });
 
   if (loading || !profile) {
-    return <div className="text-sm text-zinc-400">Loading…</div>;
+    return <SkeletonRows rows={2} />;
   }
 
   if (
@@ -100,11 +100,11 @@ export function SourcesTab({
     sources.length === 0
   ) {
     return (
-      <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/40 p-6">
-        <div className="text-sm font-semibold text-zinc-100">No sources available yet</div>
-        <div className="mt-2 text-sm text-zinc-400">
+      <div className="rounded-lg border border-edge bg-surface p-6">
+        <div className="text-sm font-semibold text-fg">No sources available yet</div>
+        <div className="mt-2 text-sm text-muted">
           You must first define tenant-level sources, then attach them to profiles. Go to{" "}
-          <Link href="/sources" className="text-violet-400 hover:text-violet-300 underline">
+          <Link href="/sources" className="text-accent underline hover:text-accent-hover">
             Sources
           </Link>
           .
@@ -117,21 +117,17 @@ export function SourcesTab({
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <div className="text-sm font-medium text-zinc-300">Attachments</div>
+          <div className="eyebrow">Attachments</div>
         </div>
       </div>
 
-      {saveError ? (
-        <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200">
-          {saveError}
-        </div>
-      ) : null}
+      {saveError ? <Callout tone="danger">{saveError}</Callout> : null}
 
-      <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-5">
+      <div className="rounded-lg border border-edge bg-surface p-5">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <div className="text-sm font-semibold text-zinc-100">Allow partial upstreams</div>
-            <div className="mt-1 text-xs text-zinc-500">
+            <div className="text-sm font-semibold text-fg">Allow partial upstreams</div>
+            <div className="mt-1 text-xs text-faint">
               If some upstream endpoints are down, still serve what’s available.
             </div>
           </div>
@@ -150,24 +146,24 @@ export function SourcesTab({
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
-        <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 overflow-hidden">
-          <div className="px-5 py-4 border-b border-zinc-800/60">
-            <div className="text-sm font-semibold text-zinc-100">Upstreams</div>
-            <div className="mt-1 text-xs text-zinc-500">Streamable HTTP MCP servers.</div>
-          </div>
-          <div className="p-5 space-y-2">
+        <SectionCard
+          title="Upstreams"
+          subtitle="Streamable HTTP MCP servers."
+          bodyClassName="space-y-2"
+        >
+          <>
             {upstreamsQuery.isPending ? (
-              <div className="text-sm text-zinc-500">Loading…</div>
+              <Skeleton className="h-10 w-full" />
             ) : upstreamsQuery.error ? (
-              <div className="text-sm text-red-200">
+              <div className="text-sm text-danger">
                 {upstreamsQuery.error instanceof Error
                   ? upstreamsQuery.error.message
                   : "Failed to load upstreams"}
               </div>
             ) : upstreams.length === 0 ? (
-              <div className="text-sm text-zinc-500">
+              <div className="text-sm text-faint">
                 No upstreams defined. Create one on{" "}
-                <Link href="/sources" className="text-violet-400 hover:text-violet-300 underline">
+                <Link href="/sources" className="text-accent underline hover:text-accent-hover">
                   Sources
                 </Link>
                 .
@@ -176,8 +172,8 @@ export function SourcesTab({
               upstreams.map((u) => (
                 <div key={`${u.owner}:${u.id}`} className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-sm text-zinc-200 truncate font-mono">{u.id}</div>
-                    <div className="text-xs text-zinc-500">owner: {u.owner}</div>
+                    <div className="text-sm text-fg truncate font-mono">{u.id}</div>
+                    <div className="text-xs text-faint">owner: {u.owner}</div>
                   </div>
                   <Toggle
                     checked={selectedUpstreams.includes(u.id)}
@@ -194,27 +190,27 @@ export function SourcesTab({
                 </div>
               ))
             )}
-          </div>
-        </div>
+          </>
+        </SectionCard>
 
-        <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 overflow-hidden">
-          <div className="px-5 py-4 border-b border-zinc-800/60">
-            <div className="text-sm font-semibold text-zinc-100">Tool sources</div>
-            <div className="mt-1 text-xs text-zinc-500">HTTP DSL and OpenAPI sources.</div>
-          </div>
-          <div className="p-5 space-y-2">
+        <SectionCard
+          title="Tool sources"
+          subtitle="HTTP DSL and OpenAPI sources."
+          bodyClassName="space-y-2"
+        >
+          <>
             {toolSourcesQuery.isPending ? (
-              <div className="text-sm text-zinc-500">Loading…</div>
+              <Skeleton className="h-10 w-full" />
             ) : toolSourcesQuery.error ? (
-              <div className="text-sm text-red-200">
+              <div className="text-sm text-danger">
                 {toolSourcesQuery.error instanceof Error
                   ? toolSourcesQuery.error.message
                   : "Failed to load tool sources"}
               </div>
             ) : sources.length === 0 ? (
-              <div className="text-sm text-zinc-500">
+              <div className="text-sm text-faint">
                 No tool sources defined. Create one on{" "}
-                <Link href="/sources" className="text-violet-400 hover:text-violet-300 underline">
+                <Link href="/sources" className="text-accent underline hover:text-accent-hover">
                   Sources
                 </Link>
                 .
@@ -223,8 +219,8 @@ export function SourcesTab({
               sources.map((s) => (
                 <div key={s.id} className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-sm text-zinc-200 truncate font-mono">{s.id}</div>
-                    <div className="text-xs text-zinc-500">type: {s.type}</div>
+                    <div className="text-sm text-fg truncate font-mono">{s.id}</div>
+                    <div className="text-xs text-faint">type: {s.type}</div>
                   </div>
                   <Toggle
                     checked={selectedSources.includes(s.id)}
@@ -241,8 +237,8 @@ export function SourcesTab({
                 </div>
               ))
             )}
-          </div>
-        </div>
+          </>
+        </SectionCard>
       </div>
     </div>
   );

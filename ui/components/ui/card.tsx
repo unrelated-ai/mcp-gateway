@@ -5,28 +5,21 @@ import { type ReactNode } from "react";
 interface CardProps {
   children: ReactNode;
   className?: string;
+  /** Highlight border on hover; use for cards that wrap a navigation link. */
   hover?: boolean;
-  onClick?: () => void;
 }
 
-export function Card({ children, className = "", hover = false, onClick }: CardProps) {
-  const Component = onClick ? "button" : "div";
-
+export function Card({ children, className = "", hover = false }: CardProps) {
   return (
-    <Component
-      onClick={onClick}
+    <div
       className={`
-        relative rounded-xl border border-zinc-800/80 bg-zinc-900/40
-        backdrop-blur-sm overflow-hidden
-        ${hover ? "transition-all duration-200 hover:border-zinc-700/80 hover:bg-zinc-900/60 hover:shadow-lg hover:shadow-black/20" : ""}
-        ${onClick ? "text-left w-full cursor-pointer" : ""}
+        rounded-lg border border-edge bg-surface
+        ${hover ? "transition-colors duration-150 hover:border-edge-strong" : ""}
         ${className}
       `}
     >
-      {/* Subtle gradient overlay */}
-      <div className="absolute inset-0 bg-gradient-to-br from-white/[0.02] to-transparent pointer-events-none" />
-      <div className="relative">{children}</div>
-    </Component>
+      {children}
+    </div>
   );
 }
 
@@ -39,7 +32,7 @@ interface CardHeaderProps {
 export function CardHeader({ children, className = "", action }: CardHeaderProps) {
   return (
     <div
-      className={`flex items-center justify-between gap-4 px-5 py-4 border-b border-zinc-800/60 ${className}`}
+      className={`flex items-center justify-between gap-4 border-b border-edge px-5 py-4 ${className}`}
     >
       <div className="min-w-0 flex-1">{children}</div>
       {action && <div className="shrink-0">{action}</div>}
@@ -62,7 +55,7 @@ interface CardTitleProps {
 }
 
 export function CardTitle({ children, className = "" }: CardTitleProps) {
-  return <h3 className={`text-sm font-semibold text-zinc-100 ${className}`}>{children}</h3>;
+  return <h3 className={`text-sm font-semibold text-fg ${className}`}>{children}</h3>;
 }
 
 interface CardDescriptionProps {
@@ -71,5 +64,5 @@ interface CardDescriptionProps {
 }
 
 export function CardDescription({ children, className = "" }: CardDescriptionProps) {
-  return <p className={`mt-1 text-sm text-zinc-400 ${className}`}>{children}</p>;
+  return <p className={`mt-1 text-sm text-muted ${className}`}>{children}</p>;
 }

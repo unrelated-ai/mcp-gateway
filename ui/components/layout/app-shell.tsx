@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useSyncExternalStore, type ReactNode } from "react";
 import {
-  ChevronRightIcon,
   ChartIcon,
+  ChevronRightIcon,
   GridIcon,
   KeyIcon,
   LockIcon,
@@ -13,7 +14,8 @@ import {
   ShieldIcon,
   SourcesDbIcon,
 } from "@/components/icons";
-import { type ReactNode } from "react";
+import { getTenantIdFromCookies, lockTenantSession } from "@/src/lib/tenant-session";
+import { UI_VERSION } from "@/src/lib/env";
 
 interface AppShellProps {
   children: ReactNode;
@@ -43,36 +45,46 @@ const navItems: NavItem[] = [
     beta: true,
     extraActivePrefixes: ["/sources/new/managed-mcp"],
   },
-  { href: "/api-keys", label: "API Keys", icon: KeyIcon },
+  { href: "/api-keys", label: "API keys", icon: KeyIcon },
   { href: "/secrets", label: "Secrets", icon: ShieldIcon },
   { href: "/audit", label: "Audit", icon: ChartIcon },
   { href: "/settings", label: "Settings", icon: SettingsCogIcon },
 ];
 
+const noopSubscribe = () => () => {};
+
 export function AppShell({ children }: AppShellProps) {
   const pathname = usePathname();
+  // Read once per render on the client, null on the server (avoids a
+  // hydration mismatch since the cookie is not available during SSR).
+  const tenantId = useSyncExternalStore(
+    noopSubscribe,
+    () => getTenantIdFromCookies(),
+    () => null,
+  );
 
   return (
     <div className="flex h-full">
       {/* Sidebar */}
-      <aside className="w-64 shrink-0 border-r border-zinc-800/80 bg-zinc-950/50 flex flex-col">
-        {/* Logo / Brand */}
-        <div className="p-4 border-b border-zinc-800/60">
-          <Link href="/profiles" className="flex items-center gap-3 group">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-violet-500 to-violet-600 flex items-center justify-center shadow-lg shadow-violet-500/20">
-              <span className="text-white font-black text-lg leading-none tracking-tight">U</span>
+      <aside className="flex w-60 shrink-0 flex-col border-r border-edge bg-surface">
+        {/* Brand */}
+        <div className="border-b border-edge p-4">
+          <Link
+            href="/profiles"
+            className="group flex items-center gap-3 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <div className="flex size-8 items-center justify-center rounded-md bg-accent-strong">
+              <span className="text-sm font-semibold leading-none text-white">U</span>
             </div>
             <div className="min-w-0">
-              <div className="text-sm font-semibold text-zinc-100 group-hover:text-white transition-colors">
-                MCP Gateway
-              </div>
-              <div className="text-xs text-zinc-500 truncate">by unrelated.ai</div>
+              <div className="text-sm font-semibold text-fg">MCP Gateway</div>
+              <div className="eyebrow mt-0.5">unrelated.ai</div>
             </div>
           </Link>
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
+        <nav className="flex-1 space-y-0.5 overflow-y-auto p-2">
           {navItems.map((item) => {
             const matchesPrefix = pathname === item.href || pathname.startsWith(item.href + "/");
             const matchesExtra = (item.extraActivePrefixes ?? []).some(
@@ -86,54 +98,59 @@ export function AppShell({ children }: AppShellProps) {
               <Link
                 key={item.href}
                 href={item.href}
+                aria-current={isActive ? "page" : undefined}
                 className={`
-                  flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium
-                  transition-all duration-150
+                  relative flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium
+                  transition-colors duration-150
+                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent
                   ${
                     isActive
-                      ? "bg-violet-500/10 text-violet-400 shadow-sm"
-                      : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60"
+                      ? "bg-raised text-fg before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-accent"
+                      : "text-muted hover:bg-raised/60 hover:text-fg"
                   }
                 `}
               >
-                <item.icon
-                  className={`w-5 h-5 ${isActive ? "text-violet-400" : "text-zinc-500"}`}
-                />
+                <item.icon className={`size-4.5 ${isActive ? "text-accent" : "text-faint"}`} />
                 <span className="flex items-center gap-2">
                   <span>{item.label}</span>
-                  {item.beta ? (
-                    <span className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
-                      beta
-                    </span>
-                  ) : null}
+                  {item.beta ? <span className="eyebrow">beta</span> : null}
                 </span>
               </Link>
             );
           })}
         </nav>
 
-        {/* Footer */}
-        <div className="p-3 border-t border-zinc-800/60">
+        {/* Tenant + lock */}
+        <div className="space-y-2 border-t border-edge p-3">
+          {tenantId && (
+            <div className="flex items-center gap-2 px-3">
+              <span aria-hidden="true" className="size-1.5 shrink-0 rounded-[1px] bg-ok" />
+              <div className="min-w-0">
+                <div className="eyebrow">Tenant</div>
+                <div className="truncate font-mono text-xs text-muted" title={tenantId}>
+                  {tenantId}
+                </div>
+              </div>
+            </div>
+          )}
           <button
             type="button"
-            onClick={() => {
-              window.location.href = "/api/session/logout?next=%2Funlock";
-            }}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 transition-all duration-150"
+            onClick={() => lockTenantSession("/unlock")}
+            className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-muted transition-colors duration-150 hover:bg-raised/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
-            <LockIcon className="w-5 h-5 text-zinc-500" />
-            Lock / Switch Tenant
+            <LockIcon className="size-4.5 text-faint" />
+            Lock / Switch tenant
           </button>
+          <div className="eyebrow px-3 pb-1">{UI_VERSION}</div>
         </div>
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 overflow-y-auto bg-zinc-950">{children}</main>
+      <main className="flex-1 overflow-y-auto bg-bg">{children}</main>
     </div>
   );
 }
 
-// Page header component for consistent styling
 interface PageHeaderProps {
   title: ReactNode;
   description?: string;
@@ -143,23 +160,20 @@ interface PageHeaderProps {
 
 export function PageHeader({ title, description, actions, breadcrumb }: PageHeaderProps) {
   return (
-    <div className="border-b border-zinc-800/60 bg-zinc-950/80 backdrop-blur-sm sticky top-0 z-10">
+    <div className="sticky top-0 z-10 border-b border-edge bg-bg/90 backdrop-blur-sm">
       <div className="px-6 py-5">
         <div className="max-w-5xl">
           {breadcrumb && breadcrumb.length > 0 && (
-            <nav className="flex items-center gap-2 text-sm mb-2">
+            <nav aria-label="Breadcrumb" className="mb-2 flex items-center gap-1.5">
               {breadcrumb.map((item, i) => (
-                <span key={i} className="flex items-center gap-2">
-                  {i > 0 && <ChevronRightIcon className="w-4 h-4 text-zinc-600" />}
+                <span key={i} className="flex items-center gap-1.5">
+                  {i > 0 && <ChevronRightIcon className="size-3.5 text-faint" />}
                   {item.href ? (
-                    <Link
-                      href={item.href}
-                      className="text-zinc-400 hover:text-zinc-200 transition-colors"
-                    >
+                    <Link href={item.href} className="eyebrow transition-colors hover:text-fg">
                       {item.label}
                     </Link>
                   ) : (
-                    <span className="text-zinc-500">{item.label}</span>
+                    <span className="eyebrow">{item.label}</span>
                   )}
                 </span>
               ))}
@@ -167,8 +181,8 @@ export function PageHeader({ title, description, actions, breadcrumb }: PageHead
           )}
           <div className="flex items-center justify-between gap-4">
             <div>
-              <h1 className="text-xl font-semibold text-zinc-100">{title}</h1>
-              {description && <p className="mt-1 text-sm text-zinc-400">{description}</p>}
+              <h1 className="text-lg font-semibold text-fg">{title}</h1>
+              {description && <p className="mt-1 text-sm text-muted">{description}</p>}
             </div>
             {actions && <div className="flex items-center gap-3">{actions}</div>}
           </div>

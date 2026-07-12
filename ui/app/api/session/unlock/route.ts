@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
+import { TENANT_EXP_COOKIE, TENANT_ID_COOKIE, TENANT_TOKEN_COOKIE } from "@/src/lib/tenant-session";
 
 export const dynamic = "force-dynamic";
 
-const TENANT_TOKEN_COOKIE = "ugw_tenant_token";
-const TENANT_ID_COOKIE = "ugw_tenant_id";
-const TENANT_EXP_COOKIE = "ugw_tenant_exp_unix";
 const ONE_YEAR_SECS = 31_536_000;
 
 type UnlockRequest = {
@@ -66,6 +64,7 @@ async function validateTenantToken(base: string, token: string): Promise<void> {
     method: "GET",
     cache: "no-store",
     headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(15_000),
   });
   if (res.ok) return;
   const body = await res.text();
@@ -106,6 +105,9 @@ export async function POST(req: Request) {
   try {
     await validateTenantToken(base, token);
   } catch (e) {
+    if (e instanceof Error && e.name === "TimeoutError") {
+      return NextResponse.json({ ok: false, error: "gateway request timed out" }, { status: 504 });
+    }
     return NextResponse.json(
       { ok: false, error: e instanceof Error ? e.message : "Tenant token validation failed" },
       { status: 401 },

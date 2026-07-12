@@ -8,7 +8,17 @@ import * as tenantApi from "@/src/lib/tenantApi";
 import { qk } from "@/src/lib/queryKeys";
 import { buildPutProfileBody } from "@/src/lib/profilePut";
 import { useQueuedAutosave } from "@/src/lib/useQueuedAutosave";
-import { Button, Input, Modal, ModalActions, Toggle } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  Input,
+  Modal,
+  ModalActions,
+  SectionCard,
+  Tabs,
+  Toggle,
+} from "@/components/ui";
 import { ToolPolicyEditor } from "./tool-policy-editor";
 import {
   ToolTransformEditor,
@@ -36,17 +46,17 @@ function ToolName({
   return (
     <div className="min-w-0 flex items-center gap-2">
       {!enabled ? (
-        <span className="inline-block w-2 h-2 rounded-full bg-zinc-600 shrink-0" />
+        <span aria-hidden="true" className="size-1.5 shrink-0 rounded-[1px] bg-faint/60" />
       ) : null}
       <code
         title={title}
         className={`min-w-0 truncate text-sm font-semibold ${
-          enabled ? "text-violet-400" : "text-zinc-400"
+          enabled ? "text-accent" : "text-muted"
         }`}
       >
         {name}
         {isRenamed ? (
-          <span className="text-xs font-medium text-zinc-500"> ({originalName})</span>
+          <span className="text-xs font-medium text-faint"> ({originalName})</span>
         ) : null}
       </code>
     </div>
@@ -76,8 +86,8 @@ function ToolRow({
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") onClick();
       }}
-      className={`w-full text-left px-4 py-3 border-b border-zinc-800/40 hover:bg-zinc-800/20 transition-colors cursor-pointer ${
-        selected ? "bg-zinc-800/25" : ""
+      className={`w-full cursor-pointer border-b border-edge px-4 py-3 text-left transition-colors duration-150 hover:bg-raised/50 ${
+        selected ? "bg-raised" : ""
       }`}
     >
       <div
@@ -357,18 +367,16 @@ export function ToolsNewTab({
 
   return (
     <div className="space-y-6">
-      <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="text-sm font-semibold text-zinc-100">Default tool call timeout</div>
-            <div className="mt-1 text-xs text-zinc-500">
-              Applies to <span className="font-mono">tools/call</span> when a tool policy does not
-              override timeout. Leave empty to use the Gateway default.
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-4 space-y-2">
+      <SectionCard
+        title="Default tool call timeout"
+        subtitle={
+          <>
+            Applies to <span className="font-mono">tools/call</span> when a tool policy does not
+            override timeout. Leave empty to use the Gateway default.
+          </>
+        }
+      >
+        <div className="max-w-md">
           <Input
             label="Timeout (seconds)"
             inputMode="numeric"
@@ -390,17 +398,17 @@ export function ToolsNewTab({
             }
           />
         </div>
-      </div>
+      </SectionCard>
 
-      <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 overflow-hidden">
-        <div className="px-5 py-3 border-b border-zinc-800/60 flex items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-medium text-zinc-300">Tool list</div>
-            <div className="mt-1 text-xs text-zinc-500">
+      <Card className="overflow-hidden">
+        <div className="flex items-start justify-between gap-3 border-b border-edge px-5 py-3.5">
+          <div className="min-w-0">
+            <div className="eyebrow">Tool list</div>
+            <div className="mt-1 text-sm text-muted">
               Probe once, then configure transforms and call policies per tool.
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-3">
             <Toggle
               checked={showDisabledTools}
               onChange={setShowDisabledTools}
@@ -408,37 +416,34 @@ export function ToolsNewTab({
               description={showDisabledTools ? "Shows enabled + disabled" : "Hides disabled tools"}
               switchSide="right"
             />
-            <button
-              onClick={onProbe}
-              disabled={probePending}
-              className="px-4 py-2 rounded-lg bg-zinc-800 text-zinc-200 text-sm font-medium hover:bg-zinc-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
+            <Button variant="secondary" onClick={onProbe} loading={probePending}>
               {probePending ? "Probing…" : "Probe surface"}
-            </button>
+            </Button>
           </div>
         </div>
 
         {surfaceError ? (
-          <div className="px-5 py-4 text-sm text-red-200 border-b border-zinc-800/60 bg-red-500/5">
+          <div className="border-b border-edge bg-danger/5 px-5 py-4 text-sm text-danger">
             {surfaceError}
           </div>
         ) : null}
 
         {!surface ? (
-          <div className="p-5 text-sm text-zinc-500">
+          <div className="p-5 text-sm text-muted">
             Run a probe to discover tools before configuring this page.
           </div>
         ) : allTools.length === 0 ? (
-          <div className="p-5 text-sm text-zinc-500">No tools discovered.</div>
+          <div className="p-5 text-sm text-muted">No tools discovered.</div>
         ) : (
           <div className="grid md:grid-cols-[340px_1fr]">
-            <div className="border-r border-zinc-800/60">
-              <div className="px-4 py-3 border-b border-zinc-800/60 text-xs text-zinc-500">
-                Tools: <span className="text-zinc-200">{surface.tools.length}</span>
-                <span className="text-zinc-500"> / {surface.allTools.length}</span>
+            <div className="border-r border-edge">
+              <div className="border-b border-edge px-4 py-3 text-xs text-faint">
+                Tools: <span className="font-mono text-fg">{surface.tools.length}</span>
+                <span className="font-mono text-faint"> / {surface.allTools.length}</span>
               </div>
-              <div className="p-4 border-b border-zinc-800/60">
+              <div className="border-b border-edge p-4">
                 <Input
+                  aria-label="Search tools"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search tools…"
@@ -465,70 +470,57 @@ export function ToolsNewTab({
 
             <div className="p-5 space-y-4">
               {selected ? (
-                <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4">
-                  <div className="text-xs text-zinc-500">Selected tool</div>
+                <div className="rounded-lg border border-edge bg-well p-4">
+                  <div className="eyebrow">Selected tool</div>
                   <div className="mt-2 flex items-center gap-2 min-w-0">
-                    <code className="min-w-0 truncate text-sm font-semibold text-zinc-100">
+                    <code className="min-w-0 truncate text-sm font-semibold text-fg">
                       {selected.name}
                     </code>
-                    <span className="shrink-0 px-2 py-0.5 rounded-full text-[11px] font-medium bg-zinc-800/60 text-zinc-300 border border-zinc-700/40">
-                      <span className="font-mono">{selected.sourceId}</span>
-                    </span>
+                    <Badge className="normal-case">{selected.sourceId}</Badge>
                   </div>
                   {selected.baseName !== selected.originalName ? (
-                    <div className="mt-2 text-xs text-zinc-500">
+                    <div className="mt-2 text-xs text-faint">
                       original:{" "}
-                      <span className="font-mono text-zinc-300">{selected.originalName}</span>
+                      <span className="font-mono text-muted">{selected.originalName}</span>
                     </div>
                   ) : null}
                 </div>
               ) : null}
 
-              <div className="flex items-center gap-1 border-b border-zinc-800/60">
-                <button
-                  type="button"
-                  onClick={() => setRightTab("transforms")}
-                  className={`px-3 py-2 text-sm font-medium transition-colors relative ${
-                    rightTab === "transforms" ? "text-white" : "text-zinc-500 hover:text-zinc-300"
-                  }`}
-                >
-                  <span className="inline-flex items-center gap-2">
-                    Transforms
-                    <span className="px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-violet-500/10 text-violet-300 border border-violet-500/20">
-                      Beta
-                    </span>
-                  </span>
-                  {rightTab === "transforms" && (
-                    <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-violet-500 rounded-full" />
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRightTab("policies")}
-                  className={`px-3 py-2 text-sm font-medium transition-colors relative ${
-                    rightTab === "policies" ? "text-white" : "text-zinc-500 hover:text-zinc-300"
-                  }`}
-                >
-                  Policies
-                  {rightTab === "policies" && (
-                    <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-violet-500 rounded-full" />
-                  )}
-                </button>
-                <div className="flex-1" />
+              <div className="relative">
+                <Tabs
+                  items={[
+                    {
+                      value: "transforms" as const,
+                      label: (
+                        <span className="inline-flex items-center gap-2">
+                          Transforms
+                          <Badge tone="accent">Beta</Badge>
+                        </span>
+                      ),
+                    },
+                    { value: "policies" as const, label: "Policies" },
+                  ]}
+                  value={rightTab}
+                  onChange={setRightTab}
+                />
                 {rightTab === "policies" ? (
-                  <button
-                    type="button"
-                    onClick={() => setShowPoliciesHelp(true)}
-                    className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors"
-                    aria-label="Tool call policies help"
-                  >
-                    Help
-                  </button>
+                  <div className="absolute right-0 top-1/2 -translate-y-1/2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setShowPoliciesHelp(true)}
+                      aria-label="Tool call policies help"
+                    >
+                      Help
+                    </Button>
+                  </div>
                 ) : null}
               </div>
 
               {!selected ? (
-                <div className="text-sm text-zinc-500">Select a tool to configure it.</div>
+                <div className="text-sm text-muted">Select a tool to configure it.</div>
               ) : rightTab === "transforms" ? (
                 <ToolTransformEditor
                   key={`${selected.sourceId}:${selected.originalName}`}
@@ -554,33 +546,33 @@ export function ToolsNewTab({
             </div>
           </div>
         )}
-      </div>
+      </Card>
 
       {surface && unknownPolicies.length > 0 ? (
-        <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 overflow-hidden">
-          <div className="px-5 py-3 border-b border-zinc-800/60">
-            <div className="text-sm font-medium text-zinc-300">Policies not in current surface</div>
-            <div className="mt-1 text-xs text-zinc-500">
+        <Card className="overflow-hidden">
+          <div className="border-b border-edge px-5 py-3.5">
+            <div className="eyebrow">Policies not in current surface</div>
+            <div className="mt-1 text-sm text-muted">
               These policies don’t match any currently discovered tool. They won’t apply until the
               surface matches again.
             </div>
           </div>
-          <div className="divide-y divide-zinc-800/40">
+          <div className="divide-y divide-edge">
             {unknownPolicies.map((p) => (
               <div key={p.tool} className="p-5 flex items-start justify-between gap-4">
                 <div className="min-w-0">
-                  <div className="font-mono text-sm text-zinc-100 break-all">{p.tool}</div>
-                  <div className="mt-2 text-xs text-zinc-500 flex flex-wrap items-center gap-2">
+                  <div className="font-mono text-sm text-fg break-all">{p.tool}</div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-faint">
                     <span>
                       timeout:{" "}
-                      <span className="text-zinc-200">
+                      <span className="text-muted">
                         {typeof p.timeoutSecs === "number" ? `${p.timeoutSecs}s` : "default"}
                       </span>
                     </span>
-                    <span className="w-1 h-1 rounded-full bg-zinc-700" />
+                    <span aria-hidden="true" className="size-1 rounded-full bg-edge-strong" />
                     <span>
                       retry:{" "}
-                      <span className="text-zinc-200">
+                      <span className="text-muted">
                         {p.retry ? `${p.retry.maximumAttempts} attempts` : "off"}
                       </span>
                     </span>
@@ -588,17 +580,16 @@ export function ToolsNewTab({
                 </div>
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="danger"
                   size="sm"
                   onClick={() => removeUnknownPolicy(p.tool)}
-                  className="text-red-400 hover:text-red-300"
                 >
                   Remove
                 </Button>
               </div>
             ))}
           </div>
-        </div>
+        </Card>
       ) : null}
 
       <Modal
@@ -607,32 +598,33 @@ export function ToolsNewTab({
         title="Tool call policies"
         size="lg"
       >
-        <div className="space-y-4 text-sm text-zinc-300">
+        <div className="space-y-4 text-sm text-muted">
           <p>
             Tool call policies control how the Gateway executes{" "}
             <span className="font-mono">tools/call</span> for this profile.
           </p>
           <ul className="list-disc pl-5 space-y-1">
             <li>
-              <span className="font-semibold">Default timeout</span>: applies when a tool has no
-              per-tool override.
+              <span className="font-semibold text-fg">Default timeout</span>: applies when a tool
+              has no per-tool override.
             </li>
             <li>
-              <span className="font-semibold">Per-tool timeout</span>: overrides the default for a
-              single tool.
+              <span className="font-semibold text-fg">Per-tool timeout</span>: overrides the default
+              for a single tool.
             </li>
             <li>
-              <span className="font-semibold">Retry policy</span>: Gateway-side retries for
+              <span className="font-semibold text-fg">Retry policy</span>: Gateway-side retries for
               transient failures. Use conservative values to avoid duplicate side effects.
             </li>
             <li>
-              <span className="font-semibold">Stable tool identity</span>: policies are keyed by{" "}
+              <span className="font-semibold text-fg">Stable tool identity</span>: policies are
+              keyed by{" "}
               <span className="font-mono">&lt;source_id&gt;:&lt;original_tool_name&gt;</span> so
               transforms/renames won’t break your settings.
             </li>
             <li>
-              <span className="font-semibold">Timeout cap</span>: the Gateway enforces a maximum
-              timeout. Admins can raise it via{" "}
+              <span className="font-semibold text-fg">Timeout cap</span>: the Gateway enforces a
+              maximum timeout. Admins can raise it via{" "}
               <span className="font-mono">UNRELATED_TOOL_CALL_TIMEOUT_MAX_SECS</span>.
             </li>
           </ul>

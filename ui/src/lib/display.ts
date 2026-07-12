@@ -1,3 +1,5 @@
+import type { Tone } from "@/components/ui";
+
 export function formatDataPlaneAuthMode(mode: string | undefined | null): string {
   if (!mode) return "(unknown)";
   switch (mode) {
@@ -14,12 +16,12 @@ export function formatDataPlaneAuthMode(mode: string | undefined | null): string
   }
 }
 
-export function authModeTone(mode: string | undefined | null): "violet" | "amber" | "zinc" {
-  if (!mode) return "zinc";
-  if (mode.startsWith("apiKey")) return "violet";
-  if (mode.startsWith("jwt")) return "amber";
-  if (mode === "disabled") return "zinc";
-  return "zinc";
+export function authModeTone(mode: string | undefined | null): Tone {
+  if (!mode) return "neutral";
+  if (mode.startsWith("apiKey")) return "info";
+  if (mode.startsWith("jwt")) return "accent";
+  if (mode === "disabled") return "warn";
+  return "neutral";
 }
 
 export function formatUnix(unix: number): string {

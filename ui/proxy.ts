@@ -46,9 +46,13 @@ function isProtectedPath(pathname: string): boolean {
 
 export async function proxy(req: NextRequest) {
   const pathname = req.nextUrl.pathname;
+  const token = req.cookies.get(TENANT_TOKEN_COOKIE)?.value;
+
+  // A tenant session implies bootstrap already happened, so skip the gateway
+  // round-trip that would otherwise run on every single navigation.
+  const canBootstrap = token ? false : await canBootstrapFirstTenant(req);
 
   // Fresh install: always guide the user through onboarding first.
-  const canBootstrap = await canBootstrapFirstTenant(req);
   if (pathname.startsWith("/onboarding")) {
     if (!canBootstrap) {
       return redirectNoStore(new URL("/", req.url));
@@ -64,7 +68,6 @@ export async function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
-  const token = req.cookies.get(TENANT_TOKEN_COOKIE)?.value;
   if (token) return NextResponse.next();
 
   const url = req.nextUrl.clone();

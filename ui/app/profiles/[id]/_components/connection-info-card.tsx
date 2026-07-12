@@ -3,8 +3,15 @@
 import { useMemo } from "react";
 import type { Profile } from "@/src/lib/types";
 import { formatDataPlaneAuthMode } from "@/src/lib/display";
-import { CopyButton, LockIcon, Toggle } from "@/components/ui";
-import { InfoIconAlt } from "@/components/icons";
+import {
+  AuthModeBadge,
+  Button,
+  CopyBlock,
+  EndpointWell,
+  SectionCard,
+  Toggle,
+} from "@/components/ui";
+import { InfoIconAlt, LockIcon } from "@/components/icons";
 
 function getMcpJsonText(
   clientKey: string,
@@ -48,22 +55,6 @@ function getMcpJsonText(
   return JSON.stringify({ mcpServers: { [clientKey]: entry } }, null, 2);
 }
 
-function AuthBadge({ mode }: { mode: "api_key" | "jwt" | "none" }) {
-  return (
-    <span
-      className={`px-2.5 py-1 rounded-full text-xs font-medium ${
-        mode === "api_key"
-          ? "bg-violet-500/10 text-violet-400 border border-violet-500/20"
-          : mode === "jwt"
-            ? "bg-amber-500/10 text-amber-400 border border-amber-500/20"
-            : "bg-zinc-500/10 text-zinc-400 border border-zinc-500/20"
-      }`}
-    >
-      {mode === "api_key" ? "API Key" : mode === "jwt" ? "JWT" : "No Auth"}
-    </span>
-  );
-}
-
 const InfoIcon = InfoIconAlt;
 
 export function ConnectionInfoCard({
@@ -88,83 +79,67 @@ export function ConnectionInfoCard({
   authDraft: { mode: Profile["dataPlaneAuth"]["mode"]; acceptXApiKey: boolean } | null;
 }) {
   const authModeLabel = formatDataPlaneAuthMode(profile?.dataPlaneAuth.mode);
-  const authBadgeMode: "api_key" | "jwt" | "none" = profile?.dataPlaneAuth.mode.startsWith("apiKey")
-    ? "api_key"
-    : profile?.dataPlaneAuth.mode.startsWith("jwt")
-      ? "jwt"
-      : "none";
 
   const jsonText = useMemo(() => {
     return getMcpJsonText(clientKey, mcpUrl, profile, showAuthSettings ? authDraft : null);
   }, [authDraft, clientKey, mcpUrl, profile, showAuthSettings]);
 
   return (
-    <div className="rounded-2xl border border-zinc-800/60 bg-gradient-to-br from-violet-500/5 to-transparent p-6 mb-6">
-      <div className="flex items-start justify-between gap-6">
-        <div>
-          <div className="flex items-center justify-between gap-4 mb-2">
-            <h2 className="text-sm font-medium text-zinc-400">MCP Endpoint URL</h2>
-            <Toggle
-              checked={!!profile?.enabled}
-              onChange={() => onToggleEnabled()}
-              disabled={!profile || toggleEnabledPending}
-              label={profile?.enabled ? "Enabled" : "Disabled"}
-              switchSide="right"
-            />
-          </div>
-          <div className="flex items-center gap-3">
-            <code
-              className={`px-4 py-2.5 rounded-xl border text-sm font-mono ${
-                profile?.enabled
-                  ? "bg-emerald-500/5 border-emerald-500/25 text-emerald-200"
-                  : "bg-zinc-950/60 border-zinc-800 text-zinc-200"
-              }`}
-            >
-              {mcpUrl}
-            </code>
-            <CopyButton text={mcpUrl} />
-          </div>
-          <p className="mt-3 text-xs text-zinc-500">
-            Use this URL in your MCP client configuration. Auth mode:{" "}
-            <span className="text-zinc-200">{authModeLabel}</span>.
-          </p>
+    <SectionCard
+      title="MCP endpoint URL"
+      right={
+        <Toggle
+          checked={!!profile?.enabled}
+          onChange={() => onToggleEnabled()}
+          disabled={!profile || toggleEnabledPending}
+          label={profile?.enabled ? "Enabled" : "Disabled"}
+          switchSide="right"
+        />
+      }
+      className="mb-6"
+      bodyClassName="space-y-6"
+    >
+      <div>
+        <div className="flex items-center gap-3">
+          <EndpointWell url={mcpUrl} live={!!profile?.enabled} className="min-w-0 flex-1" />
+          {profile ? <AuthModeBadge mode={profile.dataPlaneAuth.mode} /> : null}
         </div>
-        <div className="flex items-center gap-4">
-          <AuthBadge mode={authBadgeMode} />
-        </div>
+        <p className="mt-3 text-xs text-faint">
+          Use this URL in your MCP client configuration. Auth mode:{" "}
+          <span className="text-fg">{authModeLabel}</span>.
+        </p>
       </div>
 
-      {/* Claude Desktop Config */}
-      <div className="mt-6 pt-6 border-t border-zinc-800/60">
-        <div className="flex items-center justify-between gap-3 mb-3">
-          <h3 className="text-sm font-medium text-zinc-300">MCP client config (mcp.json)</h3>
+      {/* MCP client config */}
+      <div className="border-t border-edge pt-5">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h3 className="eyebrow">MCP client config (mcp.json)</h3>
           <div className="flex items-center gap-2">
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={onEditAuth}
-              className="inline-flex items-center gap-2 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-              aria-label="Edit profile auth settings"
               disabled={!profile}
+              aria-label="Edit profile auth settings"
             >
-              <LockIcon className="w-4 h-4" />
+              <LockIcon className="size-4" />
               Auth
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={onOpenAuthHelp}
-              className="inline-flex items-center gap-2 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors"
               aria-label="How MCP client auth works"
             >
-              <InfoIcon className="w-4 h-4" />
+              <InfoIcon className="size-4" />
               Auth help
-            </button>
+            </Button>
           </div>
         </div>
-        <div className="relative rounded-xl bg-zinc-950/80 border border-zinc-800 p-4 font-mono text-xs overflow-x-auto">
-          <pre className="text-zinc-400">{jsonText}</pre>
-          <CopyButton text={jsonText} className="absolute top-3 right-3" />
-        </div>
+        <CopyBlock value={jsonText} language="json" />
       </div>
-    </div>
+    </SectionCard>
   );
 }

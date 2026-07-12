@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { Profile } from "@/src/lib/types";
-import { Button, Input, Modal, ModalActions, Textarea } from "@/components/ui";
+import { Button, Callout, Input, Modal, ModalActions, Textarea } from "@/components/ui";
 
 export function EditProfilePanel({
   open,
@@ -52,38 +52,30 @@ function EditProfilePanelOpen({
       description="Update name and description without leaving the page."
       size="lg"
     >
-      {saveError ? (
-        <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-200">
-          {saveError}
-        </div>
-      ) : null}
+      {saveError ? <Callout tone="danger">{saveError}</Callout> : null}
 
       <div className="mt-5 grid gap-4 md:grid-cols-2">
-        <div>
-          <div className="text-xs font-medium text-zinc-400 mb-2">Name</div>
-          <Input
-            value={draft.name}
-            onChange={(e) => setDraft((p) => ({ ...p, name: e.target.value }))}
-            placeholder="Profile name"
-          />
-        </div>
-        <div>
-          <div className="text-xs font-medium text-zinc-400 mb-2">Description</div>
-          <Textarea
-            value={draft.description}
-            onChange={(e) => setDraft((p) => ({ ...p, description: e.target.value }))}
-            placeholder="Optional description"
-            rows={3}
-          />
-        </div>
+        <Input
+          label="Name"
+          value={draft.name}
+          onChange={(e) => setDraft((p) => ({ ...p, name: e.target.value }))}
+          placeholder="Profile name"
+        />
+        <Textarea
+          label="Description"
+          value={draft.description}
+          onChange={(e) => setDraft((p) => ({ ...p, description: e.target.value }))}
+          placeholder="Optional description"
+          rows={3}
+        />
       </div>
 
       <ModalActions>
         <Button type="button" variant="ghost" onClick={onClose} disabled={saving}>
           Cancel
         </Button>
-        <Button type="button" variant="secondary" onClick={() => onSave(draft)} disabled={saving}>
-          {saving ? "Saving…" : "Save"}
+        <Button type="button" variant="primary" onClick={() => onSave(draft)} loading={saving}>
+          Save
         </Button>
       </ModalActions>
     </Modal>

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { SectionCard, Toggle } from "@/components/ui";
+import { Button, Callout, Input, SectionCard, Select, Spinner, Toggle } from "@/components/ui";
 import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
 import type {
@@ -242,20 +242,21 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
         title="Security"
         subtitle="Control what the Gateway advertises upstream and what upstream interactive requests are allowed through."
         right={
-          saveMutation.isPending ? <div className="text-xs text-zinc-500 px-2">Saving…</div> : null
+          saveMutation.isPending ? (
+            <span className="inline-flex items-center gap-1.5 px-2 text-xs text-faint">
+              <Spinner size="sm" />
+              Saving…
+            </span>
+          ) : null
         }
         bodyClassName="space-y-6"
       >
-        {saveError ? (
-          <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200">
-            {saveError}
-          </div>
-        ) : null}
+        {saveError ? <Callout tone="danger">{saveError}</Callout> : null}
 
         <div className="flex items-start justify-between gap-6">
           <div className="min-w-0">
-            <div className="text-sm font-semibold text-zinc-100">Signed proxied request IDs</div>
-            <div className="mt-1 text-xs text-zinc-500">
+            <div className="text-sm font-medium text-fg">Signed proxied request IDs</div>
+            <div className="mt-1 text-xs text-faint">
               Prevents forged downstream responses by signing proxied upstream request IDs with a
               per-session key.
             </div>
@@ -267,24 +268,26 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
           />
         </div>
 
-        <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4 space-y-3">
+        <div className="rounded-lg border border-edge bg-well p-4 space-y-3">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <div className="text-sm font-semibold text-zinc-100">Default upstream policy</div>
-              <div className="mt-1 text-xs text-zinc-500">
+              <div className="eyebrow">Default upstream policy</div>
+              <div className="mt-1 text-xs text-faint">
                 Applied to upstreams unless a per-upstream override is set.
               </div>
             </div>
-            <select
-              value={defaultSelectValue}
-              disabled={!profile || saveMutation.isPending}
-              onChange={(e) => setDefaultPreset(e.target.value as Preset)}
-              className="rounded-lg border border-zinc-700/80 bg-zinc-900/50 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500/50 hover:border-zinc-600/80"
-            >
-              <option value="trusted">Trusted</option>
-              <option value="untrusted">Untrusted</option>
-              <option value="custom">Custom</option>
-            </select>
+            <div className="w-36 shrink-0">
+              <Select
+                aria-label="Default upstream policy preset"
+                value={defaultSelectValue}
+                disabled={!profile || saveMutation.isPending}
+                onChange={(e) => setDefaultPreset(e.target.value as Preset)}
+              >
+                <option value="trusted">Trusted</option>
+                <option value="untrusted">Untrusted</option>
+                <option value="custom">Custom</option>
+              </Select>
+            </div>
           </div>
 
           {showDefaultAdvanced || defaultPreset === "custom" ? (
@@ -304,8 +307,8 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
       >
         <div className="flex items-start justify-between gap-6">
           <div className="min-w-0">
-            <div className="text-sm font-semibold text-zinc-100">Use tenant defaults</div>
-            <div className="mt-1 text-xs text-zinc-500">
+            <div className="text-sm font-medium text-fg">Use tenant defaults</div>
+            <div className="mt-1 text-xs text-faint">
               If enabled, this profile inherits tenant-level transport limits.
             </div>
           </div>
@@ -329,10 +332,10 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
           />
         </div>
 
-        <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4 space-y-3">
-          <div className="text-sm font-semibold text-zinc-100">Max POST body bytes</div>
-          <div className="text-xs text-zinc-500">
-            Effective: <code>{effectiveMaxPostBodyBytes}</code> (~
+        <div className="rounded-lg border border-edge bg-well p-4 space-y-3">
+          <div className="eyebrow">Max POST body bytes</div>
+          <div className="text-xs text-faint">
+            Effective: <code className="font-mono text-muted">{effectiveMaxPostBodyBytes}</code> (~
             {Math.round((effectiveMaxPostBodyBytes / 1024 / 1024) * 10) / 10} MiB)
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -349,42 +352,44 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
                       transportLimits: { ...profileTransportLimits, maxPostBodyBytes: bytes },
                     })
                   }
-                  className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                  className={`h-8 rounded-md border px-3 text-xs font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${
                     effectiveMaxPostBodyBytes === bytes
-                      ? "border-violet-500/50 bg-violet-500/15 text-violet-200"
-                      : "border-zinc-800/70 bg-zinc-950/40 text-zinc-300 hover:bg-zinc-800/40 hover:text-zinc-200"
-                  } ${usesTenantDefaults ? "opacity-50 cursor-not-allowed" : ""}`}
+                      ? "border-accent/40 bg-accent/10 text-accent"
+                      : "border-edge bg-surface text-muted hover:bg-raised hover:text-fg"
+                  }`}
                 >
                   {mib} MiB
                 </button>
               );
             })}
-            <input
-              type="number"
-              min={1}
-              step={1}
-              disabled={usesTenantDefaults || !profile || saveMutation.isPending}
-              value={
-                usesTenantDefaults
-                  ? effectiveMaxPostBodyBytes
-                  : (profileTransportLimits.maxPostBodyBytes ?? "")
-              }
-              onChange={(e) => {
-                const v = parsePositiveIntegerInput(e.target.value);
-                commit({
-                  ...security,
-                  transportLimits: { ...profileTransportLimits, maxPostBodyBytes: v },
-                });
-              }}
-              className="w-[220px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
-            />
+            <div className="w-[220px] max-w-full">
+              <Input
+                type="number"
+                min={1}
+                step={1}
+                aria-label="Custom max POST body bytes"
+                disabled={usesTenantDefaults || !profile || saveMutation.isPending}
+                value={
+                  usesTenantDefaults
+                    ? effectiveMaxPostBodyBytes
+                    : (profileTransportLimits.maxPostBodyBytes ?? "")
+                }
+                onChange={(e) => {
+                  const v = parsePositiveIntegerInput(e.target.value);
+                  commit({
+                    ...security,
+                    transportLimits: { ...profileTransportLimits, maxPostBodyBytes: v },
+                  });
+                }}
+              />
+            </div>
           </div>
         </div>
 
-        <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4 space-y-3">
-          <div className="text-sm font-semibold text-zinc-100">Max SSE event bytes</div>
-          <div className="text-xs text-zinc-500">
-            Effective: <code>{effectiveMaxSseEventBytes}</code> (~
+        <div className="rounded-lg border border-edge bg-well p-4 space-y-3">
+          <div className="eyebrow">Max SSE event bytes</div>
+          <div className="text-xs text-faint">
+            Effective: <code className="font-mono text-muted">{effectiveMaxSseEventBytes}</code> (~
             {Math.round((effectiveMaxSseEventBytes / 1024 / 1024) * 10) / 10} MiB)
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -401,50 +406,53 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
                       transportLimits: { ...profileTransportLimits, maxSseEventBytes: bytes },
                     })
                   }
-                  className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                  className={`h-8 rounded-md border px-3 text-xs font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${
                     effectiveMaxSseEventBytes === bytes
-                      ? "border-violet-500/50 bg-violet-500/15 text-violet-200"
-                      : "border-zinc-800/70 bg-zinc-950/40 text-zinc-300 hover:bg-zinc-800/40 hover:text-zinc-200"
-                  } ${usesTenantDefaults ? "opacity-50 cursor-not-allowed" : ""}`}
+                      ? "border-accent/40 bg-accent/10 text-accent"
+                      : "border-edge bg-surface text-muted hover:bg-raised hover:text-fg"
+                  }`}
                 >
                   {mib} MiB
                 </button>
               );
             })}
-            <input
-              type="number"
-              min={1}
-              step={1}
-              disabled={usesTenantDefaults || !profile || saveMutation.isPending}
-              value={
-                usesTenantDefaults
-                  ? effectiveMaxSseEventBytes
-                  : (profileTransportLimits.maxSseEventBytes ?? "")
-              }
-              onChange={(e) => {
-                const v = parsePositiveIntegerInput(e.target.value);
-                commit({
-                  ...security,
-                  transportLimits: { ...profileTransportLimits, maxSseEventBytes: v },
-                });
-              }}
-              className="w-[220px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
-            />
+            <div className="w-[220px] max-w-full">
+              <Input
+                type="number"
+                min={1}
+                step={1}
+                aria-label="Custom max SSE event bytes"
+                disabled={usesTenantDefaults || !profile || saveMutation.isPending}
+                value={
+                  usesTenantDefaults
+                    ? effectiveMaxSseEventBytes
+                    : (profileTransportLimits.maxSseEventBytes ?? "")
+                }
+                onChange={(e) => {
+                  const v = parsePositiveIntegerInput(e.target.value);
+                  commit({
+                    ...security,
+                    transportLimits: { ...profileTransportLimits, maxSseEventBytes: v },
+                  });
+                }}
+              />
+            </div>
           </div>
         </div>
 
-        <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4 space-y-3">
-          <div className="text-sm font-semibold text-zinc-100">JSON complexity caps (optional)</div>
-          <div className="text-xs text-zinc-500">
+        <div className="rounded-lg border border-edge bg-well p-4 space-y-3">
+          <div className="eyebrow">JSON complexity caps (optional)</div>
+          <div className="text-xs text-faint">
             These apply after parsing JSON. Leave blank to inherit tenant defaults / process
             defaults.
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <input
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Input
               type="number"
               min={1}
               step={1}
-              placeholder="max depth"
+              label="Max depth"
+              placeholder="Inherit"
               disabled={usesTenantDefaults || !profile || saveMutation.isPending}
               value={profileTransportLimits.maxJsonDepth ?? ""}
               onChange={(e) => {
@@ -454,13 +462,13 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
                   transportLimits: { ...profileTransportLimits, maxJsonDepth: v },
                 });
               }}
-              className="w-[160px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
             />
-            <input
+            <Input
               type="number"
               min={1}
               step={1}
-              placeholder="max array"
+              label="Max array length"
+              placeholder="Inherit"
               disabled={usesTenantDefaults || !profile || saveMutation.isPending}
               value={profileTransportLimits.maxJsonArrayLen ?? ""}
               onChange={(e) => {
@@ -470,13 +478,13 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
                   transportLimits: { ...profileTransportLimits, maxJsonArrayLen: v },
                 });
               }}
-              className="w-[160px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
             />
-            <input
+            <Input
               type="number"
               min={1}
               step={1}
-              placeholder="max keys"
+              label="Max object keys"
+              placeholder="Inherit"
               disabled={usesTenantDefaults || !profile || saveMutation.isPending}
               value={profileTransportLimits.maxJsonObjectKeys ?? ""}
               onChange={(e) => {
@@ -486,13 +494,13 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
                   transportLimits: { ...profileTransportLimits, maxJsonObjectKeys: v },
                 });
               }}
-              className="w-[160px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
             />
-            <input
+            <Input
               type="number"
               min={1}
               step={1}
-              placeholder="max str bytes"
+              label="Max string bytes"
+              placeholder="Inherit"
               disabled={usesTenantDefaults || !profile || saveMutation.isPending}
               value={profileTransportLimits.maxJsonStringBytes ?? ""}
               onChange={(e) => {
@@ -502,12 +510,11 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
                   transportLimits: { ...profileTransportLimits, maxJsonStringBytes: v },
                 });
               }}
-              className="w-[180px] max-w-full rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
             />
           </div>
 
           {tenantTransportLimitsQuery.isError ? (
-            <div className="text-xs text-red-300 mt-2">Failed to load tenant defaults.</div>
+            <div className="mt-2 text-xs text-danger">Failed to load tenant defaults.</div>
           ) : null}
         </div>
       </SectionCard>
@@ -518,7 +525,7 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
         bodyClassName="space-y-4"
       >
         {upstreams.length === 0 ? (
-          <div className="text-sm text-zinc-500">No upstreams attached to this profile.</div>
+          <div className="text-sm text-muted">No upstreams attached to this profile.</div>
         ) : (
           upstreams.map((upstreamId) => {
             const override = security.upstreamOverrides[upstreamId];
@@ -536,46 +543,46 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
             const effective = normalizePolicy(override ?? security.upstreamDefault);
 
             return (
-              <div
-                key={upstreamId}
-                className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4 space-y-3"
-              >
+              <div key={upstreamId} className="rounded-lg border border-edge bg-well p-4 space-y-3">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
-                    <div className="text-sm font-semibold text-zinc-100 font-mono break-all">
+                    <div className="font-mono text-sm font-medium text-fg break-all">
                       {upstreamId}
                     </div>
-                    <div className="mt-1 text-xs text-zinc-500">
+                    <div className="mt-1 text-xs text-faint">
                       Effective policy:{" "}
-                      <span className="font-semibold text-zinc-300">
+                      <span className="font-medium text-muted">
                         {preset === "default" ? `default (${defaultPreset})` : preset}
                       </span>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <select
-                      value={preset}
-                      disabled={!profile || saveMutation.isPending}
-                      onChange={(e) =>
-                        setOverridePreset(upstreamId, e.target.value as UpstreamPreset)
-                      }
-                      className="rounded-lg border border-zinc-700/80 bg-zinc-900/50 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500/50 hover:border-zinc-600/80"
-                    >
-                      <option value="default">Use default</option>
-                      <option value="trusted">Trusted</option>
-                      <option value="untrusted">Untrusted</option>
-                      <option value="custom">Custom</option>
-                    </select>
+                    <div className="w-40 shrink-0">
+                      <Select
+                        aria-label={`Policy preset for ${upstreamId}`}
+                        value={preset}
+                        disabled={!profile || saveMutation.isPending}
+                        onChange={(e) =>
+                          setOverridePreset(upstreamId, e.target.value as UpstreamPreset)
+                        }
+                      >
+                        <option value="default">Use default</option>
+                        <option value="trusted">Trusted</option>
+                        <option value="untrusted">Untrusted</option>
+                        <option value="custom">Custom</option>
+                      </Select>
+                    </div>
 
                     {preset === "custom" ? (
-                      <button
+                      <Button
                         type="button"
+                        variant="ghost"
+                        size="sm"
                         onClick={() => setExpanded((m) => ({ ...m, [upstreamId]: !isOpen }))}
-                        className="rounded-lg px-3 py-2 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors"
                       >
                         {isOpen ? "Hide" : "Edit"}
-                      </button>
+                      </Button>
                     ) : null}
                   </div>
                 </div>
@@ -620,11 +627,11 @@ function PolicyEditor({
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       <div className="space-y-3">
-        <div className="text-sm font-semibold text-zinc-100">Upstream initialize</div>
+        <div className="eyebrow">Upstream initialize</div>
 
         <div className="space-y-1.5">
-          <label className="block text-xs font-medium text-zinc-400">Client capabilities</label>
-          <select
+          <Select
+            label="Client capabilities"
             value={policy.clientCapabilitiesMode}
             disabled={disabled}
             onChange={(e) => {
@@ -633,13 +640,12 @@ function PolicyEditor({
                 onChange({ ...policy, clientCapabilitiesMode: v });
               }
             }}
-            className="w-full rounded-lg border border-zinc-700/80 bg-zinc-900/50 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500/50 hover:border-zinc-600/80"
           >
             <option value="passthrough">Passthrough</option>
             <option value="strip">Strip</option>
             <option value="allowlist">Allowlist</option>
-          </select>
-          <div className="text-xs text-zinc-500">
+          </Select>
+          <div className="text-xs text-faint">
             Controls what the Gateway advertises upstream in{" "}
             <span className="font-mono">initialize.capabilities</span>.
           </div>
@@ -647,11 +653,11 @@ function PolicyEditor({
 
         {policy.clientCapabilitiesMode === "allowlist" ? (
           <div className="space-y-2">
-            <div className="text-xs font-medium text-zinc-400">Allow capability keys</div>
+            <div className="eyebrow">Allow capability keys</div>
             <div className="space-y-2">
               {["sampling", "roots", "elicitation"].map((k) => (
                 <div key={k} className="flex items-center justify-between gap-4">
-                  <div className="min-w-0 font-mono text-xs text-zinc-300 break-all">{k}</div>
+                  <div className="min-w-0 font-mono text-xs text-muted break-all">{k}</div>
                   <Toggle
                     checked={policy.clientCapabilitiesAllow.includes(k)}
                     disabled={disabled}
@@ -665,8 +671,8 @@ function PolicyEditor({
 
         <div className="flex items-start justify-between gap-6">
           <div className="min-w-0">
-            <div className="text-sm font-semibold text-zinc-100">Rewrite clientInfo</div>
-            <div className="mt-1 text-xs text-zinc-500">
+            <div className="text-sm font-medium text-fg">Rewrite clientInfo</div>
+            <div className="mt-1 text-xs text-faint">
               If enabled, upstreams won’t learn downstream client identity (e.g. Cursor/Claude
               Desktop).
             </div>
@@ -680,11 +686,11 @@ function PolicyEditor({
       </div>
 
       <div className="space-y-3">
-        <div className="text-sm font-semibold text-zinc-100">Upstream server → client requests</div>
+        <div className="eyebrow">Upstream server → client requests</div>
 
         <div className="space-y-1.5">
-          <label className="block text-xs font-medium text-zinc-400">Default action</label>
-          <select
+          <Select
+            label="Default action"
             value={policy.serverRequests.defaultAction}
             disabled={disabled}
             onChange={(e) => {
@@ -696,22 +702,21 @@ function PolicyEditor({
                 });
               }
             }}
-            className="w-full rounded-lg border border-zinc-700/80 bg-zinc-900/50 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500/50 hover:border-zinc-600/80"
           >
             <option value="allow">Allow</option>
             <option value="deny">Deny</option>
-          </select>
-          <div className="text-xs text-zinc-500">
+          </Select>
+          <div className="text-xs text-faint">
             Controls what upstream-request methods the Gateway forwards over SSE.
           </div>
         </div>
 
         <div className="space-y-2">
-          <div className="text-xs font-medium text-zinc-400">Interactive methods</div>
+          <div className="eyebrow">Interactive methods</div>
           <div className="space-y-2">
             {interactive.map(({ method, allowed }) => (
               <div key={method} className="flex items-center justify-between gap-4">
-                <div className="min-w-0 font-mono text-xs text-zinc-300 break-all">{method}</div>
+                <div className="min-w-0 font-mono text-xs text-muted break-all">{method}</div>
                 <Toggle
                   checked={allowed}
                   disabled={disabled}
@@ -723,7 +728,7 @@ function PolicyEditor({
               </div>
             ))}
           </div>
-          <div className="text-xs text-zinc-500">
+          <div className="text-xs text-faint">
             When blocked, the Gateway drops the request and replies upstream with a JSON-RPC error.
           </div>
         </div>
