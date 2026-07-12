@@ -2,7 +2,9 @@
 
 This section controls the adapter process itself (bind address, logging, timeouts, stdio restart policy), and (optionally) the **tool surface transforms** exposed by this adapter.
 
-Source of truth: [`crates/adapter/src/config.rs`](../../../crates/adapter/src/config.rs) (`AdapterSection` + `TransformPipeline`).
+Source of truth: [`crates/adapter/src/config.rs`](../../../crates/adapter/src/config.rs)
+(`AdapterSection`) and [`crates/tool-transforms/src/lib.rs`](../../../crates/tool-transforms/src/lib.rs)
+(`TransformPipeline`).
 
 ## Example
 
@@ -45,11 +47,9 @@ adapter:
 - **Type**: string (optional)
 - **Default**: none
 - **Meaning**: when set, the adapter requires:
-
   - `Authorization: Bearer <token>`
 
   for **all** HTTP endpoints except:
-
   - `/health*`
   - `/ready`
 
@@ -126,6 +126,8 @@ adapter:
     - `params`: per-param overrides keyed by **original param name**
       - `rename`: exposed param name
       - `default`: JSON default value (injected on missing/`null`)
+      - `visible`: whether the parameter is exposed and accepted from callers (default `true`)
+      - `treatNullAsMissing`: whether `null` triggers default injection (default `true`)
 
 Semantics:
 
@@ -133,7 +135,10 @@ Semantics:
   - tool names are rewritten using `toolOverrides.<tool>.rename`
   - tool descriptions can be overridden using `toolOverrides.<tool>.description`
   - top-level JSON schema `properties` keys and `required[]` entries are rewritten using `toolOverrides.<tool>.params.<param>.rename`
+  - parameters with `visible: false` are removed from top-level `properties` and `required[]`
   - defaults are surfaced as `properties.<exposed_param>.default` (best-effort)
 - **`tools/call`**:
   - incoming arguments are accepted using **exposed** param names and rewritten back to **original** param names
-  - defaults are injected when an arg is missing or `null` (after arg rewrite to original names)
+  - caller-supplied values for parameters with `visible: false` are removed
+  - defaults are injected when an argument is missing, or when it is `null` and
+    `treatNullAsMissing` is enabled (after argument names are rewritten)

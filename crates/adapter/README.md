@@ -10,7 +10,7 @@ Supports:
 
 > **IMPORTANT**
 >
-> The adapter intentionally does **not** implement authn/z or tenancy. Those controls are expected to be provided by the **Gateway** (or your reverse proxy).
+> The adapter intentionally does **not** implement tenancy or dynamic, identity-based authorization. Those controls are expected to be provided by the **Gateway** (or your reverse proxy). It does support an optional static bearer-token guard for its HTTP endpoints.
 >
 > **Assumption**: the adapter runs only inside a **private network** (or behind your internal edge) and is **not** exposed directly to the public internet.
 

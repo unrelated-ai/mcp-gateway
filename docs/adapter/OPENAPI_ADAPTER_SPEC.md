@@ -18,7 +18,8 @@ Given `servers.<name>.type: openapi`, the adapter:
 
 ## Non-goals
 
-- No inbound authn/z, tenancy, or per-tenant policy/transforms (Gateway/reverse-proxy responsibility)
+- No tenancy or identity-based/per-tenant inbound policy and transforms (Gateway/reverse-proxy
+  responsibility); the Adapter's optional static bearer guard can protect its HTTP surface
 - No cross-cutting response masking/policy transformations (Gateway responsibility)
 
 ## Tool generation (high level)

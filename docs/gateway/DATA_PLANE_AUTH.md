@@ -33,7 +33,7 @@ Supported header formats depend on the selected `dataPlaneAuth.mode`:
 
 > The secret is accepted by the Gateway **only** to authenticate the caller. It is **never** forwarded upstream.
 
-### OIDC/JWT (enterprise)
+### OIDC/JWT
 
 - `Authorization: Bearer <jwt>`
 
@@ -205,7 +205,7 @@ Semantics:
 ### Behavior (current v1)
 
 - **Rate limit**: fixed window per minute per `{api_key_id, profile_id}`.
-- **Quota**: a per `{api_key_id, profile_id}` remaining counter, decremented on *attempted* `tools/call`.
+- **Quota**: a per `{api_key_id, profile_id}` remaining counter, decremented on _attempted_ `tools/call`.
   - If quotas are enabled after a key already exists, the key’s per-profile quota is initialized on its first `tools/call`.
 
 ### Responses

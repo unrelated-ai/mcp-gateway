@@ -1,8 +1,11 @@
 # unrelated-mcp-gateway-operator
 
-OSS Kubernetes operator for `McpServer` custom resources.
+OSS managed MCP reconciler. It supports Kubernetes `McpServer` resources and a Docker mode used by
+the repository's local Compose stack.
 
 ## Current scope
+
+### Kubernetes mode
 
 - Ensures CRD `mcpservers.gateway.unrelated.ai` is installed.
 - Reconciles each `McpServer` into:
@@ -16,6 +19,14 @@ OSS Kubernetes operator for `McpServer` custom resources.
 - Supports explicit rollback trigger (`spec.rollout.forceRollback`) to return to last stable revision.
 - Uses finalizers for idempotent cleanup of Kubernetes resources and Gateway endpoint wiring.
 - Uses optional leader election via Kubernetes Leases.
+
+### Managed deployment requests
+
+- Polls Gateway managed-deployment requests and publishes reconciler heartbeats in both runtime
+  modes.
+- `k8s` mode realizes requests as `McpServer` resources.
+- `docker` mode realizes requests as Docker containers and wires their upstream endpoints into the
+  Gateway.
 
 ## Environment variables
 
@@ -32,7 +43,7 @@ OSS Kubernetes operator for `McpServer` custom resources.
 
 ### Gateway registration and rollout
 
-- `OPERATOR_GATEWAY_BASE_URL`: Gateway admin base URL (e.g. `http://gateway:8080`)
+- `OPERATOR_GATEWAY_BASE_URL`: Gateway admin base URL (e.g. `http://unrelated-mcp-gateway-admin:4001` in the Helm stack)
 - `OPERATOR_GATEWAY_BEARER_TOKEN`: bearer token/JWT for Gateway admin API
 - `OPERATOR_GATEWAY_TIMEOUT_SECS` (default: `15`)
 - `OPERATOR_GATEWAY_RETRY_MAX_ATTEMPTS` (default: `5`)
@@ -50,6 +61,16 @@ OSS Kubernetes operator for `McpServer` custom resources.
   - both modes require Gateway registration config (`OPERATOR_GATEWAY_BASE_URL`, `OPERATOR_GATEWAY_BEARER_TOKEN`)
 - `OPERATOR_MANAGED_DEPLOYMENT_HEARTBEAT_SECS` (default: `5`)
 - `OPERATOR_MANAGED_DEPLOYMENT_RECONCILER_ID` (optional; defaults to `<hostname>-<pid>`)
+
+### Docker managed-deployment mode
+
+These settings apply when `OPERATOR_MANAGED_DEPLOYMENT_MODE=docker`:
+
+- `OPERATOR_DOCKER_NETWORK` (default: `bridge`): Docker network joined by managed containers
+- `OPERATOR_DOCKER_CONTAINER_PREFIX` (default: `unrelated-managed`): sanitized prefix for managed container names
+
+Docker mode also requires access to a Docker daemon. The repository's Compose stack mounts
+`/var/run/docker.sock` and overrides the network to its Compose network.
 
 ## Image and release tags
 

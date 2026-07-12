@@ -4,8 +4,9 @@ This backend lets you define tools with a small HTTP DSL (no OpenAPI needed).
 
 Source of truth:
 
-- [`crates/adapter/src/config.rs`](../../../crates/adapter/src/config.rs) (`HttpServerConfig`, `HttpToolConfig`, `HttpParamConfig`, `HttpResponseConfig`)
-- [`crates/adapter/src/http_backend.rs`](../../../crates/adapter/src/http_backend.rs) (execution + query serialization)
+- [`crates/http-tools/src/config.rs`](../../../crates/http-tools/src/config.rs) (`HttpServerConfig`, `HttpToolConfig`, `HttpParamConfig`, `HttpResponseConfig`)
+- [`crates/http-tools/src/runtime.rs`](../../../crates/http-tools/src/runtime.rs) (execution + query serialization)
+- [`crates/adapter/src/http_backend.rs`](../../../crates/adapter/src/http_backend.rs) (Adapter `Backend` integration)
 
 ## Example
 
@@ -166,7 +167,7 @@ Or:
 ```yaml
 response:
   transforms:
-    mode: append   # append | replace (default: replace)
+    mode: append # append | replace (default: replace)
     pipeline:
       - type: pickPointers
         pointers: ["/id", "/status"]

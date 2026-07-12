@@ -146,6 +146,7 @@ The admin API can read/write tenant audit settings and query tenant audit events
 - `GET /admin/v1/tenants/{tenant_id}/audit/analytics/tool-calls/by-tool`
 - `GET /admin/v1/tenants/{tenant_id}/audit/analytics/tool-calls/by-api-key`
 - `POST /admin/v1/tenants/{tenant_id}/audit/cleanup`
+- `GET|PUT /admin/v1/profiles/{profile_id}/audit/settings`
 
 ---
 
@@ -155,4 +156,4 @@ The Web UI exposes:
 
 - **Settings → Audit**: enable/disable + default level + retention (auto-saved)
 - **Audit**: tenant-wide event listing + analytics with filters (including per-profile filtering and deep-links from profile pages)
-- Clicking an event opens an **Event Details** view (raw fields + `meta` JSON with copy support).
+- Clicking an event opens an **Event Details** drawer (raw fields + `meta` JSON with copy support).

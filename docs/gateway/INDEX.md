@@ -1,6 +1,7 @@
 # Gateway (beta)
 
-The **Gateway** is the public-facing component of this workspace. It sits in front of one or more **Adapters** and provides:
+The **Gateway** is the public-facing component of this workspace. It executes native HTTP/OpenAPI
+tool sources and sits in front of remote MCP servers, including optional **Adapters**. It provides:
 
 - **MCP proxying** over streamable HTTP (`/{profile_id}/mcp`)
 - **Upstream aggregation** (merge tools/resources/prompts across multiple upstream adapters per profile)
@@ -52,9 +53,11 @@ The Adapter stays “dumb plumbing” on purpose: it turns systems into MCP and 
 - No server-side session token revocation list (rely on TTL + re-initialize).
 - Audit event detail levels are still evolving (the current implementation stores safe, structured metadata by default).
 - Fine-grained allow/deny for **resources/prompts** is not implemented yet (tools have allowlisting + `tools/call` limits).
-- Tasks (SEP-1686) are not proxied end-to-end yet (SDK support exists in `rmcp 0.15.x`; gateway/adapter task proxying remains pending).
+- Tasks (SEP-1686) are not proxied end-to-end yet; Gateway/Adapter task proxying remains pending.
 - `notifications/roots/list_changed` is not forwarded yet (RMCP type exposure gap).
 
-## What will NOT live here
+## Component boundary
 
-- OpenAPI parsing, HTTP tool execution, spawning stdio servers — those stay in the Adapter.
+- The Gateway owns native HTTP/OpenAPI tool execution and upstream MCP aggregation.
+- Spawning stdio MCP processes stays in the Adapter; the Adapter can also pre-aggregate HTTP/OpenAPI
+  and stdio sources behind one upstream MCP endpoint.

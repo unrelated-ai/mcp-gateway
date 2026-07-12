@@ -3,7 +3,7 @@
 This repository ships **MCP infrastructure** for turning existing systems into MCP servers and serving them safely at scale:
 
 - **Adapter**: expose HTTP/OpenAPI/stdio MCP as a single MCP server over streamable HTTP (`/mcp`)
-- **Gateway**: expose tenant-owned “virtual MCP servers” (`/{profile_id}/mcp`) that proxy and aggregate upstream MCP sources (typically Adapters), with data-plane auth and policy
+- **Gateway**: expose tenant-owned “virtual MCP servers” (`/{profile_id}/mcp`) backed by native HTTP/OpenAPI sources and upstream MCP servers, with data-plane auth and policy
 - **Admin tooling**: CLI (operator workflows) + Web UI (tenant workflows)
 
 ## Why use this
@@ -30,7 +30,7 @@ Common use cases:
   - Commands: [`docs/gateway-cli/COMMANDS.md`](gateway-cli/COMMANDS.md)
   - Config/auth precedence: [`docs/gateway-cli/CONFIG.md`](gateway-cli/CONFIG.md)
   - `mcp.json` output: [`docs/gateway-cli/MCP_JSON.md`](gateway-cli/MCP_JSON.md)
-- **Gateway operator (scaffold)**: `crates/gateway-operator/README.md`
+- **Gateway operator (implemented)**: [`crates/gateway-operator/README.md`](../crates/gateway-operator/README.md)
   - Helm chart: `deploy/helm/unrelated-mcp-gateway-operator/`
 - **Gateway runtime/admin Helm chart**: `deploy/helm/unrelated-mcp-gateway/`
 - **Gateway UI Helm chart**: `deploy/helm/unrelated-mcp-gateway-ui/`

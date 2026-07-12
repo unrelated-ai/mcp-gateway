@@ -5,8 +5,11 @@ This is the **Next.js** Web UI for managing an **Unrelated MCP Gateway** tenant:
 - profiles
 - upstreams (remote Streamable HTTP MCP servers)
 - tool sources (OpenAPI + HTTP DSL)
+- managed MCP deployments (beta; requires a configured reconciler)
 - secrets
 - API keys
+- audit events and analytics
+- tenant audit and transport settings
 
 Docs live under `docs/ui/` (start at `docs/ui/INDEX.md`).
 
@@ -21,7 +24,7 @@ npm run dev
 
 ### Environment variables
 
-- **`GATEWAY_ADMIN_BASE`**: UI server → Gateway admin/control plane base URL (example: `http://gateway:27101`)
+- **`GATEWAY_ADMIN_BASE`**: UI server → Gateway admin/control plane base URL (example: `http://gateway:4001` inside the repository's Compose network)
 - **`NEXT_PUBLIC_GATEWAY_DATA_BASE`**: what users copy into MCP client configs (example: `http://localhost:27100`)
 
 ### Notes

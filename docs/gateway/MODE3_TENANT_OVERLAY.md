@@ -14,7 +14,7 @@ In Mode 3 (Postgres-backed), a profile’s effective tool surface can be compose
 
 The Gateway aggregates tools across these sources and applies:
 
-1. profile transforms (rename/defaults)
+1. profile transforms (tool/parameter renames, parameter visibility, and defaults)
 2. **optional allowlisting** (if configured)
 3. collision prefixing (`<source_id>:<tool_name>` when needed; name is post-transform)
 4. contract hashing + best-effort `notifications/*/list_changed`:
@@ -53,7 +53,7 @@ Notes:
 - **Profiles**: `POST /admin/v1/profiles` (supports:
   - `upstreams: [...]`
   - `sources: [...]` (local sources)
-  - `transforms: {...}` (rename/default transforms)
+  - `transforms: {...}` (tool/parameter renames, parameter visibility, and defaults)
   - `tools: [...]` (allowlist)
   - `toolCallTimeoutSecs?: <seconds>` (per-profile default `tools/call` timeout override)
   - `toolPolicies?: [...]` (per-tool overrides: `timeoutSecs` + `retry`))
@@ -102,7 +102,11 @@ Example (conceptual):
   "baseUrl": "https://api.example.com",
   "auth": { "type": "bearer", "token": "${secret:api_token}" },
   "tools": {
-    "get_user": { "method": "GET", "path": "/users/{id}", "params": { "id": { "in": "path", "required": true } } }
+    "get_user": {
+      "method": "GET",
+      "path": "/users/{id}",
+      "params": { "id": { "in": "path", "required": true } }
+    }
   }
 }
 ```
@@ -136,7 +140,7 @@ Gateway-native execution and upstream MCP proxying use a restrictive outbound po
 export UNRELATED_GATEWAY_SECRET_KEYS="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 ```
 
-  - If `openssl` is available, this also works:
+- If `openssl` is available, this also works:
 
 ```bash
 # 32 random bytes → base64url (no padding)

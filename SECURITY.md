@@ -2,6 +2,4 @@
 
 If you believe you’ve found a security vulnerability, please report it privately.
 
-Preferred: use GitHub Security Advisories (private vulnerability reporting) for this repository.
-
-If private reporting is not available yet, open a GitHub issue with minimal details and mark it clearly as a security report. We will coordinate a safer channel for the full details.
+Use this repository's [private vulnerability reporting form](https://github.com/unrelated-ai/mcp-gateway/security/advisories/new). Do not disclose vulnerability details in a public issue.

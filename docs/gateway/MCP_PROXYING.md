@@ -1,4 +1,4 @@
-# MCP proxying & aggregation (Gateway ⇄ Adapter)
+# MCP upstream proxying and aggregation
 
 This page describes how the Gateway behaves as an MCP server when it is aggregating multiple upstream MCP servers (typically Adapters).
 
@@ -61,7 +61,7 @@ Forwarded best-effort from upstreams (stdio backends via the Adapter):
 - `notifications/cancelled`
 - `notifications/progress`
 - `notifications/message`
-- `notifications/resources/updated` *(URI rewriting keeps subscriptions consistent under collision URNs)*
+- `notifications/resources/updated` _(URI rewriting keeps subscriptions consistent under collision URNs)_
 - `notifications/tools/list_changed`, `notifications/resources/list_changed`, `notifications/prompts/list_changed`
 
 ## Loop prevention (self-upstream protection)
@@ -122,5 +122,5 @@ For other non-UTF8 binary bodies, tool execution safely returns a base64-wrapped
 
 ## Limitations
 
-- Tasks (SEP-1686) are not proxied end-to-end yet (SDK support exists in `rmcp 0.15.x`; gateway/adapter task proxying remains pending).
+- Tasks (SEP-1686) are not proxied end-to-end yet; Gateway/Adapter task proxying remains pending.
 - `notifications/roots/list_changed` is not forwarded yet (RMCP type exposure gap).

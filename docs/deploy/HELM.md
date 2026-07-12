@@ -23,7 +23,8 @@ This repository now ships Helm packaging for the OSS control/data plane stack.
 ## What Is Not Covered
 
 - Adapter Helm charting is intentionally out of scope.
-  - Adapters are deployment payloads managed by the operator (often hybrid images with stdio MCP server + adapter).
+  - Adapters can be packaged as managed deployment images (for example, an image containing both a
+    stdio MCP server and the Adapter) or deployed separately as upstream MCP services.
 
 ## DB Decision Guidance
 

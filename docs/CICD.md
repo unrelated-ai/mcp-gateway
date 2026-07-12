@@ -30,13 +30,15 @@ Published images:
 - `ghcr.io/unrelated-ai/mcp-gateway-migrator`
 - `ghcr.io/unrelated-ai/mcp-gateway-ui`
 
-All published runtime images are minimal and contain a **static** binary (or migrations for the migrator).
+The Rust runtime images use statically linked Rust binaries: the Adapter image is `scratch`, while
+the Gateway and operator images add Alpine CA certificates. The migrator image contains `dbmate`,
+database clients, and migrations. The Web UI image contains the Next.js standalone Node runtime.
 
-## Release guard (Cargo.toml is the source of truth)
+## Release guards
 
-On tag pushes (e.g. `adapter-v0.12.4`, `gateway-v0.12.4`, or `ui-v0.8.3`), the release workflow verifies that the tag version
-matches the crate version resolved by `cargo metadata` for the target package. If it doesn’t
-match, the release fails (no image is pushed).
+On Adapter and Gateway tag pushes, the release workflow verifies that the tag version matches the
+target package version resolved by `cargo metadata`. On UI tag pushes, it verifies the version
+against `ui/package.json`. A mismatch fails the release before an image is pushed.
 
 ## Adapter releases (`adapter-vX.Y.Z`)
 
@@ -107,12 +109,12 @@ make test-integration
 
 ### Adapter release (`adapter-vX.Y.Z`)
 
-1) Bump versions / notes:
+1. Bump versions / notes:
 
 - Update `crates/adapter/Cargo.toml` `version = "X.Y.Z"`
 - Update `CHANGELOG.md`
 
-1) Tag and push:
+2. Tag and push:
 
 ```bash
 git tag adapter-vX.Y.Z
@@ -121,14 +123,14 @@ git push origin adapter-vX.Y.Z
 
 ### Gateway release (`gateway-vX.Y.Z`)
 
-1) Bump versions / notes:
+1. Bump versions / notes:
 
 - Update `crates/gateway/Cargo.toml` `version = "X.Y.Z"`
 - Update `crates/gateway-cli/Cargo.toml` `version = "X.Y.Z"` (CLI is released with the Gateway tag)
 - Update `crates/gateway-operator/Cargo.toml` `version = "X.Y.Z"` (Operator image is released with the Gateway tag)
 - Update `CHANGELOG.md`
 
-1) Tag and push:
+2. Tag and push:
 
 ```bash
 git tag gateway-vX.Y.Z
@@ -142,13 +144,13 @@ UI releases are tag-driven (similar to the Rust components):
 - Stable: `ui-vX.Y.Z`
 - Pre-release: `ui-vX.Y.Z-rc.N`
 
-1) Bump versions / notes:
+1. Bump versions / notes:
 
 - Update `ui/package.json` to `"version": "X.Y.Z"`
 - Update `ui/package-lock.json` to the same version
 - Update `CHANGELOG.md`
 
-1) Tag and push:
+2. Tag and push:
 
 ```bash
 git tag ui-vX.Y.Z

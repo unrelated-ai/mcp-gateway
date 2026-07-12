@@ -2,7 +2,8 @@
 
 Both `type: http` and `type: openapi` servers can attach authentication to outgoing HTTP requests.
 
-Source of truth: [`crates/adapter/src/config.rs`](../../../crates/adapter/src/config.rs) (`AuthConfig`).
+Source of truth: [`crates/http-tools/src/config.rs`](../../../crates/http-tools/src/config.rs)
+(`AuthConfig`). The Adapter re-exports this shared type from its config module.
 
 ## Example
 
@@ -68,5 +69,7 @@ Appends a query parameter to outgoing requests.
 
 ## Notes
 
-- The adapter does **not** implement inbound authn/z (Gateway/reverse-proxy responsibility).
+- This `auth:` block configures outbound requests; it is separate from the Adapter's optional static
+  inbound bearer guard (`adapter.mcpBearerToken`). The Adapter does not provide multi-tenant or
+  identity-based inbound authorization.
 - **No passthrough**: the adapter does not forward an inbound MCP client `Authorization` header to HTTP/OpenAPI backends. Outbound credentials must be configured explicitly via `auth:` (and/or explicit default headers).

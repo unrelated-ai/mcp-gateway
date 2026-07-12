@@ -10,8 +10,8 @@ This page is the entry point. For complete field-by-field docs, use the links be
 ## Top-level structure
 
 ```yaml
-adapter: {}   # process settings (bind/log/timeouts/restarts)
-servers: {}   # runtime backends (stdio/openapi/http)
+adapter: {} # process settings (bind/log/timeouts/restarts)
+servers: {} # runtime backends (stdio/openapi/http)
 ```
 
 See:
@@ -40,4 +40,6 @@ See: [`config/ENV_AND_PRECEDENCE.md`](config/ENV_AND_PRECEDENCE.md)
 
 ## Source of truth
 
-- [`crates/adapter/src/config.rs`](../../crates/adapter/src/config.rs) (schema, parsing, env expansion, precedence)
+- [`crates/adapter/src/config.rs`](../../crates/adapter/src/config.rs) (top-level schema, parsing, env expansion, precedence)
+- [`crates/http-tools/src/config.rs`](../../crates/http-tools/src/config.rs) (shared HTTP/auth schema)
+- [`crates/openapi-tools/src/config.rs`](../../crates/openapi-tools/src/config.rs) (shared OpenAPI schema)

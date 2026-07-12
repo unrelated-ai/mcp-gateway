@@ -4,8 +4,9 @@ This backend turns an OpenAPI spec into MCP tools and forwards tool calls as HTT
 
 Source of truth:
 
-- [`crates/adapter/src/config.rs`](../../../crates/adapter/src/config.rs) (`ApiServerConfig`, `AutoDiscoverConfig`, `EndpointConfig`, `OpenApiOverridesConfig`)
-- [`crates/adapter/src/openapi.rs`](../../../crates/adapter/src/openapi.rs) (discovery + execution)
+- [`crates/openapi-tools/src/config.rs`](../../../crates/openapi-tools/src/config.rs) (`ApiServerConfig`, `AutoDiscoverConfig`, `EndpointConfig`, `OpenApiOverridesConfig`)
+- [`crates/openapi-tools/src/runtime.rs`](../../../crates/openapi-tools/src/runtime.rs) (discovery + execution)
+- [`crates/adapter/src/openapi.rs`](../../../crates/adapter/src/openapi.rs) (Adapter `Backend` integration)
 
 ## Output schemas + structured results
 

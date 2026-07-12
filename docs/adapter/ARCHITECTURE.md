@@ -44,10 +44,13 @@ mcp-gateway/
 ├── Cargo.lock
 ├── crates/
 │   ├── adapter/             # unrelated-mcp-adapter binary crate
+│   ├── env/                 # shared environment parsing helpers
 │   ├── gateway/             # unrelated-mcp-gateway binary crate
 │   ├── gateway-cli/         # unrelated-gateway-admin binary crate
+│   ├── gateway-operator/    # managed-deployment reconciler
 │   ├── http-tools/          # shared HTTP tools runtime/config
 │   ├── openapi-tools/       # shared OpenAPI parsing/runtime
+│   ├── test-support/        # shared integration-test helpers
 │   └── tool-transforms/     # shared tool surface transforms
 ├── Dockerfile
 ├── docker-compose.yml
@@ -55,9 +58,7 @@ mcp-gateway/
 ├── .github/workflows/ci.yml
 ├── .github/workflows/release.yml
 ├── .github/workflows/docker-release.yml
-└── tests/fixtures/
-    ├── test-config.yaml
-    └── test-config.json
+└── tests/fixtures/          # demo and test configurations
 ```
 
 ## Configuration
@@ -197,14 +198,14 @@ The MCP handler uses the aggregator’s mapping to route calls/resources/prompts
 
 - **Rust**: edition 2024, MSRV 1.92.0 (see workspace [`Cargo.toml`](../../Cargo.toml)).
 - **Release build**: `cargo build --release -p unrelated-mcp-adapter`
-- **Docker image**: [`Dockerfile`](../../Dockerfile) builds an optimized release binary in a builder stage and copies it into a slim runtime image.
+- **Docker image**: [`Dockerfile`](../../Dockerfile) builds an optimized static release binary and copies it into the default `scratch` runtime image. The optional `stdio-node` target adds Node/npm for stdio servers that need it.
 - **GitHub Actions**:
   - CI (PRs): [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)
   - Releases (tags): [`.github/workflows/release.yml`](../../.github/workflows/release.yml) → calls [`.github/workflows/docker-release.yml`](../../.github/workflows/docker-release.yml)
 
 ## Security model (current scope)
 
-- No built-in **multi-tenant inbound** authn/z, TLS termination, or rate limiting.
+- No built-in **multi-tenant or identity-based inbound** authorization, TLS termination, or rate limiting.
 - Safety guardrails are implemented:
   - optional static bearer-token protection for HTTP endpoints (including `/mcp`) via `adapter.mcpBearerToken`
 - Outbound backend auth **is supported** for `type: http` and `type: openapi` via `auth:` blocks (see `docs/adapter/config/AUTH.md`).

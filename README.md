@@ -1,348 +1,227 @@
 <div align="center">
 
-# MCP Gateway by unrelated.ai
+# MCP Gateway
 
-MCP infrastructure for turning existing systems into MCP servers and serving them safely at scale.
+**Give AI applications safe access to the APIs and MCP servers you already run.**
+
+Turn REST/OpenAPI services and existing MCP servers into focused, secured MCP
+endpoints—without rebuilding every integration from scratch.
 
 [![CI](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/ci.yml)
 [![Security RustSec](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-rustsec.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-rustsec.yml)
 [![Security Cargo Deny](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-cargo-deny.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-cargo-deny.yml)
-[![Security Adapter](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-adapter.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-adapter.yml)
-[![Security Gateway](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-gateway.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-gateway.yml)
-[![Security Operator](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-operator.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-operator.yml)
-[![Security Migrator](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-migrator.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-migrator.yml)
-[![Security UI](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-ui.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-ui.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-
-![MCP Gateway UI](docs/assets/ui_main_screen.png)
 
 </div>
 
-## Quick Start (recommended): Docker (published images) + Web UI
+MCP Gateway sits between your MCP clients and the systems they need to use:
 
-If you just want to try the product experience, this is the fastest path (no repo clone needed).
+- Connect existing **REST APIs**, **OpenAPI services**, and **MCP servers**.
+- Combine tools from multiple systems behind one stable endpoint.
+- Create focused tool surfaces for different teams, environments, or agents.
+- Control access with API keys or OIDC, tool policies, limits, secrets, and audit logging.
+- Run locally with Docker or deploy to Kubernetes.
 
-This example pins component versions (adjust as desired):
+![Profiles in the MCP Gateway Web UI](docs/assets/ui_main_screen.png)
 
-- Gateway + migrator: `0.12.4`
-- Web UI: `0.8.3`
+<p align="center">
+  <sub>Each profile exposes its own MCP endpoint, authentication mode, and set of tool sources.</sub>
+</p>
 
-1. Download a Compose file that uses published images:
+## How it works
+
+```mermaid
+flowchart LR
+  APIs["REST / OpenAPI"] --> Gateway["MCP Gateway"]
+  Remote["Remote MCP servers"] --> Gateway
+  Stdio["stdio MCP servers"] --> Adapter["Optional Adapter"]
+  Adapter --> Gateway
+  Gateway --> Profiles["Focused MCP endpoints"]
+  Profiles --> Clients["MCP clients and AI applications"]
+```
+
+The Gateway can expose HTTP/OpenAPI tools directly and proxy remote MCP servers. The optional
+Adapter publishes local stdio MCP servers over streamable HTTP and can aggregate related systems
+before they reach the Gateway.
+
+Each **profile** is a virtual MCP server with its own endpoint, tools, authentication, and policy.
+One deployment can serve a single developer or isolate many teams and environments.
+
+## When MCP Gateway is useful
+
+Use it when you want to:
+
+- Give an MCP client access to an existing API without writing a bespoke MCP server.
+- Publish a local stdio MCP server over streamable HTTP.
+- Combine tools from several services into one MCP endpoint.
+- Expose different tools to development, production, or read-only clients.
+- Put authentication, quotas, timeouts, retries, and audit logging in front of MCP tools.
+- Isolate teams or projects without deploying a separate gateway for each one.
+
+## Try it locally
+
+The quickest path uses published Docker images and does not require cloning this repository.
+
+**Prerequisite:** Docker with Docker Compose.
+
+1. Download the quickstart Compose file:
 
 ```bash
 curl -fsSL -o mcp-gateway-compose.yml \
   https://raw.githubusercontent.com/unrelated-ai/mcp-gateway/main/docker-compose.quickstart.yml
 ```
 
-2. Start the stack:
+2. Start the Gateway and Web UI:
 
 ```bash
 GATEWAY_VERSION=0.12.4 UI_VERSION=0.8.3 \
   docker compose -f mcp-gateway-compose.yml up -d
 ```
 
-3. Open the Web UI:
+3. Open [http://127.0.0.1:27102](http://127.0.0.1:27102).
 
-- `http://127.0.0.1:27102`
+The onboarding flow creates your first tenant and starter profile. From there:
 
-On a fresh install (bootstrap enabled + empty DB), onboarding will guide you through creating the first tenant and profile.
+1. Add an HTTP/OpenAPI or MCP source.
+2. Attach it to a profile.
+3. Create an API key for the profile and save the secret shown once.
+4. Copy the profile endpoint into your MCP client and send the key as
+   `Authorization: Bearer <API_KEY_SECRET>` on every request.
 
-4. Connect your MCP client to the profile endpoint you created in the UI:
+Each profile is available at:
 
-- `http://127.0.0.1:27100/<PROFILE_ID>/mcp`
+```text
+http://127.0.0.1:27100/<PROFILE_ID>/mcp
+```
 
-Useful commands:
+On first use, the quickstart starts with an empty database so you can connect the systems you
+actually want to expose. The named volume preserves that data across restarts until you remove it.
 
-- `docker compose -f mcp-gateway-compose.yml down` (stop the stack)
-- `docker compose -f mcp-gateway-compose.yml down -v` (also wipe the DB volume)
+To stop or reset it:
 
-## Quick Start (from source): Docker Compose + Web UI
+```bash
+docker compose -f mcp-gateway-compose.yml down
+docker compose -f mcp-gateway-compose.yml down -v # also delete local data
+```
 
-If you're developing this repo locally, the Makefile-driven workflow is convenient:
+## What you get
+
+| Area               | Capabilities                                                                        |
+| ------------------ | ----------------------------------------------------------------------------------- |
+| **Sources**        | Manual HTTP tools, OpenAPI discovery, remote MCP, and stdio MCP through the Adapter |
+| **Endpoints**      | Streamable HTTP MCP endpoints with stable profile URLs                              |
+| **Tool control**   | Allowlists, renaming, defaults, parameter tuning, timeouts, retries, and quotas     |
+| **Access control** | API keys, optional OIDC/JWT, tenant isolation, and encrypted tenant secrets         |
+| **Operations**     | Audit events, transport limits, health endpoints, CLI administration, and Web UI    |
+| **Deployment**     | Docker Compose for local use and Helm charts for Kubernetes                         |
+
+## Core concepts
+
+| Concept     | Meaning                                                                                         |
+| ----------- | ----------------------------------------------------------------------------------------------- |
+| **Gateway** | The public-facing service that exposes secured profile endpoints and routes tool calls          |
+| **Profile** | A focused virtual MCP server with its own endpoint, sources, authentication, and policy         |
+| **Tenant**  | An isolation boundary for profiles, secrets, and API keys                                       |
+| **Source**  | An HTTP/OpenAPI tool source or upstream MCP server attached to a profile                        |
+| **Adapter** | An optional service that exposes HTTP, OpenAPI, or stdio MCP sources as one remote MCP endpoint |
+
+## Deployment options
+
+| Setup                     | Best for                                                    | Shape                                            |
+| ------------------------- | ----------------------------------------------------------- | ------------------------------------------------ |
+| **Gateway only**          | A developer or small deployment exposing HTTP/OpenAPI tools | MCP clients → Gateway → APIs                     |
+| **Gateway with tenants**  | Multiple teams, projects, or environments                   | MCP clients → tenant profiles → isolated sources |
+| **Gateway with Adapters** | Larger installations and existing stdio MCP servers         | MCP clients → Gateway → private-network Adapters |
+
+The Gateway supports HA-friendly session routing through Gateway session tokens
+(`Mcp-Session-Id`). Adapters normally run close to the systems they expose, while the Gateway
+provides the public endpoint and shared policy layer.
+
+## Components
+
+- **Gateway** (`unrelated-mcp-gateway`): tenant/profile-based MCP routing, authentication, policy,
+  limits, and audit logging.
+- **Adapter** (`unrelated-mcp-adapter`): expose HTTP, OpenAPI, or stdio MCP sources through one
+  streamable HTTP MCP endpoint.
+- **Web UI**: tenant onboarding and management for sources, profiles, keys, secrets, audit, and
+  settings.
+- **Admin CLI** (`unrelated-gateway-admin`): operator and automation workflows.
+- **Gateway Operator**: managed MCP deployment support for Kubernetes.
+
+## Documentation
+
+- [Documentation index](docs/INDEX.md)
+- [Gateway](docs/gateway/INDEX.md)
+  - [MCP proxying and aggregation](docs/gateway/MCP_PROXYING.md)
+  - [Data-plane authentication](docs/gateway/DATA_PLANE_AUTH.md)
+  - [MCP settings and trust controls](docs/gateway/MCP_SETTINGS.md)
+  - [Audit logging](docs/gateway/AUDIT.md)
+- [Adapter](docs/adapter/INDEX.md)
+  - [Manual HTTP tools](docs/adapter/config/SERVERS_HTTP.md)
+  - [OpenAPI tools](docs/adapter/config/SERVERS_OPENAPI.md)
+  - [stdio MCP servers](docs/adapter/config/SERVERS_STDIO.md)
+- [Web UI](docs/ui/INDEX.md)
+- [Gateway CLI](docs/gateway-cli/INDEX.md)
+- [Helm deployment](docs/deploy/HELM.md)
+- [CI/CD and releases](docs/CICD.md)
+- [Workspace layout](docs/WORKSPACE.md)
+
+## Develop from source
+
+Start the complete development stack:
 
 ```bash
 make up
 ```
 
+This starts Postgres, the migrator, Gateway, Web UI, example adapters, HTTPBin, and Petstore.
+Open the UI at [http://127.0.0.1:27102](http://127.0.0.1:27102).
+
 Useful commands:
 
-- `make down` (stop the stack)
-- `make up-reset` (wipe the demo DB; deletes all tenants/config; then run `make up` again to re-trigger onboarding)
-
-Tip: this repo uses a Makefile heavily—run `make help` to see all targets.
-
-## Why this exists
-
-MCP clients need to call tools, but most real systems already exist as:
-
-- HTTP APIs
-- existing stdio MCP servers (node/python/etc)
-- multiple internal services that need to be aggregated into one tool surface
-
-This workspace makes those systems consumable via **streamable HTTP MCP** without rewriting them into a bespoke MCP server.
-
-## What this ships
-
-- **Adapter** (`unrelated-mcp-adapter`): expose HTTP/OpenAPI/stdio MCP as one MCP server at `/mcp`
-- **Gateway** (`unrelated-mcp-gateway`): tenant/profile-based MCP proxy at `/{profile_id}/mcp` with auth and policy
-- **Admin tooling**:
-  - CLI (`unrelated-gateway-admin`)
-  - Tenant-level Web UI (beta)
-
-## Key concepts
-
-| Concept | What it is | Why it’s useful |
-|---|---|---|
-| **Adapter** | One MCP server at `/mcp` that aggregates **stdio MCP**, **OpenAPI**, and **manual HTTP tools** | Turn “many backends” into one MCP endpoint (runs well inside a trusted network) |
-| **Gateway** | Public-facing MCP endpoint `/{profile_id}/mcp` that proxies/aggregates upstream MCP sources and applies auth/policy | Run multi-tenant, policy-driven “virtual MCP servers” without exposing upstreams |
-| **Tenant** | Isolation boundary in Mode 3 (Postgres) | Separate teams/projects/environments with isolated secrets and API keys |
-| **Profile** | One “virtual MCP server” exposed as `/{profile_id}/mcp` | Create focused tool surfaces per use case (dev vs prod, read-only vs write, etc.) |
-
-## What you can build with it
-
-- **Expose a REST API as MCP tools**:
-  - OpenAPI → tools, or
-  - manual HTTP tools DSL → tools
-- **Publish stdio MCP servers over HTTP** by spawning them as child processes and re-exposing the tool surface at `/mcp`.
-- **Aggregate multiple tool sources** into one MCP endpoint (and keep names stable by collision prefixing when needed).
-- **Operate a tenant-scoped gateway**:
-  - API keys and optional OIDC/JWT for data-plane auth
-  - per-profile tool allowlists, transforms (rename/defaults/parameter tuning), and tool-call limits (timeouts/retries/quotas)
-  - HA-friendly session routing via Gateway session tokens (`Mcp-Session-Id`)
-
-### Deployment configurations
-
-#### 1. Solo developer
-
-**Just the Gateway, no Adapters needed.**
-
-Use the Gateway with gateway-native HTTP/OpenAPI sources and connect your MCP client to a single profile endpoint.
-
-```mermaid
-flowchart LR
-  Client["MCP client"] -->|"streamable HTTP '/{profile_id}/mcp'"| Gateway["Gateway"]
-  Gateway -->|"gateway-native HTTP tools"| HttpApi["Your HTTP API"]
-  Gateway -->|"gateway-native OpenAPI tools"| OpenApi["OpenAPI (spec or API)"]
+```bash
+make help      # list available targets
+make down      # stop the stack
+make up-reset  # delete demo data; run make up afterward
 ```
 
-#### 2. Team with multiple projects
+For component-level development:
 
-**Gateway with Tenants and Profiles.**
+- Run the Adapter with an example config: `make adapter-run`
+- Build the static Adapter binary: `make build-release-adapter`
+- Run the admin CLI: `make cli-dev CLI_ARGS="--help"`
+- Browse the commented example configurations in [`tests/fixtures/`](tests/fixtures/)
+- See the [Adapter testing guide](docs/adapter/TESTING.md)
 
-Each tenant owns multiple profiles, where each profile is a focused “virtual MCP server” with its own tool surface and data-plane auth/policy.
+## Images and release artifacts
 
-```mermaid
-flowchart LR
-  TeamA["Team A MCP clients"] -->|"profile A"| Gateway["Gateway"]
-  TeamB["Team B MCP clients"] -->|"profile B"| Gateway
+Published container images:
 
-  Gateway --> TenantA["Tenant: team-a"]
-  Gateway --> TenantB["Tenant: team-b"]
+- `ghcr.io/unrelated-ai/mcp-gateway`
+- `ghcr.io/unrelated-ai/mcp-gateway-migrator`
+- `ghcr.io/unrelated-ai/mcp-gateway-operator`
+- `ghcr.io/unrelated-ai/mcp-gateway-ui`
+- `ghcr.io/unrelated-ai/mcp-adapter`
 
-  TenantA --> ProfileDev["Profile: dev-tools"]
-  TenantA --> ProfileProd["Profile: prod-readonly"]
-  TenantB --> ProfileDS["Profile: data-science"]
+Stable releases use `:latest` and `:X.Y.Z` tags. Pre-releases use `:X.Y.Z-rc.N`.
+GitHub Releases also include static Linux Adapter and Gateway admin CLI binaries for
+`x86_64-unknown-linux-musl` under their respective release tags.
 
-  ProfileDev --> InternalApis["Internal APIs"]
-  ProfileProd --> ProdApis["Prod APIs (GET only)"]
-  ProfileDS --> MlApis["ML APIs + data tools"]
-```
+The published Adapter image contains a minimal static binary. If your stdio MCP servers require
+Node, Python, or other runtimes, copy that binary into your own runtime image. See the
+[stdio server documentation](docs/adapter/config/SERVERS_STDIO.md).
 
-#### 3. Complex / company-wide
+## Project health
 
-**Gateway + Adapters for aggregation and splitting.**
-
-Use Adapters to bundle related systems into upstream MCP endpoints (typically inside a private network), then use Gateway profiles to expose focused tool surfaces to clients.
-
-```mermaid
-flowchart LR
-  Client2["MCP client"] -->|"streamable HTTP '/{profile_id}/mcp'"| Gateway2["Gateway"]
-
-  Gateway2 -->|"proxy to upstream MCP"| AdapterA["Adapter A (/mcp)"]
-  Gateway2 -->|"proxy to upstream MCP"| AdapterB["Adapter B (/mcp)"]
-
-  AdapterA -->|"aggregates"| Billing["Billing API"]
-  AdapterA -->|"aggregates"| Inventory["Inventory API"]
-  AdapterA -->|"aggregates"| AuthSvc["Auth service"]
-
-  AdapterB -->|"aggregates"| Mlflow["MLflow"]
-  AdapterB -->|"aggregates"| Jupyter["Jupyter"]
-```
-
-## Adapter: what it exposes
-
-The Adapter exposes one MCP server over streamable HTTP:
-
-- **MCP endpoint**: **`/mcp`**
-- **Operational endpoints**: `/health`, `/health/any`, `/health/all`, `/ready`, `/status`, `/map`
-
-## Documentation
-
-- Start here (workspace docs index): [`docs/INDEX.md`](docs/INDEX.md)
-- Component docs:
-  - Adapter: [`docs/adapter/INDEX.md`](docs/adapter/INDEX.md)
-  - Gateway: [`docs/gateway/INDEX.md`](docs/gateway/INDEX.md)
-  - Gateway CLI: [`docs/gateway-cli/INDEX.md`](docs/gateway-cli/INDEX.md)
-  - Web UI: [`docs/ui/INDEX.md`](docs/ui/INDEX.md)
-- CI/CD + releases: [`docs/CICD.md`](docs/CICD.md)
-- Workspace layout: [`docs/WORKSPACE.md`](docs/WORKSPACE.md)
-
-## Other ways to run (local dev)
-
-This section shows a few common ways to run pieces locally. Many commands have convenient Make targets (see `make help`).
-
-### Local (cargo)
-
-- Build + run the adapter with the example config (recommended):
-  - `make adapter-run`
-- Or build a static release binary:
-  - `make build-release-adapter`
-
-Equivalent raw `cargo` commands:
-
-- `cargo build --release -p unrelated-mcp-adapter`
-- `cargo run -p unrelated-mcp-adapter --bin unrelated-mcp-adapter -- --config ./tests/fixtures/test-config.yaml --bind 127.0.0.1:8080`
-
-- More example configs (and a handy playground) live under [`tests/fixtures/`](./tests/fixtures/) — these are used by the demo stack and integration tests, and some are intentionally invalid to demonstrate validation errors.
-
-### Docker
-
-- Build the adapter image:
-  - `make docker-build-adapter`
-- Run the adapter container (standalone, without compose):
-  - `make docker-run-adapter`
-
-### Docker Compose (Gateway + multiple Adapters)
-
-The default `docker-compose.yml` now spins up:
-
-- Postgres for Mode 3 (`gateway_db`) + a migrator job (`gateway_db_migrate`)
-- a Mode 3 Gateway (`gateway`) exposing:
-  - data plane: `http://127.0.0.1:27100`
-  - admin/control plane: `http://127.0.0.1:27101` (token: `dev-admin-token` in compose)
-- a Web UI (`gateway_ui`) on `http://127.0.0.1:27102`
-- 3 adapters (`adapter_http_tools`, `adapter_openapi`, `adapter_stdio_aggregation`) plus example backends (`httpbin`, `petstore`)
-
-Run:
-
-- `make up`
-
-Then create a tenant + profile (preferably via the Web UI) and connect your MCP client to:
-
-- **Gateway data plane**: `http://127.0.0.1:27100/<PROFILE_ID>/mcp`
-
-Notes:
-
-- The compose stack sets a **dev-only** default `UNRELATED_GATEWAY_SECRET_KEYS` so Mode 3 tenant secrets can be encrypted at rest (override this in real deployments).
-- Adapters are still exposed individually on their mapped ports for debugging.
-
-Gateway admin CLI:
-
-- Run: `make cli-dev CLI_ARGS="--help"` (docs: [`docs/gateway-cli/INDEX.md`](docs/gateway-cli/INDEX.md))
-
-Web UI:
-
-- Open `http://127.0.0.1:27102`
-- On a fresh install (bootstrap enabled + empty DB), onboarding will guide creating the first tenant.
-
-### Install options
-
-- Docker image: `ghcr.io/unrelated-ai/mcp-adapter`
-  - Stable tags publish `:latest` + `:X.Y.Z`
-  - Pre-release tags publish `:X.Y.Z-rc.N`
-- GitHub Release binaries: static Linux build (`x86_64-unknown-linux-musl`)
-
-If your **stdio MCP servers** require extra runtimes (node/python/etc), build your own image and copy the adapter binary from the published image:
-
-```dockerfile
-FROM alpine:3.20
-RUN apk add --no-cache ca-certificates nodejs npm
-COPY --from=ghcr.io/unrelated-ai/mcp-adapter:latest /app/unrelated-mcp-adapter /app/unrelated-mcp-adapter
-ENTRYPOINT ["/app/unrelated-mcp-adapter"]
-```
-
-The published adapter image is a minimal image containing a **static** adapter binary, so it can be copied into Alpine/Debian/etc (same CPU architecture).
-
-### Examples
-
-Each example below is a complete YAML config file (you can also use JSON). The key part is the `servers:` map.
-
-Once running, the adapter serves the resulting MCP tools over **streamable HTTP** (`/mcp`). Tool names are usually the tool key (like `create_invoice`); if two servers define the same tool name, the adapter prefixes on collision (`serverName:toolName`).
-
-#### HTTP tools (manual HTTP DSL)
-
-```yaml
-servers:
-  billing_api:
-    type: http
-    baseUrl: http://billing-api:8080
-    tools:
-      create_invoice:
-        method: POST
-        path: /v1/invoices/{customerId}
-        description: Create an invoice for a customer and return the created invoice JSON.
-        params:
-          customerId:
-            in: path
-            required: true
-            schema:
-              type: string
-          dryRun:
-            in: query
-            schema:
-              type: boolean
-          body:
-            in: body
-            required: true
-            schema:
-              type: object
-              properties:
-                amountCents:
-                  type: integer
-                currency:
-                  type: string
-              required:
-                - amountCents
-                - currency
-```
-
-Result: exposes an MCP tool named `create_invoice` (or `billing_api:create_invoice` on collision). It takes `customerId` (string, path), `dryRun` (boolean, query), and `body` (JSON object).
-
-#### OpenAPI (auto-discover tools from a spec)
-
-```yaml
-servers:
-  orders_api:
-    type: openapi
-    spec: ./openapi/orders.yaml
-    baseUrl: https://api.example.com
-    autoDiscover:
-      include:
-        - "GET *"
-      exclude:
-        - "DELETE *"
-```
-
-Result: exposes one MCP tool per discovered OpenAPI operation (here: all `GET` operations except `DELETE`). Tool names come from `operationId` when present; tool parameters come from the OpenAPI schema (path/query/header/body).
-
-#### MCP stdio (spawn a local MCP server process)
-
-```yaml
-servers:
-  local_mcp:
-    type: stdio
-    command: /usr/local/bin/my-mcp-server
-    args:
-      - "--mode"
-      - "prod"
-    env:
-      API_TOKEN: "${API_TOKEN}"
-```
-
-Result: spawns the process and re-exposes whatever tools/prompts/resources that MCP server provides (through the adapter’s MCP endpoint, `/mcp`). `env` values support `${VAR}` expansion.
+[![Security Adapter](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-adapter.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-adapter.yml)
+[![Security Gateway](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-gateway.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-gateway.yml)
+[![Security Operator](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-operator.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-operator.yml)
+[![Security Migrator](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-migrator.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-migrator.yml)
+[![Security UI](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-ui.yml/badge.svg)](https://github.com/unrelated-ai/mcp-gateway/actions/workflows/security-trivy-ui.yml)
 
 ## Project meta
 
-- Changelog: [`CHANGELOG.md`](CHANGELOG.md)
-- Contributing: [`CONTRIBUTING.md`](CONTRIBUTING.md)
-- Security policy: [`SECURITY.md`](SECURITY.md)
+- [Changelog](CHANGELOG.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- Licensed under the [MIT License](LICENSE)

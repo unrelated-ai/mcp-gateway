@@ -11,7 +11,7 @@ Tenant-facing **data-plane authn/z** is implemented (API keys + OIDC/JWT, config
 ## Key concepts
 
 - **Tenant**: an isolated configuration scope, addressed by **id only**.
-- **Profile**: a tenant-owned endpoint (path) that defines routing to upstream adapter(s). Different profiles can route differently.
+- **Profile**: a tenant-owned endpoint (path) that composes native tool sources and/or upstream MCP servers. Different profiles can expose different sources and policies.
 
 ## High-level data flow
 
@@ -21,14 +21,11 @@ MCP Client
   |  (streamable HTTP /{profile_id}/mcp)
   v
 Gateway
-  |
-  |  (streamable HTTP /mcp) + (optional /map discovery)
-  v
-Adapter(s)
-  |
-  |  stdio MCP child processes / HTTP APIs / OpenAPI backends
-  v
-Systems
+  |-- native HTTP/OpenAPI execution ----------------------> APIs
+  |-- streamable HTTP /mcp ------------------------------> Remote MCP server(s)
+  `-- streamable HTTP /mcp ------------------------------> Adapter(s)
+                                                             |
+                                                             `--> stdio MCP processes / APIs
 ```
 
 ## Responsibilities split
@@ -37,12 +34,14 @@ Systems
   - Expose tools/resources/prompts over `/mcp`
   - Aggregate multiple backends
   - Provide operational metadata via `/map` for routing/UI
-  - No multi-tenant inbound authn/z, tenancy, or policy (optional guardrails exist; see adapter docs)
+  - Spawn stdio MCP servers and optionally execute HTTP/OpenAPI tools
+  - No tenancy or dynamic, identity-based inbound authorization; an optional static bearer guard exists
 
 - **Gateway**
   - Authenticate/authorize incoming clients
   - Select tenant and apply tenant policy
-  - Route/proxy MCP requests to upstream Adapter(s)
+  - Execute tenant/shared HTTP/OpenAPI tool sources
+  - Route/proxy MCP requests to upstream MCP servers, including Adapters
   - Provide cross-profile/session routing and aggregation behaviors
 
 ## Authorization forwarding stance (important)
@@ -158,7 +157,7 @@ With MCP-over-streamable-HTTP, the client and server communicate using a **sessi
 
 So, in any Gateway that can run multiple nodes, we must ensure:
 
-- **All requests for a given MCP session** are routed to the same upstream MCP session (and usually the same upstream *node* that owns that session).
+- **All requests for a given MCP session** are routed to the same upstream MCP session (and usually the same upstream _node_ that owns that session).
 - This must still work even if the load balancer sends requests to different Gateway nodes.
 
 ### Model B: stateless “Gateway session token”
@@ -258,9 +257,9 @@ Default behavior:
 
 For streamable HTTP, we should assume **session-affinity is always required**, because the protocol uses `Mcp-Session-Id` and upstream servers commonly keep per-session state.
 
-What we *can* configure is:
+What we _can_ configure is:
 
-- how we **choose an upstream endpoint** for a *new* session (round-robin, least-connections, etc.)
+- how we **choose an upstream endpoint** for a _new_ session (round-robin, least-connections, etc.)
 - session idle timeouts / max lifetime
 - whether the Gateway **signs only** (opaque but readable) or **encrypts** (opaque + confidential) its session tokens
 

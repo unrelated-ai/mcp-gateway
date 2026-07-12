@@ -19,7 +19,7 @@ The CLI is a thin wrapper around the Gateway Admin API.
 - `tenants list`
 - `tenants get <id>`
 - `tenants put <id> [--enabled true|false]`
-- `tenants delete <id>` *(soft-delete: sets enabled=false)*
+- `tenants delete <id>` _(soft-delete: sets enabled=false)_
 - `tenants issue-token <id> [--ttl-seconds <seconds>]`
 
 ### Tenant tool sources (Mode 3)
@@ -29,7 +29,7 @@ These map to the Mode 3 tenant overlay and are managed via admin endpoints:
 - `tenants tool-sources <tenant_id> list`
 - `tenants tool-sources <tenant_id> get <source_id>`
 - `tenants tool-sources <tenant_id> put <source_id> [--body-json <json> | --body-file <path>]`
-- `tenants tool-sources <tenant_id> delete <source_id>` *(soft-delete: sets enabled=false)*
+- `tenants tool-sources <tenant_id> delete <source_id>` _(soft-delete: sets enabled=false)_
 
 `put` payload must be a JSON object that includes `type` (`http` or `openapi`) and config fields, e.g.:
 
@@ -68,17 +68,17 @@ These configure **OIDC principal bindings** (issuer + subject) that authorize JW
 
 - `upstreams list`
 - `upstreams get <id>`
-- `upstreams put <id> --endpoint <ep_id>=<url> [--endpoint ...] [--enabled true|false]`
-- `upstreams delete <id>` *(hard-delete: removes the upstream)*
+- `upstreams put <id> [--endpoint <ep_id>=<url> ...] [--enabled true|false] [--network-class <external|cluster-internal-managed>]`
+- `upstreams delete <id>` _(hard-delete: removes the upstream)_
 
 ## `profiles`
 
 - `profiles list`
 - `profiles get <uuid>`
-- `profiles create --tenant-id <tenant> --name <name> [--description <text>] --upstream <upstream> [--upstream ...] [--source <source_id> ...] [--enabled true|false] [--allow-partial-upstreams true|false] [--tool <source_id:tool_name> ...] [--transforms-json <json> | --transforms-file <path>] [--data-plane-auth-mode <...>] [--accept-x-api-key true|false] [--rate-limit-enabled true|false] [--rate-limit-tool-calls-per-minute <n>] [--quota-enabled true|false] [--quota-tool-calls <n>] [--tool-call-timeout-secs <secs>] [--tool-policies-json <json> | --tool-policies-file <path>] [--mcp-json <json> | --mcp-file <path>]`
-- `profiles put --id <uuid> --tenant-id <tenant> --name <name> [--description <text>] --upstream <upstream> [--upstream ...] [--source <source_id> ...] [--enabled true|false] [--allow-partial-upstreams true|false] [--tool <source_id:tool_name> ...] [--transforms-json <json> | --transforms-file <path>] [--data-plane-auth-mode <...>] [--accept-x-api-key true|false] [--rate-limit-enabled true|false] [--rate-limit-tool-calls-per-minute <n>] [--quota-enabled true|false] [--quota-tool-calls <n>] [--tool-call-timeout-secs <secs>] [--tool-policies-json <json> | --tool-policies-file <path>] [--mcp-json <json> | --mcp-file <path>]`
-- `profiles delete <uuid>` *(hard-delete: removes the profile)*
-- `profiles url <uuid>` *(prints `/{profile_id}/mcp` URL using `--data-base`)*
+- `profiles create --tenant-id <tenant> --name <name> [--description <text>] [--upstream <upstream> ...] [--source <source_id> ...] [--enabled true|false] [--allow-partial-upstreams true|false] [--tool <source_id:tool_name> ...] [--transforms-json <json> | --transforms-file <path>] [--data-plane-auth-mode <...>] [--accept-x-api-key true|false] [--rate-limit-enabled true|false] [--rate-limit-tool-calls-per-minute <n>] [--quota-enabled true|false] [--quota-tool-calls <n>] [--tool-call-timeout-secs <secs>] [--tool-policies-json <json> | --tool-policies-file <path>] [--mcp-json <json> | --mcp-file <path>]`
+- `profiles put --id <uuid> --tenant-id <tenant> --name <name> [--description <text>] [--upstream <upstream> ...] [--source <source_id> ...] [--enabled true|false] [--allow-partial-upstreams true|false] [--tool <source_id:tool_name> ...] [--transforms-json <json> | --transforms-file <path>] [--data-plane-auth-mode <...>] [--accept-x-api-key true|false] [--rate-limit-enabled true|false] [--rate-limit-tool-calls-per-minute <n>] [--quota-enabled true|false] [--quota-tool-calls <n>] [--tool-call-timeout-secs <secs>] [--tool-policies-json <json> | --tool-policies-file <path>] [--mcp-json <json> | --mcp-file <path>]`
+- `profiles delete <uuid>` _(hard-delete: removes the profile)_
+- `profiles url <uuid>` _(prints `/{profile_id}/mcp` URL using `--data-base`)_
 
 ### Profile `dataPlaneAuth` settings (Mode 3)
 
@@ -92,9 +92,9 @@ On `profiles put`, these settings are merged with the existing profile when prov
 Limits are optional and disabled by default. When enabled, they apply to `tools/call` per API key.
 
 - `--rate-limit-enabled true|false`
-- `--rate-limit-tool-calls-per-minute <n>` *(required when enabled)*
+- `--rate-limit-tool-calls-per-minute <n>` _(required when enabled)_
 - `--quota-enabled true|false`
-- `--quota-tool-calls <n>` *(required when enabled)*
+- `--quota-tool-calls <n>` _(required when enabled)_
 
 On `profiles put`, these settings are merged with the existing profile when provided.
 
@@ -152,12 +152,18 @@ The payload schema matches `TransformPipeline` (`camelCase` keys):
       "rename": "renamed_tool_a",
       "params": {
         "oldParam": { "rename": "newParam" },
-        "limit": { "default": 10 }
+        "limit": { "default": 10 },
+        "internalToken": { "visible": false },
+        "query": { "default": "all", "treatNullAsMissing": false }
       }
     }
   }
 }
 ```
+
+Parameter overrides support `rename`, `default`, `visible` (default `true`), and
+`treatNullAsMissing` (default `true`). Hidden parameters are removed from the advertised schema and
+caller-provided values for them are discarded.
 
 ### MCP settings (`mcp`)
 

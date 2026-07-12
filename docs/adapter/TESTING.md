@@ -22,12 +22,14 @@ Ports:
 - `8082`: petstore (direct)
 - `8083`: adapter (OpenAPI aspect)
 - `8084`: adapter (stdio aggregation aspect)
+- `8085`: adapter (self-contained stdio smoke/managed-deployment fixture)
 
 Config files used by the demo stack live under [`tests/fixtures/`](../../tests/fixtures/):
 
 - [`tests/fixtures/http-tools-httpbin.yaml`](../../tests/fixtures/http-tools-httpbin.yaml) (used by `adapter_http_tools`)
 - [`tests/fixtures/openapi-petstore3.yaml`](../../tests/fixtures/openapi-petstore3.yaml) (used by `adapter_openapi`)
 - [`tests/fixtures/stdio-aggregation.yaml`](../../tests/fixtures/stdio-aggregation.yaml) (used by `adapter_stdio_aggregation`)
+- [`tests/fixtures/stdio-smoke.yaml`](../../tests/fixtures/stdio-smoke.yaml) (baked into `adapter_stdio_smoke`)
 
 ### Fixture configs as a playground (recommended)
 

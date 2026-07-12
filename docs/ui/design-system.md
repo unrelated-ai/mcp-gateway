@@ -6,20 +6,21 @@ badges, tabs, tables, or colors.
 
 ## Tokens (defined in `ui/app/globals.css` `@theme`)
 
-Use semantic tokens only. Raw Tailwind palette colors (`zinc-*`, `violet-*`, `red-*`,
-`emerald-*`, `sky-*`, `blue-*`, …) are not allowed in pages or components.
+Use semantic tokens for product colors. Raw Tailwind palette colors (`zinc-*`, `violet-*`, `red-*`,
+`emerald-*`, `sky-*`, `blue-*`, …) are not allowed in pages or components; overlay primitives may
+use neutral `black` opacity utilities for backdrops and shadows.
 
-| Token | Utility examples | Use for |
-| --- | --- | --- |
-| `bg` | `bg-bg` | App background |
-| `surface` | `bg-surface` | Cards, panels, sidebar |
-| `raised` | `bg-raised` | Hover fills, nested chips, skeletons |
-| `overlay` | `bg-overlay` | Toasts, floating panels |
-| `well` | `bg-well` | Inset code/endpoint wells, form controls |
-| `edge` / `edge-strong` | `border-edge`, `border-edge-strong` | Hairlines / control borders |
-| `fg` / `muted` / `faint` | `text-fg`, `text-muted`, `text-faint` | Text hierarchy (primary / secondary / hints) |
-| `accent`, `accent-strong`, `accent-hover` | `text-accent`, `bg-accent-strong` | Brand iris. Active nav, primary buttons, focus rings |
-| `ok`, `warn`, `danger`, `info` | `text-ok`, `bg-danger/10`, … | Functional state only — never decoration |
+| Token                                     | Utility examples                      | Use for                                              |
+| ----------------------------------------- | ------------------------------------- | ---------------------------------------------------- |
+| `bg`                                      | `bg-bg`                               | App background                                       |
+| `surface`                                 | `bg-surface`                          | Cards, panels, sidebar                               |
+| `raised`                                  | `bg-raised`                           | Hover fills, nested chips, skeletons                 |
+| `overlay`                                 | `bg-overlay`                          | Toasts, floating panels                              |
+| `well`                                    | `bg-well`                             | Inset code/endpoint wells, form controls             |
+| `edge` / `edge-strong`                    | `border-edge`, `border-edge-strong`   | Hairlines / control borders                          |
+| `fg` / `muted` / `faint`                  | `text-fg`, `text-muted`, `text-faint` | Text hierarchy (primary / secondary / hints)         |
+| `accent`, `accent-strong`, `accent-hover` | `text-accent`, `bg-accent-strong`     | Brand iris. Active nav, primary buttons, focus rings |
+| `ok`, `warn`, `danger`, `info`            | `text-ok`, `bg-danger/10`, …          | Functional state only — never decoration             |
 
 Soft fills use opacity modifiers (`bg-ok/10`, `border-danger/25`), not separate tokens.
 
@@ -49,27 +50,27 @@ keys, JSON, metrics, eyebrow labels). Anything machine-readable renders in mono.
 
 ## Components (`ui/components/ui`)
 
-| Component | API essentials |
-| --- | --- |
-| `Button` | `variant: primary\|secondary\|ghost\|danger`, `size: sm\|md\|lg`, `loading` |
-| `IconButton` | `label` (required, becomes aria-label), `size: sm\|md` |
-| `Input`, `Textarea`, `Select` | `label`, `hint`, `error` + native props; auto `id`/aria wiring |
-| `Checkbox`, `Toggle` | `checked`, `onChange(bool)`, `label`, `description` |
-| `Badge` | `tone`, `dot`; `StatusBadge enabled`; `AuthModeBadge mode` |
-| `Callout` | `tone`, `size`, `title` |
-| `Card` (+ `CardHeader/Content/Title/Description`) | plain container; `hover` for link cards |
-| `SectionCard` | `title` (renders as eyebrow), `subtitle`, `right` — labeled panels on detail pages |
-| `Tabs` | `items: {value,label,count?,disabled?}[]`, `value`, `onChange` — proper tablist a11y |
-| `Table`, `THead`, `TBody`, `TR`, `TH`, `TD` | data tables; TH renders as eyebrow |
-| `Modal`, `ModalActions`, `ConfirmModal` | focus-trapped, `role=dialog`; `ConfirmModal danger/requireText` |
-| `Drawer` | right-side inspector panel (audit details, etc.) |
-| `Stat` | `label` (eyebrow), `value` (mono), `tone`, `hint` |
-| `EndpointWell` | `url`, `live` — the signature endpoint treatment with LED + copy |
-| `CopyButton` | `value`, `variant: button\|icon` |
-| `CopyBlock` | `value`, `label`, `language`, `compact` — highlighting is React nodes, never innerHTML |
-| `EmptyState` | `icon`, `title`, `description`, `action` |
-| `Spinner`, `Skeleton`, `SkeletonRows` | loading states; never hand-roll spinners |
-| `ToastViewport` | reads `useToastStore`; store variants stay `success\|error\|info` |
+| Component                                         | API essentials                                                                                    |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `Button`                                          | `variant: primary\|secondary\|ghost\|danger`, `size: sm\|md\|lg`, `loading`                       |
+| `IconButton`                                      | `label` (required, becomes aria-label), `size: sm\|md`                                            |
+| `Input`, `Textarea`, `Select`                     | `label`, `hint`, `error` + native props; auto `id`/aria wiring                                    |
+| `Checkbox`, `Toggle`                              | `checked`, `onChange(bool)`, `label`, `description`                                               |
+| `Badge`                                           | `tone`, `dot`; `StatusBadge enabled`; `AuthModeBadge mode`                                        |
+| `Callout`                                         | `tone`, `size`, `title`                                                                           |
+| `Card` (+ `CardHeader/Content/Title/Description`) | plain container; `hover` for link cards                                                           |
+| `SectionCard`                                     | `title` (renders as eyebrow), `subtitle`, `right` — labeled panels on detail pages                |
+| `Tabs`                                            | `items: {value,label,count?,disabled?}[]`, `value`, `onChange` — tab roles + arrow-key navigation |
+| `Table`, `THead`, `TBody`, `TR`, `TH`, `TD`       | data tables; TH renders as eyebrow                                                                |
+| `Modal`, `ModalActions`, `ConfirmModal`           | focus-trapped, `role=dialog`; `ConfirmModal danger/requireText`                                   |
+| `Drawer`                                          | right-side, focus-trapped inspector panel; `title`, `description`, `widthClassName`               |
+| `Stat`                                            | `label` (eyebrow), `value` (mono), `tone`, `hint`                                                 |
+| `EndpointWell`                                    | `url`, `live`, `showLed` — the signature endpoint treatment with optional LED + copy              |
+| `CopyButton`                                      | `value`, `variant: button\|icon`                                                                  |
+| `CopyBlock`                                       | `value`, `label`, `language`, `compact` — highlighting is React nodes, never innerHTML            |
+| `EmptyState`                                      | `icon`, `title`, `description`, `action`                                                          |
+| `Spinner`, `Skeleton`, `SkeletonRows`             | loading states; never hand-roll spinners                                                          |
+| `ToastViewport`                                   | reads `useToastStore`; store variants stay `success\|error\|info`                                 |
 
 Layout (`ui/components/layout`): `AppShell` (sidebar + tenant indicator + lock),
 `PageHeader` (`title`, `description`, `actions`, `breadcrumb`), `PageContent` (`width`).
