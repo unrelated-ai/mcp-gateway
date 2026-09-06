@@ -47,6 +47,8 @@ mod ids;
 mod initialize;
 mod probe;
 mod protocol;
+mod request_context;
+use request_context::RequestContext;
 mod stream;
 mod streamable_http;
 mod surface;
@@ -245,18 +247,6 @@ fn verify_session_token(
     }
 
     Ok(payload)
-}
-
-async fn load_profile_or_404(
-    state: &McpState,
-    profile_id: &str,
-) -> Result<crate::store::Profile, Response> {
-    state
-        .store
-        .get_profile(profile_id)
-        .await
-        .map_err(internal_error_response("load profile"))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "profile not found").into_response())
 }
 
 fn parse_hop(headers: &HeaderMap) -> u32 {
@@ -470,6 +460,7 @@ struct InSessionRequestCtx<'a> {
     state: &'a McpState,
     profile_id: &'a str,
     profile: &'a crate::store::Profile,
+    request: &'a RequestContext,
     payload: &'a TokenPayloadV1,
     hop: u32,
 }
@@ -549,8 +540,7 @@ async fn handle_tools_call_in_session(
 
     Box::pin(route_and_proxy_tools_call(
         ctx.state,
-        ctx.profile_id,
-        ctx.profile,
+        ctx.request,
         ctx.payload,
         token,
         message,
@@ -663,13 +653,14 @@ async fn handle_resource_subscription_in_session(
 
 async fn handle_post_in_session_request(
     state: &McpState,
-    profile_id: &str,
-    profile: &crate::store::Profile,
+    request: &RequestContext,
     payload: &TokenPayloadV1,
     token: String,
     message: &mut ClientJsonRpcMessage,
     hop: u32,
 ) -> Result<Response, Response> {
+    let profile = &request.profile;
+    let profile_id = profile.id.as_str();
     let (req_id, method) = match as_request_ref(&*message) {
         Some(JsonRpcRequest { id, request, .. }) => (id.clone(), request.method().to_string()),
         None => return Ok(StatusCode::ACCEPTED.into_response()),
@@ -679,6 +670,7 @@ async fn handle_post_in_session_request(
         state,
         profile_id,
         profile,
+        request,
         payload,
         hop,
     };
@@ -760,18 +752,19 @@ async fn handle_post_in_session_request(
 
 async fn handle_post_in_session(
     state: &McpState,
-    profile_id: &str,
+    request: &RequestContext,
     headers: &HeaderMap,
     token: String,
     mut message: ClientJsonRpcMessage,
 ) -> Result<Response, Response> {
+    let profile = &request.profile;
+    let profile_id = profile.id.as_str();
     let hop = parse_hop(headers);
     let payload = verify_session_token(&state.signer, &token, profile_id)
         .map_err(|(s, m)| (s, m).into_response())?;
-    let profile = load_profile_or_404(state, profile_id).await?;
     enforce_data_plane_auth(
         state,
-        &profile,
+        profile,
         headers,
         payload.auth.as_ref(),
         payload.oidc.as_ref(),
@@ -781,7 +774,7 @@ async fn handle_post_in_session(
     // Any in-session request extends liveness for bound upstream sessions.
     record_upstream_bindings_activity_best_effort(
         state,
-        &profile,
+        profile,
         &token,
         &payload.bindings,
         "post_in_session",
@@ -800,16 +793,7 @@ async fn handle_post_in_session(
         return Ok(resp);
     }
 
-    handle_post_in_session_request(
-        state,
-        profile_id,
-        &profile,
-        &payload,
-        token,
-        &mut message,
-        hop,
-    )
-    .await
+    handle_post_in_session_request(state, request, &payload, token, &mut message, hop).await
 }
 
 async fn handle_delete(

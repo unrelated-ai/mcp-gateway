@@ -1223,8 +1223,11 @@ async fn upstream_server_to_client_request_blocking_drops_event_and_errors_upstr
     up_handle.abort();
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct CountingStore {
+    profiles: Arc<Mutex<HashMap<String, crate::store::Profile>>>,
+    get_profile_calls: Arc<AtomicUsize>,
+    get_limits_calls: Arc<AtomicUsize>,
     upstreams: HashMap<String, crate::store::Upstream>,
     tenant_sources: HashSet<String>,
     get_upstream_calls: Arc<AtomicUsize>,
@@ -1232,11 +1235,9 @@ struct CountingStore {
 
 #[async_trait]
 impl crate::store::Store for CountingStore {
-    async fn get_profile(
-        &self,
-        _profile_id: &str,
-    ) -> anyhow::Result<Option<crate::store::Profile>> {
-        Ok(None)
+    async fn get_profile(&self, profile_id: &str) -> anyhow::Result<Option<crate::store::Profile>> {
+        self.get_profile_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(self.profiles.lock().unwrap().get(profile_id).cloned())
     }
 
     async fn get_upstream(
@@ -1285,6 +1286,7 @@ impl crate::store::Store for CountingStore {
         &self,
         _tenant_id: &str,
     ) -> anyhow::Result<Option<crate::store::TransportLimitsSettings>> {
+        self.get_limits_calls.fetch_add(1, Ordering::SeqCst);
         Ok(None)
     }
 
@@ -1374,6 +1376,7 @@ sharedSources:
         )]),
         tenant_sources: HashSet::from(["t_local".to_string()]),
         get_upstream_calls: calls.clone(),
+        ..Default::default()
     });
 
     let state = McpState {
@@ -1775,8 +1778,13 @@ async fn tool_call_propagates_timeout_budget_meta_and_retries_when_configured() 
 
     let resp = route_and_proxy_tools_call(
         &state,
-        "p",
-        &profile,
+        &RequestContext {
+            limits: crate::transport_limits::EffectiveTransportLimits::from_profile_and_tenant(
+                &profile.mcp.security.transport_limits,
+                None,
+            ),
+            profile,
+        },
         &payload,
         "tok".to_string(),
         &mut msg,
@@ -1796,3 +1804,5 @@ async fn tool_call_propagates_timeout_budget_meta_and_retries_when_configured() 
 
     handle.abort();
 }
+
+mod request_context;

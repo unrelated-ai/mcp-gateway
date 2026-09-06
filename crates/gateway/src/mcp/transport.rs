@@ -83,11 +83,18 @@ async fn post_mcp(
     ensure_accepts_post(&headers).map_err(|(s, m)| (s, m).into_response())?;
     ensure_json_content_type(&headers).map_err(|(s, m)| (s, m).into_response())?;
 
-    let (profile, limits) =
-        load_profile_and_effective_transport_limits(state.as_ref(), &profile_id).await?;
-    let message =
-        parse_post_body_message_with_limits(state.as_ref(), &profile_id, &profile, limits, &body)
-            .await?;
+    let request = super::request_context::RequestContext::load(state.store.as_ref(), &profile_id)
+        .await
+        .map_err(internal_error_response("load profile"))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "profile not found").into_response())?;
+    let message = parse_post_body_message_with_limits(
+        state.as_ref(),
+        &profile_id,
+        &request.profile,
+        request.limits,
+        &body,
+    )
+    .await?;
 
     let session_header = headers
         .get(HEADER_SESSION_ID)
@@ -103,14 +110,10 @@ async fn post_mcp(
     Box::pin(
         async move {
             match session_header {
-                None => handle_initialize(&state, &profile_id, &headers, message).await,
+                None => handle_initialize(&state, &request.profile, &headers, message).await,
                 Some(token) => {
                     Box::pin(handle_post_in_session(
-                        &state,
-                        &profile_id,
-                        &headers,
-                        token,
-                        message,
+                        &state, &request, &headers, token, message,
                     ))
                     .await
                 }
@@ -119,47 +122,6 @@ async fn post_mcp(
         .instrument(span),
     )
     .await
-}
-
-async fn load_profile_and_effective_transport_limits(
-    state: &McpState,
-    profile_id: &str,
-) -> Result<
-    (
-        crate::store::Profile,
-        crate::transport_limits::EffectiveTransportLimits,
-    ),
-    Response,
-> {
-    // Load profile early so we can apply per-profile / per-tenant transport limits before parsing.
-    let profile = state
-        .store
-        .get_profile(profile_id)
-        .await
-        .map_err(internal_error_response("load profile"))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "profile not found").into_response())?;
-
-    let tenant_limits = match state
-        .store
-        .get_tenant_transport_limits(&profile.tenant_id)
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                tenant_id = %profile.tenant_id,
-                "load tenant transport limits failed; using defaults"
-            );
-            None
-        }
-    };
-    let limits = crate::transport_limits::EffectiveTransportLimits::from_profile_and_tenant(
-        &profile.mcp.security.transport_limits,
-        tenant_limits.as_ref(),
-    );
-
-    Ok((profile, limits))
 }
 
 async fn parse_post_body_message_with_limits(

@@ -20,31 +20,24 @@ const PROXY_KEY_BYTES: usize = 32;
 
 pub(super) async fn handle_initialize(
     state: &McpState,
-    profile_id: &str,
+    profile: &crate::store::Profile,
     headers: &HeaderMap,
     message: ClientJsonRpcMessage,
 ) -> Result<Response, Response> {
     let (req_id, protocol_version) =
         parse_initialize_request(&message).map_err(|(s, m)| (s, m).into_response())?;
 
-    let profile = state
-        .store
-        .get_profile(profile_id)
-        .await
-        .map_err(internal_error_response("load profile"))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "profile not found").into_response())?;
-
     // Data-plane authn/z (per-profile).
     let (auth, oidc): (Option<TokenAuthV1>, Option<TokenOidcV1>) =
         match profile.data_plane_auth_mode {
             DataPlaneAuthMode::Disabled => (None, None),
             DataPlaneAuthMode::ApiKey => (
-                Some(authenticate_api_key_on_initialize(state, &profile, headers).await?),
+                Some(authenticate_api_key_on_initialize(state, profile, headers).await?),
                 None,
             ),
             DataPlaneAuthMode::OAuth => (
                 None,
-                Some(authorize_oauth_request(state, &profile, headers).await?),
+                Some(authorize_oauth_request(state, profile, headers).await?),
             ),
         };
 
@@ -55,7 +48,7 @@ pub(super) async fn handle_initialize(
     );
 
     let (bindings, warnings) =
-        initialize_profile_sources(state, &profile, &message, parse_hop(headers)).await?;
+        initialize_profile_sources(state, profile, &message, parse_hop(headers)).await?;
 
     let mut local_sources: usize = 0;
     for id in &profile.source_ids {
@@ -95,7 +88,7 @@ pub(super) async fn handle_initialize(
         tracing::warn!(profile_id = %profile.id, warning = %warning, "profile initialize warning");
     }
 
-    let init_result = gateway_initialize_result(&profile, protocol_version, &warnings);
+    let init_result = gateway_initialize_result(profile, protocol_version, &warnings);
     let response_message = ServerJsonRpcMessage::Response(JsonRpcResponse {
         jsonrpc: JsonRpcVersion2_0,
         id: req_id,
@@ -123,7 +116,7 @@ pub(super) async fn handle_initialize(
         .map_err(internal_error_response("sign session token"))?;
 
     // Mark freshly initialized upstream bindings as active.
-    record_upstream_bindings_activity_best_effort(state, &profile, &token, &bindings, "initialize")
+    record_upstream_bindings_activity_best_effort(state, profile, &token, &bindings, "initialize")
         .await;
 
     Ok(sse_single_message_with_session_id(
