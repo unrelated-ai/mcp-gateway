@@ -5147,6 +5147,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "unrelated-cli",
  "unrelated-env",
  "unrelated-http-tools",
  "unrelated-openapi-tools",

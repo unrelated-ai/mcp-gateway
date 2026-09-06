@@ -53,3 +53,4 @@ rsa = { version = "0.9.10", features = ["pem"] }
 tempfile = "3"
 testcontainers = "0.27.3"
 unrelated-test-support = { path = "../test-support" }
+unrelated-cli = { path = "../unrelated-cli" }

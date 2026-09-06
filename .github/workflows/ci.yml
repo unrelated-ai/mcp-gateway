@@ -44,6 +44,10 @@ jobs:
         timeout-minutes: 15
         run: make test-gateway-contracts
 
+      - name: Real v1 clients and restart contracts
+        timeout-minutes: 10
+        run: make test-v1-journey
+
   helm:
     name: helm (lint, template)
     runs-on: ubuntu-latest

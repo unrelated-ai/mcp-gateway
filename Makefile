@@ -25,7 +25,7 @@
         kind-local-deploy kind-local-refresh kind-local-reset \
         up down logs status \
         inspector \
-        ci ci-quick test-ci test-gateway-contracts qa-release-gates \
+        ci ci-quick test-ci test-gateway-contracts test-v1-journey qa-release-gates \
         helm-validate helm-validate-optional \
         crd-sync crd-sync-check \
         hooks-install bench help
@@ -441,6 +441,13 @@ test-gateway-contracts:
 	  --test integration_mode3_pg \
 	  --test integration_pg_fanout_notifications \
 	  -- --ignored --nocapture --test-threads=1
+
+## Real CLI, compact proxy, Adapter and sessionless rmcp acceptance tests
+# Build sibling binaries explicitly: Cargo does not build other packages' binaries
+# just because their libraries are test dependencies.
+test-v1-journey:
+	cargo build -p unrelated-mcp-adapter -p unrelated-cli --bins
+	cargo test -p unrelated-mcp-gateway --test integration_v1_journey -- --ignored --nocapture --test-threads=1
 
 ## Sync canonical operator CRD into Helm chart copy
 crd-sync:
