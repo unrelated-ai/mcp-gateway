@@ -1,15 +1,16 @@
+mod validation;
+
 use super::{
     OkResponse, TenantState, authn, parse_tenant_upstream_internal_id, tenant_upstream_internal_id,
 };
 use crate::audit::{AuditActor, AuditError, HttpAuditEvent};
 use crate::profile_http::{
     DataPlaneAuthSettings, DataPlaneLimitsSettings, NullableString, NullableU64,
-    resolve_nullable_u64, validate_tool_allowlist, validate_tool_timeout_and_policies,
 };
 use crate::serde_helpers::default_true;
 use crate::store::{
-    AdminProfile, AdminStore, DataPlaneAuthMode, McpProfileSettings, PutProfileDataPlaneAuth,
-    PutProfileFlags, PutProfileInput, PutProfileLimits,
+    AdminProfile, AdminStore, McpProfileSettings, PutProfileDataPlaneAuth, PutProfileFlags,
+    PutProfileInput, PutProfileLimits,
 };
 use crate::tool_policy::ToolPolicy;
 use axum::extract::Path;
@@ -34,8 +35,6 @@ pub(super) fn router() -> Router {
             get(get_profile).put(put_profile).delete(delete_profile),
         )
 }
-
-const OAUTH_NOT_CONFIGURED_MSG: &str = "OAuth is unavailable because data-plane OAuth is not configured on the Gateway. Configure UNRELATED_GATEWAY_PUBLIC_DATA_BASE_URL and UNRELATED_GATEWAY_OAUTH_ISSUER, or choose a different mode.";
 
 fn is_profile_mcp_endpoint_url(profile_id: &str, url: &str) -> bool {
     let Ok(u) = reqwest::Url::parse(url) else {
@@ -379,9 +378,11 @@ async fn create_profile(
     }
 
     let profile_id = Uuid::new_v4().to_string();
-    let validated = match validate_create_profile_settings(state.as_ref(), &req) {
+    let validated = match validation::validate_create(&req, state.mcp_state.oauth.is_some()) {
         Ok(v) => v,
-        Err(resp) => return *resp,
+        Err(error) => {
+            return (StatusCode::BAD_REQUEST, error.message().to_string()).into_response();
+        }
     };
     let resolved_upstreams = match resolve_upstreams_for_create_profile(
         store.as_ref(),
@@ -441,74 +442,6 @@ async fn create_profile(
         }),
     )
         .into_response()
-}
-
-struct CreateProfileValidatedSettings {
-    enabled_tools: Vec<String>,
-    data_plane_auth: DataPlaneAuthSettings,
-    data_plane_limits: DataPlaneLimitsSettings,
-    tool_call_timeout_secs: Option<u64>,
-    tool_policies: Vec<ToolPolicy>,
-    mcp: McpProfileSettings,
-}
-
-fn validate_create_profile_settings(
-    state: &TenantState,
-    req: &CreateProfileRequest,
-) -> Result<CreateProfileValidatedSettings, Box<Response>> {
-    if req.name.trim().is_empty() {
-        return Err(Box::new(
-            (StatusCode::BAD_REQUEST, "name is required").into_response(),
-        ));
-    }
-
-    let enabled_tools = req.tools.clone().unwrap_or_default();
-    let mut data_plane_auth = req.data_plane_auth.clone().unwrap_or_default();
-    if let Err(message) = data_plane_auth.validate() {
-        return Err(Box::new((StatusCode::BAD_REQUEST, message).into_response()));
-    }
-    if data_plane_auth.mode() == DataPlaneAuthMode::OAuth && state.mcp_state.oauth.is_none() {
-        return Err(Box::new(
-            (StatusCode::BAD_REQUEST, OAUTH_NOT_CONFIGURED_MSG).into_response(),
-        ));
-    }
-
-    let data_plane_limits = req
-        .data_plane_limits
-        .clone()
-        .unwrap_or(DataPlaneLimitsSettings {
-            rate_limit_enabled: false,
-            rate_limit_tool_calls_per_minute: None,
-            quota_enabled: false,
-            quota_tool_calls: None,
-        });
-    if let Err(msg) = data_plane_limits.validate() {
-        return Err(Box::new((StatusCode::BAD_REQUEST, msg).into_response()));
-    }
-
-    // Tool call timeouts + per-tool policies (timeouts + retry policy).
-    let tool_call_timeout_secs = req.tool_call_timeout_secs;
-    let (tool_policies, mcp) = (req.tool_policies.clone(), req.mcp.clone());
-    if let Err(msg) = validate_tool_timeout_and_policies(tool_call_timeout_secs, &tool_policies) {
-        return Err(Box::new((StatusCode::BAD_REQUEST, msg).into_response()));
-    }
-    if let Err(msg) = validate_tool_allowlist(&enabled_tools) {
-        return Err(Box::new((StatusCode::BAD_REQUEST, msg).into_response()));
-    }
-    if let Err(msg) =
-        crate::transport_limits::validate_transport_limits_settings(&mcp.security.transport_limits)
-    {
-        return Err(Box::new((StatusCode::BAD_REQUEST, msg).into_response()));
-    }
-
-    Ok(CreateProfileValidatedSettings {
-        enabled_tools,
-        data_plane_auth,
-        data_plane_limits,
-        tool_call_timeout_secs,
-        tool_policies,
-        mcp,
-    })
 }
 
 async fn put_profile(
@@ -640,62 +573,35 @@ async fn tenant_put_profile_inner_impl(
         profile_uuid,
     )
     .await?;
-    let (tool_call_timeout_secs, tool_policies, mcp) =
-        tenant_put_profile_resolve_tool_settings(&req, &existing);
-    let name = tenant_put_profile_resolve_name(
-        &profile_id,
-        enabled_for_meta,
-        profile_uuid,
-        &existing,
-        req.name,
-    )?;
-    let description: Option<String> =
-        tenant_put_profile_resolve_description(&existing, req.description);
+    let update = validation::plan_update(&req, &existing, state.mcp_state.oauth.is_some())
+        .map_err(|error| {
+            let name_for_meta = match error {
+                validation::ValidationError::NameRequired => None,
+                validation::ValidationError::Settings { .. } => {
+                    Some(req.name.clone().unwrap_or_else(|| existing.name.clone()))
+                }
+            };
+            Box::new(TenantPutProfileOutcome::fail(
+                profile_id.clone(),
+                enabled_for_meta,
+                Some(profile_uuid),
+                StatusCode::BAD_REQUEST,
+                error.message(),
+                AuditError::new("bad_request", error.detail()),
+                name_for_meta,
+            ))
+        })?;
     let resolved_upstreams = tenant_put_profile_resolve_upstreams(
         store,
         tenant_id,
         &profile_id,
         enabled_for_meta,
         profile_uuid,
-        &name,
+        &update.name,
         &req.upstreams,
     )
     .await?;
-    let enabled_tools = req.tools.unwrap_or_default();
-    let data_plane_auth = tenant_put_profile_resolve_auth(
-        state,
-        &profile_id,
-        enabled_for_meta,
-        profile_uuid,
-        &existing,
-        &name,
-        req.data_plane_auth,
-    )?;
-    let data_plane_limits = tenant_put_profile_resolve_limits(
-        &profile_id,
-        enabled_for_meta,
-        profile_uuid,
-        &existing,
-        &name,
-        req.data_plane_limits,
-    )?;
-
-    tenant_put_profile_validate_tools(
-        &profile_id,
-        enabled_for_meta,
-        profile_uuid,
-        &name,
-        &enabled_tools,
-        tool_call_timeout_secs,
-        &tool_policies,
-    )?;
-    tenant_put_profile_validate_transport_limits(
-        &profile_id,
-        enabled_for_meta,
-        profile_uuid,
-        &name,
-        &mcp,
-    )?;
+    let settings = &update.settings;
 
     tenant_put_profile_store_put(
         store,
@@ -704,19 +610,19 @@ async fn tenant_put_profile_inner_impl(
             profile_id: &profile_id,
             enabled_for_meta,
             profile_uuid,
-            name_for_meta: &name,
-            description: description.as_deref(),
+            name_for_meta: &update.name,
+            description: update.description.as_deref(),
             enabled: req.enabled,
             allow_partial_upstreams: req.allow_partial_upstreams,
             resolved_upstreams: &resolved_upstreams,
             sources: &req.sources,
             transforms: &req.transforms,
-            enabled_tools: &enabled_tools,
-            data_plane_auth: &data_plane_auth,
-            data_plane_limits: &data_plane_limits,
-            tool_call_timeout_secs,
-            tool_policies: &tool_policies,
-            mcp: &mcp,
+            enabled_tools: &settings.enabled_tools,
+            data_plane_auth: &settings.data_plane_auth,
+            data_plane_limits: &settings.data_plane_limits,
+            tool_call_timeout_secs: settings.tool_call_timeout_secs,
+            tool_policies: &settings.tool_policies,
+            mcp: &settings.mcp,
         },
     )
     .await?;
@@ -725,7 +631,7 @@ async fn tenant_put_profile_inner_impl(
         profile_id,
         enabled_for_meta,
         profile_uuid,
-        name,
+        update.name,
     ))
 }
 
@@ -783,39 +689,6 @@ async fn tenant_put_profile_load_existing(
     }
 }
 
-fn tenant_put_profile_resolve_name(
-    profile_id: &str,
-    enabled_for_meta: bool,
-    profile_uuid: Uuid,
-    existing: &crate::store::AdminProfile,
-    req_name: Option<String>,
-) -> TenantPutProfileStep<String> {
-    let name = req_name.unwrap_or_else(|| existing.name.clone());
-    if name.trim().is_empty() {
-        return Err(Box::new(TenantPutProfileOutcome::fail(
-            profile_id.to_string(),
-            enabled_for_meta,
-            Some(profile_uuid),
-            StatusCode::BAD_REQUEST,
-            "name is required",
-            AuditError::new("bad_request", "name is required"),
-            None,
-        )));
-    }
-    Ok(name)
-}
-
-fn tenant_put_profile_resolve_description(
-    existing: &crate::store::AdminProfile,
-    req: Option<NullableString>,
-) -> Option<String> {
-    match req {
-        None => existing.description.clone(),
-        Some(NullableString::Null) => None,
-        Some(NullableString::Value(v)) => Some(v),
-    }
-}
-
 async fn tenant_put_profile_resolve_upstreams(
     store: &dyn crate::store::AdminStore,
     tenant_id: &str,
@@ -853,147 +726,6 @@ async fn tenant_put_profile_resolve_upstreams(
         }));
     }
     Ok(resolved)
-}
-
-fn tenant_put_profile_resolve_auth(
-    state: &TenantState,
-    profile_id: &str,
-    enabled_for_meta: bool,
-    profile_uuid: Uuid,
-    existing: &crate::store::AdminProfile,
-    name_for_meta: &str,
-    req: Option<DataPlaneAuthSettings>,
-) -> TenantPutProfileStep<DataPlaneAuthSettings> {
-    let mut auth = req.unwrap_or_else(|| {
-        DataPlaneAuthSettings::from_parts(
-            existing.data_plane_auth_mode,
-            existing.accept_x_api_key,
-            existing.oauth_required_scopes.clone(),
-        )
-    });
-    if let Err(message) = auth.validate() {
-        return Err(Box::new(TenantPutProfileOutcome::fail(
-            profile_id.to_string(),
-            enabled_for_meta,
-            Some(profile_uuid),
-            StatusCode::BAD_REQUEST,
-            "invalid OAuth scopes",
-            AuditError::new("bad_request", message),
-            Some(name_for_meta.to_string()),
-        )));
-    }
-    if auth.mode() == DataPlaneAuthMode::OAuth && state.mcp_state.oauth.is_none() {
-        return Err(Box::new(TenantPutProfileOutcome::fail(
-            profile_id.to_string(),
-            enabled_for_meta,
-            Some(profile_uuid),
-            StatusCode::BAD_REQUEST,
-            OAUTH_NOT_CONFIGURED_MSG,
-            AuditError::new("bad_request", OAUTH_NOT_CONFIGURED_MSG),
-            Some(name_for_meta.to_string()),
-        )));
-    }
-    Ok(auth)
-}
-
-fn tenant_put_profile_resolve_limits(
-    profile_id: &str,
-    enabled_for_meta: bool,
-    profile_uuid: Uuid,
-    existing: &crate::store::AdminProfile,
-    name_for_meta: &str,
-    req: Option<DataPlaneLimitsSettings>,
-) -> TenantPutProfileStep<DataPlaneLimitsSettings> {
-    let limits = req.unwrap_or(DataPlaneLimitsSettings {
-        rate_limit_enabled: existing.rate_limit_enabled,
-        rate_limit_tool_calls_per_minute: existing.rate_limit_tool_calls_per_minute,
-        quota_enabled: existing.quota_enabled,
-        quota_tool_calls: existing.quota_tool_calls,
-    });
-    if let Err(msg) = limits.validate() {
-        let msg_string = msg.to_string();
-        return Err(Box::new(TenantPutProfileOutcome::fail(
-            profile_id.to_string(),
-            enabled_for_meta,
-            Some(profile_uuid),
-            StatusCode::BAD_REQUEST,
-            msg,
-            AuditError::new("bad_request", msg_string),
-            Some(name_for_meta.to_string()),
-        )));
-    }
-    Ok(limits)
-}
-
-fn tenant_put_profile_resolve_tool_settings(
-    req: &PutProfileRequest,
-    existing: &crate::store::AdminProfile,
-) -> (Option<u64>, Vec<ToolPolicy>, McpProfileSettings) {
-    let tool_call_timeout_secs =
-        resolve_nullable_u64(req.tool_call_timeout_secs, existing.tool_call_timeout_secs);
-    let tool_policies = req
-        .tool_policies
-        .clone()
-        .unwrap_or_else(|| existing.tool_policies.clone());
-    let mcp = req.mcp.clone().unwrap_or_else(|| existing.mcp.clone());
-    (tool_call_timeout_secs, tool_policies, mcp)
-}
-
-fn tenant_put_profile_validate_tools(
-    profile_id: &str,
-    enabled_for_meta: bool,
-    profile_uuid: Uuid,
-    name_for_meta: &str,
-    enabled_tools: &[String],
-    tool_call_timeout_secs: Option<u64>,
-    tool_policies: &[ToolPolicy],
-) -> TenantPutProfileStep<()> {
-    if let Err(msg) = validate_tool_timeout_and_policies(tool_call_timeout_secs, tool_policies) {
-        return Err(Box::new(TenantPutProfileOutcome::fail(
-            profile_id.to_string(),
-            enabled_for_meta,
-            Some(profile_uuid),
-            StatusCode::BAD_REQUEST,
-            msg.clone(),
-            AuditError::new("bad_request", msg),
-            Some(name_for_meta.to_string()),
-        )));
-    }
-    if let Err(msg) = validate_tool_allowlist(enabled_tools) {
-        return Err(Box::new(TenantPutProfileOutcome::fail(
-            profile_id.to_string(),
-            enabled_for_meta,
-            Some(profile_uuid),
-            StatusCode::BAD_REQUEST,
-            msg.clone(),
-            AuditError::new("bad_request", msg),
-            Some(name_for_meta.to_string()),
-        )));
-    }
-    Ok(())
-}
-
-fn tenant_put_profile_validate_transport_limits(
-    profile_id: &str,
-    enabled_for_meta: bool,
-    profile_uuid: Uuid,
-    name_for_meta: &str,
-    mcp: &McpProfileSettings,
-) -> TenantPutProfileStep<()> {
-    if let Err(msg) =
-        crate::transport_limits::validate_transport_limits_settings(&mcp.security.transport_limits)
-    {
-        return Err(Box::new(TenantPutProfileOutcome::fail(
-            profile_id.to_string(),
-            enabled_for_meta,
-            Some(profile_uuid),
-            StatusCode::BAD_REQUEST,
-            msg,
-            AuditError::new("bad_request", msg),
-            Some(name_for_meta.to_string()),
-        )));
-    }
-    Ok(())
 }
 
 struct TenantPutProfileStorePutInput<'a> {
