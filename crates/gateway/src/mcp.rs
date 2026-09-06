@@ -340,12 +340,12 @@ async fn forward_proxied_response_if_any(
             .into_response());
     }
     let endpoint_url = upstream::apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
-    let headers = upstream::build_upstream_headers(endpoint.auth.as_ref(), hop + 1);
+    let headers = upstream::build_bound_upstream_headers(binding, endpoint.auth.as_ref(), hop + 1);
     let _ = streamable_http::post_message(
         &state.http,
         endpoint_url.into(),
         message.clone(),
-        Some(binding.session.clone().into()),
+        binding.session.clone().map(Into::into),
         &headers,
     )
     .await;
@@ -365,12 +365,13 @@ async fn broadcast_notification_best_effort(
     for binding in bindings {
         if let Some(endpoint) = upstream::resolve_endpoint(state, profile_id, binding).await? {
             let endpoint_url = upstream::apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
-            let headers = upstream::build_upstream_headers(endpoint.auth.as_ref(), hop + 1);
+            let headers =
+                upstream::build_bound_upstream_headers(binding, endpoint.auth.as_ref(), hop + 1);
             let _ = streamable_http::post_message(
                 &state.http,
                 endpoint_url.into(),
                 msg.clone(),
-                Some(binding.session.clone().into()),
+                binding.session.clone().map(Into::into),
                 &headers,
             )
             .await;
@@ -427,12 +428,13 @@ async fn forward_notification_if_any(
                 return Ok(Some(StatusCode::ACCEPTED.into_response()));
             }
             let endpoint_url = upstream::apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
-            let headers = upstream::build_upstream_headers(endpoint.auth.as_ref(), hop + 1);
+            let headers =
+                upstream::build_bound_upstream_headers(binding, endpoint.auth.as_ref(), hop + 1);
             let _ = streamable_http::post_message(
                 &state.http,
                 endpoint_url.into(),
                 message.clone(),
-                Some(binding.session.clone().into()),
+                binding.session.clone().map(Into::into),
                 &headers,
             )
             .await;
@@ -573,12 +575,13 @@ async fn handle_logging_set_level_in_session(
                 continue;
             }
             let endpoint_url = upstream::apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
-            let headers = upstream::build_upstream_headers(endpoint.auth.as_ref(), hop + 1);
+            let headers =
+                upstream::build_bound_upstream_headers(binding, endpoint.auth.as_ref(), hop + 1);
             let _ = streamable_http::post_message(
                 &state.http,
                 endpoint_url.into(),
                 message.clone(),
-                Some(binding.session.clone().into()),
+                binding.session.clone().map(Into::into),
                 &headers,
             )
             .await;
@@ -826,16 +829,20 @@ async fn handle_delete(
     state.tools_cache.invalidate(&token);
 
     for binding in &payload.bindings {
+        let Some(session_id) = binding.session.as_deref() else {
+            continue;
+        };
         if let Some(endpoint) = upstream::resolve_endpoint(state, profile_id, binding).await? {
             if hop >= upstream::MAX_HOPS {
                 continue;
             }
             let endpoint_url = upstream::apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
-            let headers = upstream::build_upstream_headers(endpoint.auth.as_ref(), hop + 1);
+            let headers =
+                upstream::build_bound_upstream_headers(binding, endpoint.auth.as_ref(), hop + 1);
             let _ = streamable_http::delete_session(
                 &state.http,
                 endpoint_url.into(),
-                binding.session.clone().into(),
+                session_id.to_owned().into(),
                 &headers,
             )
             .await;

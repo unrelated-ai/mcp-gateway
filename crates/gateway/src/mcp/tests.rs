@@ -1064,7 +1064,7 @@ async fn initialize_profile_sources_fails_over_endpoints() {
     assert_eq!(bindings.len(), 1);
     assert_eq!(bindings[0].upstream, "u1");
     assert_eq!(bindings[0].endpoint, "b");
-    assert_eq!(bindings[0].session, "up-session");
+    assert_eq!(bindings[0].session.as_deref(), Some("up-session"));
 
     bad_handle.abort();
     good_handle.abort();
@@ -1175,7 +1175,8 @@ async fn upstream_server_to_client_request_blocking_drops_event_and_errors_upstr
     let bindings = vec![UpstreamSessionBinding {
         upstream: "u1".to_string(),
         endpoint: "e1".to_string(),
-        session: "up-session".to_string(),
+        session: Some("up-session".to_string()),
+        protocol_version: None,
     }];
 
     let collision_counts = Arc::new(parking_lot::RwLock::new(HashMap::new()));
@@ -1742,7 +1743,8 @@ async fn tool_call_propagates_timeout_budget_meta_and_retries_when_configured() 
         bindings: vec![UpstreamSessionBinding {
             upstream: "u1".to_string(),
             endpoint: "e1".to_string(),
-            session: "s".to_string(),
+            session: Some("s".to_string()),
+            protocol_version: None,
         }],
         auth: None,
         oidc: None,
@@ -1806,3 +1808,5 @@ async fn tool_call_propagates_timeout_budget_meta_and_retries_when_configured() 
 }
 
 mod request_context;
+
+mod upstream_sessions;

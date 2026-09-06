@@ -780,7 +780,7 @@ async fn post_upstream_with_retry(
             &call.state.http,
             endpoint_url.to_owned().into(),
             msg,
-            Some(binding.session.clone().into()),
+            binding.session.clone().map(Into::into),
             headers,
         );
 
@@ -857,7 +857,11 @@ async fn proxy_upstream_tool_call_with_retry(
         ));
     }
     let endpoint_url = super::upstream::apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
-    let headers = super::upstream::build_upstream_headers(endpoint.auth.as_ref(), call.hop + 1);
+    let headers = super::upstream::build_bound_upstream_headers(
+        binding,
+        endpoint.auth.as_ref(),
+        call.hop + 1,
+    );
 
     let deadline = std::time::Instant::now() + call.timeout;
     let resp = post_upstream_with_retry(

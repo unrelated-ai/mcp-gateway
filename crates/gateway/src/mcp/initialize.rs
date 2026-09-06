@@ -215,7 +215,7 @@ pub(super) async fn initialize_profile_sources(
         let start = upstream::random_start_index(active_endpoints.len());
 
         let mut last_err: Option<anyhow::Error> = None;
-        let mut initialized: Option<(String, String)> = None; // (endpoint_id, session_id)
+        let mut initialized: Option<(String, upstream::UpstreamHandshake)> = None;
         for i in 0..active_endpoints.len() {
             let ep = active_endpoints[(start + i) % active_endpoints.len()];
             let headers = upstream::build_upstream_headers(ep.auth.as_ref(), hop + 1);
@@ -229,19 +229,20 @@ pub(super) async fn initialize_profile_sources(
             )
             .await
             {
-                Ok(session_id) => {
-                    initialized = Some((ep.id.clone(), session_id));
+                Ok(handshake) => {
+                    initialized = Some((ep.id.clone(), handshake));
                     break;
                 }
                 Err(e) => last_err = Some(e),
             }
         }
 
-        if let Some((endpoint_id, upstream_session_id)) = initialized {
+        if let Some((endpoint_id, handshake)) = initialized {
             bindings.push(UpstreamSessionBinding {
                 upstream: upstream_id.clone(),
                 endpoint: endpoint_id,
-                session: upstream_session_id,
+                session: handshake.session_id,
+                protocol_version: Some(handshake.protocol_version),
             });
         } else if let Some(e) = last_err {
             warnings.push(format!("Upstream '{upstream_id}' initialize failed: {e}"));

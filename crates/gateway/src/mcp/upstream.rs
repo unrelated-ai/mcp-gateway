@@ -5,6 +5,8 @@ use crate::store::{UpstreamClientCapabilitiesMode, UpstreamSecurityPolicy};
 use axum::{Json, http::StatusCode, response::IntoResponse as _, response::Response};
 use base64::Engine as _;
 use futures::StreamExt as _;
+use reqwest::header::HeaderValue;
+use rmcp::model::{JsonRpcResponse, ServerJsonRpcMessage};
 use rmcp::{
     model::{ClientJsonRpcMessage, ClientRequest, JsonRpcRequest, JsonRpcVersion2_0, ServerResult},
     transport::streamable_http_client::StreamableHttpPostResponse,
@@ -16,13 +18,18 @@ use uuid::Uuid;
 pub(super) const HOP_HEADER: &str = "x-unrelated-gateway-hop";
 pub(super) const MAX_HOPS: u32 = 8;
 
+pub(super) struct UpstreamHandshake {
+    pub session_id: Option<String>,
+    pub protocol_version: String,
+}
+
 pub(super) async fn upstream_initialize(
     http: &reqwest::Client,
     mcp_url: &str,
     init_message: &ClientJsonRpcMessage,
     headers: &reqwest::header::HeaderMap,
     network_class: crate::store::UpstreamNetworkClass,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<UpstreamHandshake> {
     if let Err(err) =
         crate::outbound_safety::check_upstream_scheme_policy_for_class(network_class, mcp_url)
     {
@@ -43,8 +50,20 @@ pub(super) async fn upstream_initialize(
         headers,
     )
     .await?;
-    let (_msg, session_id) = resp.expect_initialized::<reqwest::Error>().await?;
-    let session_id = session_id.ok_or_else(|| anyhow::anyhow!("missing upstream session id"))?;
+    let (msg, session_id) = resp.expect_initialized::<reqwest::Error>().await?;
+    let ServerJsonRpcMessage::Response(JsonRpcResponse {
+        result: ServerResult::InitializeResult(result),
+        ..
+    }) = msg
+    else {
+        anyhow::bail!("upstream did not return an initialize result");
+    };
+    let protocol_version = result.protocol_version.to_string();
+    let mut headers = headers.clone();
+    headers.insert(
+        "mcp-protocol-version",
+        HeaderValue::from_str(&protocol_version)?,
+    );
 
     // MCP handshake: client must send `notifications/initialized` after `initialize`.
     // Some upstream servers (including our adapter) treat the session as invalid until this occurs.
@@ -57,8 +76,8 @@ pub(super) async fn upstream_initialize(
         http,
         mcp_url.to_string().into(),
         initialized,
-        Some(session_id.clone().into()),
-        headers,
+        session_id.clone().map(Into::into),
+        &headers,
     )
     .await?
     {
@@ -70,7 +89,25 @@ pub(super) async fn upstream_initialize(
         }
     }
 
-    Ok(session_id)
+    Ok(UpstreamHandshake {
+        session_id,
+        protocol_version,
+    })
+}
+
+/// Headers for a request after initialization, including the upstream's negotiated version.
+pub(super) fn build_bound_upstream_headers(
+    binding: &UpstreamSessionBinding,
+    auth: Option<&unrelated_http_tools::config::AuthConfig>,
+    hop: u32,
+) -> reqwest::header::HeaderMap {
+    let mut headers = build_upstream_headers(auth, hop);
+    if let Some(version) = binding.protocol_version.as_deref()
+        && let Ok(value) = HeaderValue::from_str(version)
+    {
+        headers.insert("mcp-protocol-version", value);
+    }
+    headers
 }
 
 pub(super) fn build_upstream_headers(
@@ -218,13 +255,13 @@ pub(super) async fn proxy_to_single_upstream(
     };
 
     let endpoint_url = apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
-    let headers = build_upstream_headers(endpoint.auth.as_ref(), hop + 1);
+    let headers = build_bound_upstream_headers(binding, endpoint.auth.as_ref(), hop + 1);
 
     let resp = streamable_http::post_message(
         &state.http,
         endpoint_url.into(),
         message,
-        Some(binding.session.clone().into()),
+        binding.session.clone().map(Into::into),
         &headers,
     )
     .await
@@ -362,13 +399,13 @@ where
             continue;
         };
         let endpoint_url = apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
-        let headers = build_upstream_headers(endpoint.auth.as_ref(), ctx.hop + 1);
+        let headers = build_bound_upstream_headers(binding, endpoint.auth.as_ref(), ctx.hop + 1);
         let request = build_request();
         match streamable_http::post_message(
             &ctx.state.http,
             endpoint_url.into(),
             request,
-            Some(binding.session.clone().into()),
+            binding.session.clone().map(Into::into),
             &headers,
         )
         .await

@@ -14,7 +14,7 @@ struct UpstreamCtx {
     upstream_id: String,
     endpoint_url: String,
     headers: reqwest::header::HeaderMap,
-    session_id: String,
+    session_id: Option<String>,
 }
 
 fn format_anyhow_chain(e: &anyhow::Error) -> String {
@@ -78,12 +78,18 @@ async fn initialize_upstream_probe_session(
             upstream.network_class,
         );
         match tokio::time::timeout(PROBE_TIMEOUT, fut).await {
-            Ok(Ok(session_id)) => {
+            Ok(Ok(handshake)) => {
+                let mut headers = headers;
+                if let Ok(value) =
+                    reqwest::header::HeaderValue::from_str(&handshake.protocol_version)
+                {
+                    headers.insert("mcp-protocol-version", value);
+                }
                 return Ok(UpstreamCtx {
                     upstream_id: upstream_id.to_string(),
                     endpoint_url,
                     headers,
-                    session_id,
+                    session_id: handshake.session_id,
                 });
             }
             Ok(Err(e)) => last_err = Some(e.to_string()),
@@ -320,7 +326,7 @@ async fn post_and_read_first(
             &state.http,
             u.endpoint_url.clone().into(),
             request,
-            Some(u.session_id.clone().into()),
+            u.session_id.clone().map(Into::into),
             &u.headers,
         ),
     )
@@ -421,10 +427,13 @@ async fn probe_upstreams_lists(
 async fn cleanup_upstream_sessions(state: &McpState, upstreams: &[UpstreamCtx]) {
     // Best-effort upstream session cleanup.
     for u in upstreams {
+        let Some(session_id) = u.session_id.as_deref() else {
+            continue;
+        };
         let _ = streamable_http::delete_session(
             &state.http,
             u.endpoint_url.clone().into(),
-            u.session_id.clone().into(),
+            session_id.to_owned().into(),
             &u.headers,
         )
         .await;

@@ -336,7 +336,7 @@ struct UpstreamSseMapCtx {
     tenant_id: Arc<str>,
     profile_id: Arc<str>,
     upstream_id: Arc<str>,
-    upstream_session_id: Arc<str>,
+    upstream_session_id: Option<Arc<str>>,
     endpoint_url: Arc<str>,
     headers_for_post: HeaderMap,
     server_requests_filter: crate::store::McpServerRequestFilter,
@@ -387,7 +387,7 @@ async fn maybe_block_upstream_server_request(ctx: &UpstreamSseMapCtx, data: &str
             &ctx.http,
             ctx.endpoint_url.clone(),
             err,
-            Some(ctx.upstream_session_id.clone()),
+            ctx.upstream_session_id.clone(),
             &ctx.headers_for_post,
         )
         .await;
@@ -570,7 +570,8 @@ pub(super) async fn open_upstream_streams(
             &endpoint.url,
             endpoint.auth.as_ref(),
         ));
-        let headers = upstream::build_upstream_headers(endpoint.auth.as_ref(), hop + 1);
+        let headers =
+            upstream::build_bound_upstream_headers(binding, endpoint.auth.as_ref(), hop + 1);
 
         let upstream_policy = profile
             .mcp
@@ -587,7 +588,7 @@ pub(super) async fn open_upstream_streams(
         let upstream = streamable_http::get_stream(
             &state.http,
             endpoint_url.clone(),
-            binding.session.clone().into(),
+            binding.session.clone().map(Into::into),
             upstream_last,
             &headers,
         )
@@ -600,11 +601,15 @@ pub(super) async fn open_upstream_streams(
                 .into_response()
         })?;
 
+        let Some(upstream) = upstream else {
+            continue;
+        };
+
         let ctx = Arc::new(UpstreamSseMapCtx {
             tenant_id: Arc::<str>::from(profile.tenant_id.clone()),
             profile_id: Arc::<str>::from(profile.id.clone()),
             upstream_id: Arc::<str>::from(binding.upstream.clone()),
-            upstream_session_id: Arc::<str>::from(binding.session.clone()),
+            upstream_session_id: binding.session.clone().map(Into::into),
             endpoint_url: endpoint_url.clone(),
             headers_for_post: headers.clone(),
             server_requests_filter,

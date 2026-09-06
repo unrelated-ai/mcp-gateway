@@ -90,17 +90,19 @@ pub(crate) async fn post_message(
 pub(crate) async fn get_stream(
     http: &reqwest::Client,
     uri: Arc<str>,
-    session_id: Arc<str>,
+    session_id: Option<Arc<str>>,
     last_event_id: Option<String>,
     extra_headers: &HeaderMap,
 ) -> Result<
-    BoxStream<'static, Result<sse_stream::Sse, sse_stream::Error>>,
+    Option<BoxStream<'static, Result<sse_stream::Sse, sse_stream::Error>>>,
     StreamableHttpError<reqwest::Error>,
 > {
     let mut req = http
         .get(uri.as_ref())
-        .header(reqwest::header::ACCEPT, EVENT_STREAM_MIME_TYPE)
-        .header(HEADER_SESSION_ID, session_id.as_ref());
+        .header(reqwest::header::ACCEPT, EVENT_STREAM_MIME_TYPE);
+    if let Some(session_id) = session_id {
+        req = req.header(HEADER_SESSION_ID, session_id.as_ref());
+    }
 
     if let Some(id) = last_event_id {
         req = req.header(HEADER_LAST_EVENT_ID, id);
@@ -108,12 +110,20 @@ pub(crate) async fn get_stream(
     req = apply_headers(req, extra_headers);
 
     let resp = req.send().await.map_err(StreamableHttpError::Client)?;
+    if resp.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
+        return Ok(None);
+    }
+    let resp = resp
+        .error_for_status()
+        .map_err(StreamableHttpError::Client)?;
     let ct = content_type(resp.headers());
     if !matches!(ct.as_deref(), Some(v) if v.eq_ignore_ascii_case(EVENT_STREAM_MIME_TYPE)) {
         return Err(StreamableHttpError::UnexpectedContentType(ct));
     }
 
-    Ok(sse_stream::SseStream::from_bytes_stream(resp.bytes_stream()).boxed())
+    Ok(Some(
+        sse_stream::SseStream::from_bytes_stream(resp.bytes_stream()).boxed(),
+    ))
 }
 
 pub(crate) async fn delete_session(
