@@ -25,7 +25,7 @@
         kind-local-deploy kind-local-refresh kind-local-reset \
         up down logs status \
         inspector \
-        ci ci-quick test-ci test-gateway-contracts test-v1-journey bench-v1 qa-release-gates \
+        ci ci-quick test-ci test-gateway-contracts test-v1-journey test-v1-upgrade bench-v1 qa-release-gates \
         helm-validate helm-validate-optional \
         crd-sync crd-sync-check \
         hooks-install bench help
@@ -117,10 +117,14 @@ test-integration-adapter:
 	cargo test -p unrelated-mcp-adapter --tests -- --nocapture --test-threads=1 && \
 	cargo test -p unrelated-mcp-adapter --tests -- --ignored --nocapture --test-threads=1
 
-## Run gateway integration tests only (requires Docker)
+## Run gateway integration tests (Docker; includes real Adapter and CLI binaries)
+# Historical-release and release-profile benchmarks have their own explicit targets.
 test-integration-gateway:
+	cargo build -p unrelated-mcp-adapter -p unrelated-cli --bins
 	cargo test -p unrelated-mcp-gateway --tests -- --nocapture --test-threads=1 && \
-	cargo test -p unrelated-mcp-gateway --tests -- --ignored --nocapture --test-threads=1
+	cargo test -p unrelated-mcp-gateway --tests -- --ignored --nocapture --test-threads=1 \
+	  --skip benchmark_upstream_scaling \
+	  --skip public_0131_database_upgrades_with_existing_profiles_keys_and_sessions
 
 ## Cross-milestone OSS release gates (gateway + operator + UI + compatibility)
 qa-release-gates:
@@ -448,6 +452,11 @@ test-gateway-contracts:
 test-v1-journey:
 	cargo build -p unrelated-mcp-adapter -p unrelated-cli --bins
 	cargo test -p unrelated-mcp-gateway --test integration_v1_journey -- --ignored --nocapture --test-threads=1
+
+## Rehearse the public 0.13.1 migration (Docker + MCP_GATEWAY_0131_BIN)
+test-v1-upgrade:
+	cargo build -p unrelated-mcp-adapter -p unrelated-cli --bins
+	cargo test -p unrelated-mcp-gateway --test integration_v1_upgrade -- --ignored --nocapture
 
 ## Mode 3 latency, PostgreSQL statement count and RSS benchmark (Linux + Docker)
 BENCH_OUTPUT ?= $(CURDIR)/output/benchmarks/v1.json

@@ -413,13 +413,24 @@ pub async fn connect(url: &str) -> anyhow::Result<client::GatewayConnection> {
 }
 
 pub async fn cli(dir: &Path, args: &[&str]) -> anyhow::Result<Value> {
-    let output = tokio::process::Command::new(sibling_binary("unrelated")?)
+    cli_with_token(dir, args, None).await
+}
+
+pub async fn cli_with_token(
+    dir: &Path,
+    args: &[&str],
+    token: Option<&str>,
+) -> anyhow::Result<Value> {
+    let mut command = tokio::process::Command::new(sibling_binary("unrelated")?);
+    command
         .env_remove("UNRELATED_TOKEN")
         .env("XDG_CONFIG_HOME", dir.join("config"))
         .env("XDG_CACHE_HOME", dir.join("cache"))
-        .args(args)
-        .output()
-        .await?;
+        .args(args);
+    if let Some(token) = token {
+        command.env("UNRELATED_TOKEN", token);
+    }
+    let output = command.output().await?;
     anyhow::ensure!(
         output.status.success(),
         "unrelated {args:?}: {}",
