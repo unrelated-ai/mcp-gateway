@@ -17,6 +17,18 @@ pub(crate) enum NullableU64 {
     Value(u64),
 }
 
+/// Preserve a present JSON null separately from an omitted update field.
+/// `#[serde(default)]` handles absence; this function handles every present value.
+pub(crate) fn deserialize_present_nullable<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
 pub(crate) fn resolve_nullable_u64(req: Option<NullableU64>, existing: Option<u64>) -> Option<u64> {
     match req {
         None => existing,

@@ -170,7 +170,6 @@ fn validate_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profile_http::NullableU64;
     use serde_json::json;
 
     fn existing() -> AdminProfile {
@@ -224,13 +223,12 @@ mod tests {
     #[test]
     fn explicit_clears_and_replacements_are_planned_without_mutating_existing() {
         let stored = existing();
-        let mut request: PutProfileRequest = serde_json::from_value(json!({
+        let request: PutProfileRequest = serde_json::from_value(json!({
             "upstreams": [], "name": "Changed", "toolPolicies": [],
+            "description": null, "toolCallTimeoutSecs": null,
             "tools": ["other:tool"], "dataPlaneAuth": {"mode": "disabled"}
         }))
         .unwrap();
-        request.description = Some(NullableString::Null);
-        request.tool_call_timeout_secs = Some(NullableU64::Null);
         let update = plan_update(&request, &stored, false).unwrap();
         assert_eq!(update.name, "Changed");
         assert!(update.description.is_none());

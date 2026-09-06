@@ -359,6 +359,8 @@ async fn tenant_profiles_are_scoped_and_cross_tenant_access_is_404() -> anyhow::
         "expected created profile in tenant list"
     );
 
+    assert_profile_nullable_updates(&client, &admin_base, &profile_id, &t1_token).await?;
+
     // Cross-tenant access is 404 (not 403).
     let resp = client
         .get(format!("{admin_base}/tenant/v1/profiles/{profile_id}"))
@@ -377,6 +379,61 @@ async fn tenant_profiles_are_scoped_and_cross_tenant_access_is_404() -> anyhow::
         .context("tenant invalid token GET")?;
     anyhow::ensure!(resp.status() == reqwest::StatusCode::UNAUTHORIZED);
 
+    Ok(())
+}
+
+// Both profile APIs promise omitted => retain, explicit null => clear.
+async fn assert_profile_nullable_updates(
+    client: &reqwest::Client,
+    admin_base: &str,
+    profile_id: &str,
+    tenant_token: &str,
+) -> anyhow::Result<()> {
+    for (api, token) in [("tenant", tenant_token), ("admin", ADMIN_TOKEN)] {
+        let url = format!("{admin_base}/{api}/v1/profiles/{profile_id}");
+        for (fields, expected_description, expected_timeout) in [
+            (
+                json!({"description": "keep me", "toolCallTimeoutSecs": 15}),
+                json!("keep me"),
+                json!(15),
+            ),
+            (json!({}), json!("keep me"), json!(15)),
+            (
+                json!({"description": null, "toolCallTimeoutSecs": null}),
+                json!(null),
+                json!(null),
+            ),
+        ] {
+            let mut body = json!({"id": profile_id, "tenantId": "t1", "upstreams": []});
+            body.as_object_mut()
+                .unwrap()
+                .extend(fields.as_object().unwrap().clone());
+            let request = if api == "admin" {
+                client.post(format!("{admin_base}/admin/v1/profiles"))
+            } else {
+                client.put(&url)
+            };
+            request
+                .bearer_auth(token)
+                .json(&body)
+                .send()
+                .await?
+                .error_for_status()?;
+            let stored: serde_json::Value = client
+                .get(&url)
+                .bearer_auth(token)
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            assert_eq!(stored["description"], expected_description, "{api}: {body}");
+            assert_eq!(
+                stored["toolCallTimeoutSecs"], expected_timeout,
+                "{api}: {body}"
+            );
+        }
+    }
     Ok(())
 }
 

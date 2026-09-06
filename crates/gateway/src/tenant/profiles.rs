@@ -170,7 +170,10 @@ struct PutProfileRequest {
     /// - omitted => keep existing description
     /// - null => clear description
     /// - string => set description
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::profile_http::deserialize_present_nullable"
+    )]
     description: Option<NullableString>,
     #[serde(default = "default_true")]
     enabled: bool,
@@ -193,7 +196,10 @@ struct PutProfileRequest {
     data_plane_limits: Option<DataPlaneLimitsSettings>,
 
     /// Optional per-profile default timeout override for `tools/call` (seconds).
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::profile_http::deserialize_present_nullable"
+    )]
     tool_call_timeout_secs: Option<NullableU64>,
     /// Optional per-profile per-tool policies (timeouts + retry policy).
     #[serde(default)]
