@@ -27,7 +27,6 @@ import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
 import type { ProfileSurface } from "@/src/lib/tenantApi";
 import { useToastStore } from "@/src/lib/toast-store";
-import { buildPutProfileBody } from "@/src/lib/profilePut";
 import { GATEWAY_DATA_BASE } from "@/src/lib/env";
 import { invalidateProfile, invalidateProfiles } from "@/src/lib/queries/profileQueries";
 import { PencilIcon } from "@/components/icons";
@@ -142,10 +141,7 @@ export default function ProfileDetailPage() {
   const updateAuthMutation = useMutation({
     mutationFn: async (next: AuthDraft) => {
       if (!profile) throw new Error("Profile not loaded");
-      await tenantApi.putProfile(
-        profile.id,
-        buildPutProfileBody(profile, { dataPlaneAuth: authSettingsFromDraft(next) }),
-      );
+      await tenantApi.updateProfile(profile.id, { dataPlaneAuth: authSettingsFromDraft(next) });
       return next;
     },
     onSuccess: async (next) => {
@@ -172,7 +168,7 @@ export default function ProfileDetailPage() {
   const toggleEnabledMutation = useMutation({
     mutationFn: async (enabled: boolean) => {
       if (!profile) throw new Error("Profile not loaded");
-      await tenantApi.putProfile(profile.id, buildPutProfileBody(profile, { enabled }));
+      await tenantApi.updateProfile(profile.id, { enabled });
       return enabled;
     },
     onMutate: async (enabled) => {
@@ -214,13 +210,10 @@ export default function ProfileDetailPage() {
   const updateMetaMutation = useMutation({
     mutationFn: async (next: { name: string; description: string }) => {
       if (!profile) throw new Error("Profile not loaded");
-      await tenantApi.putProfile(
-        profile.id,
-        buildPutProfileBody(profile, {
-          name: next.name.trim(),
-          description: next.description.trim() ? next.description : null,
-        }),
-      );
+      await tenantApi.updateProfile(profile.id, {
+        name: next.name.trim(),
+        description: next.description.trim() ? next.description : null,
+      });
       return next;
     },
     onSuccess: async (next) => {
@@ -266,7 +259,7 @@ export default function ProfileDetailPage() {
   const updateEnabledToolsMutation = useMutation({
     mutationFn: async (nextTools: string[]) => {
       if (!profile) throw new Error("Profile not loaded");
-      await tenantApi.putProfile(profile.id, buildPutProfileBody(profile, { tools: nextTools }));
+      await tenantApi.updateProfile(profile.id, { tools: nextTools });
       return nextTools;
     },
     onMutate: async (nextTools) => {
@@ -538,7 +531,9 @@ export default function ProfileDetailPage() {
           />
         )}
 
-        {activeTab === "security" && <SecurityTab profile={profile} />}
+        {activeTab === "security" && (
+          <SecurityTab key={profile?.id ?? "loading"} profile={profile} />
+        )}
 
         {/* `Transforms` and `Tool calls` tabs removed (merged into Tools). */}
 

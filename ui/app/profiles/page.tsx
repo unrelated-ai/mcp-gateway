@@ -21,7 +21,6 @@ import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
 import { useToastStore } from "@/src/lib/toast-store";
 import { authModeTone, formatDataPlaneAuthMode } from "@/src/lib/display";
-import { buildPutProfileBody } from "@/src/lib/profilePut";
 import { GATEWAY_DATA_BASE } from "@/src/lib/env";
 
 const EMPTY_PROFILES: Profile[] = [];
@@ -97,7 +96,7 @@ function ProfileCard({ profile, mcpUrl }: { profile: Profile; mcpUrl: string }) 
 
   const toggleEnabledMutation = useMutation({
     mutationFn: async (enabled: boolean) => {
-      await tenantApi.putProfile(profile.id, buildPutProfileBody(profile, { enabled }));
+      await tenantApi.updateProfile(profile.id, { enabled });
       return enabled;
     },
     onMutate: async (enabled) => {

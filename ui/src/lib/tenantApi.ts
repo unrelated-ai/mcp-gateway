@@ -1,3 +1,4 @@
+import { createProfileUpdater } from "./profile-updates";
 import { tenantFetchJson } from "@/src/lib/tenantFetch";
 import type {
   ApiKeyMetadata,
@@ -301,13 +302,15 @@ export async function createProfile(body: unknown): Promise<CreateProfileRespons
   });
 }
 
-export async function putProfile(id: string, body: unknown): Promise<unknown> {
+async function putProfile(id: string, body: unknown): Promise<unknown> {
   return await tenantFetchJson(`/api/tenant/profiles/${encodeURIComponent(id)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
 }
+
+export const updateProfile = createProfileUpdater({ read: getProfile, write: putProfile });
 
 export async function deleteProfile(id: string): Promise<void> {
   await tenantFetchJson(`/api/tenant/profiles/${encodeURIComponent(id)}`, { method: "DELETE" });

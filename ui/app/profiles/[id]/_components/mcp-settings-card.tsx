@@ -1,22 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  Button,
-  Callout,
-  Modal,
-  ModalActions,
-  SectionCard,
-  Spinner,
-  Toggle,
-} from "@/components/ui";
+import { useCallback, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Button, Modal, ModalActions, SectionCard, Spinner, Toggle } from "@/components/ui";
 import { InfoIcon } from "@/components/icons";
 import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
 import type { McpCapability, McpProfileSettings, Profile } from "@/src/lib/types";
-import { buildPutProfileBody } from "@/src/lib/profilePut";
-import { useQueuedAutosave } from "@/src/lib/useQueuedAutosave";
+import { useAutosave } from "@/src/lib/useAutosave";
+import { SaveStatus } from "@/components/ui/save-status";
 import { asMcpSettings, defaultMcpSettings, normalizeMcpSettings } from "@/src/lib/mcpSettings";
 
 const ALL_CAPABILITIES: Array<{
@@ -103,75 +95,35 @@ export function McpSettingsCard({ profile }: { profile: Profile | null }) {
     [initial],
   );
 
-  const [saveError, setSaveError] = useState<string | null>(null);
-
-  const saveMutation = useMutation({
-    mutationFn: async (nextMcp: McpProfileSettings) => {
-      if (!profile) throw new Error("Profile not loaded");
-      await tenantApi.putProfile(profile.id, buildPutProfileBody(profile, { mcp: nextMcp }));
-      return nextMcp;
-    },
-    onSuccess: async (nextMcp) => {
-      if (!profile) return;
-      await queryClient.invalidateQueries({ queryKey: qk.profile(profile.id) });
-      await queryClient.invalidateQueries({ queryKey: qk.profiles() });
-      queryClient.setQueryData(qk.profile(profile.id), (old: Profile | undefined) => {
-        if (!old) return old;
-        return { ...old, mcp: nextMcp };
-      });
-      setSaveError(null);
-    },
-    onError: (e) => {
-      setSaveError(e instanceof Error ? e.message : "Failed to save MCP settings");
-    },
+  const autosave = useAutosave<McpProfileSettings>(async (nextMcp) => {
+    if (!profile) throw new Error("Profile not loaded");
+    await tenantApi.updateProfile(profile.id, (current) => ({
+      mcp: normalizeMcpSettings({
+        ...asMcpSettings(current.mcp),
+        capabilities: nextMcp.capabilities,
+      }),
+    }));
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: qk.profile(profile.id) }),
+      queryClient.invalidateQueries({ queryKey: qk.profiles() }),
+    ]);
   });
-
-  const mcpKey = useCallback((m: McpProfileSettings) => JSON.stringify(m), []);
-  const autosave = useQueuedAutosave<McpProfileSettings>({
-    isPending: saveMutation.isPending,
-    mutate: (m) => saveMutation.mutate(m),
-    computeKey: mcpKey,
-  });
-
-  useEffect(() => {
-    autosave.setLastSavedKey(JSON.stringify(initial));
-  }, [autosave, initial]);
-
-  const commit = useCallback(
-    (nextMcp: McpProfileSettings) => {
-      if (!profile) return;
-      autosave.commit(nextMcp);
-    },
-    [autosave, profile],
-  );
 
   const toggleCap = (cap: McpCapability, checked: boolean) => {
     const nextCaps = new Set(enabledCaps);
     if (checked) nextCaps.add(cap);
     else nextCaps.delete(cap);
     setEnabledCaps(nextCaps);
-    commit(buildNext(nextCaps));
+    autosave.commit(buildNext(nextCaps));
   };
 
   return (
     <SectionCard
       title="MCP proxy settings"
       subtitle="Controls which MCP capabilities are advertised for this profile."
-      right={
-        saveMutation.isPending ? (
-          <div className="flex items-center gap-1.5 px-2 text-xs text-faint">
-            <Spinner size="sm" />
-            Saving…
-          </div>
-        ) : null
-      }
       bodyClassName="space-y-6"
     >
-      {saveError ? (
-        <Callout tone="danger" size="md">
-          {saveError}
-        </Callout>
-      ) : null}
+      <SaveStatus {...autosave} onRetry={autosave.retry} label="MCP capabilities" />
 
       {/* Capabilities */}
       <div className="space-y-3">
