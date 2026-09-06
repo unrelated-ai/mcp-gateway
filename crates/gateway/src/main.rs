@@ -12,6 +12,7 @@ use tracing_subscriber::prelude::*;
 mod admin;
 mod audit;
 mod audit_retention;
+mod cache_maintenance;
 mod catalog;
 mod config;
 mod contracts;
@@ -36,6 +37,7 @@ mod timeouts;
 mod tool_policy;
 mod tools_cache;
 mod transport_limits;
+mod ttl_cache;
 mod upstream_validation;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -235,6 +237,12 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
             Duration::from_secs(30),
         )),
     });
+
+    cache_maintenance::spawn(
+        mcp_state.tools_cache.clone(),
+        mcp_state.endpoint_cache.clone(),
+        ct.clone(),
+    );
 
     let invalidation = build_invalidation_dispatcher(pg_pool.clone(), &mcp_state);
 

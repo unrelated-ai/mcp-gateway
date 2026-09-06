@@ -1,12 +1,11 @@
-use parking_lot::RwLock;
+use crate::ttl_cache::{DEFAULT_CAPACITY, TtlCache};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use unrelated_http_tools::config::AuthConfig;
 
 #[derive(Debug, Clone)]
 struct Entry {
-    expires_at: Instant,
     endpoints: Arc<HashMap<String, UpstreamEndpoint>>,
 }
 
@@ -18,37 +17,30 @@ pub struct UpstreamEndpoint {
 
 #[derive(Clone)]
 pub struct UpstreamEndpointCache {
-    ttl: Duration,
-    inner: Arc<RwLock<HashMap<String, Entry>>>,
+    inner: Arc<TtlCache<Entry>>,
 }
 
 impl UpstreamEndpointCache {
     #[must_use]
     pub fn new(ttl: Duration) -> Self {
         Self {
-            ttl,
-            inner: Arc::new(RwLock::new(HashMap::new())),
+            inner: Arc::new(TtlCache::new(ttl, DEFAULT_CAPACITY)),
         }
     }
 
     #[must_use]
     pub fn get(&self, upstream_id: &str, endpoint_id: &str) -> Option<UpstreamEndpoint> {
-        let now = Instant::now();
-        let mut map = self.inner.write();
-        let entry = map.get(upstream_id)?;
-        if entry.expires_at <= now {
-            map.remove(upstream_id);
-            return None;
-        }
-        entry.endpoints.get(endpoint_id).cloned()
+        self.inner
+            .get(upstream_id)?
+            .endpoints
+            .get(endpoint_id)
+            .cloned()
     }
 
     pub fn put(&self, upstream_id: String, endpoints: HashMap<String, UpstreamEndpoint>) {
-        let expires_at = Instant::now() + self.ttl;
-        self.inner.write().insert(
+        self.inner.put(
             upstream_id,
             Entry {
-                expires_at,
                 endpoints: Arc::new(endpoints),
             },
         );
@@ -56,6 +48,10 @@ impl UpstreamEndpointCache {
 
     /// Best-effort cache invalidation for HA deployments.
     pub fn invalidate_upstream(&self, upstream_id: &str) {
-        self.inner.write().remove(upstream_id);
+        self.inner.remove(upstream_id);
+    }
+
+    pub fn prune_expired(&self) -> usize {
+        self.inner.prune_expired()
     }
 }
