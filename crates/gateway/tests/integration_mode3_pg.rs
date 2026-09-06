@@ -440,6 +440,14 @@ async fn mode3_pg_profile_aggregates_two_upstreams_and_prefixes_on_collision() -
 
     assert_eq!(names, vec!["echo_request".to_string()]);
 
+    // Existing drain-visibility rows must be refreshed for every bound endpoint.
+    let activity_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await?;
+    sqlx::query("update upstream_session_activity set last_seen_at = now() - interval '1 hour' where profile_id = $1")
+        .bind(uuid::Uuid::parse_str(&profile_id)?).execute(&activity_pool).await?;
+
     // tools/call route to specific upstream.
     let call_msg = session
         .request_value(
@@ -459,6 +467,15 @@ async fn mode3_pg_profile_aggregates_two_upstreams_and_prefixes_on_collision() -
     anyhow::ensure!(
         text.contains("upstream=u1"),
         "expected tools/call to hit upstream u1, got: {text}"
+    );
+
+    let activity: (i64, i64, bool) = sqlx::query_as(
+        "select count(*), count(*) filter (where last_seen_at > now() - interval '1 minute'), min(last_seen_at) = max(last_seen_at) from upstream_session_activity where profile_id = $1"
+    ).bind(uuid::Uuid::parse_str(&profile_id)?).fetch_one(&activity_pool).await?;
+    assert_eq!(
+        activity,
+        (2, 2, true),
+        "both bindings refreshed once with the same timestamp"
     );
 
     // Cleanup upstream servers.

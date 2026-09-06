@@ -897,32 +897,35 @@ order by id asc
     ) -> anyhow::Result<()> {
         let profile_id = Uuid::parse_str(profile_id)
             .map_err(|_| anyhow::anyhow!("invalid profile id (expected UUID)"))?;
-        let mut tx: Transaction<'_, Postgres> = self.pool.begin().await?;
-        for b in bindings {
-            sqlx::query(
-                r"
+        if bindings.is_empty() {
+            return Ok(());
+        }
+        let upstream_ids: Vec<&str> = bindings.iter().map(|b| b.upstream_id.as_str()).collect();
+        let endpoint_ids: Vec<&str> = bindings.iter().map(|b| b.endpoint_id.as_str()).collect();
+        // A single statement is atomic and avoids one database round trip per
+        // upstream on every MCP request. Deduplicate pairs before ON CONFLICT:
+        // one session can otherwise contain the same binding more than once.
+        sqlx::query(
+            r"
 insert into upstream_session_activity (
-  tenant_id,
-  profile_id,
-  upstream_id,
-  endpoint_id,
-  session_hash,
-  last_seen_at
+  tenant_id, profile_id, upstream_id, endpoint_id, session_hash, last_seen_at
 )
-values ($1, $2, $3, $4, $5, now())
+select $1, $2, binding.upstream_id, binding.endpoint_id, $5, now()
+from (
+  select distinct upstream_id, endpoint_id
+  from unnest($3::text[], $4::text[]) as pairs(upstream_id, endpoint_id)
+) as binding
 on conflict (profile_id, upstream_id, endpoint_id, session_hash) do update
 set last_seen_at = excluded.last_seen_at
 ",
-            )
-            .bind(tenant_id)
-            .bind(profile_id)
-            .bind(&b.upstream_id)
-            .bind(&b.endpoint_id)
-            .bind(session_hash)
-            .execute(&mut *tx)
-            .await?;
-        }
-        tx.commit().await?;
+        )
+        .bind(tenant_id)
+        .bind(profile_id)
+        .bind(&upstream_ids)
+        .bind(&endpoint_ids)
+        .bind(session_hash)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
