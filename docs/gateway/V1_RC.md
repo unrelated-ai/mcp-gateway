@@ -50,8 +50,28 @@ a profile and clearing its description and timeout persisted after reload and
 direct API verification. The existing 0.13.1 key remained visible. No browser
 console errors or failed API requests were observed.
 
-The browser check used a production build served by `next start`. Deployment
-packaging uses the standalone server and requires an artifact smoke test.
+The standalone UI artifact is covered by `make test-ui-e2e`. Docker image
+packaging and ingress behavior require separate deployment checks.
+
+## UI behavior and browser coverage
+
+Profile panels now serialize writes and merge only their edited fields into the
+latest saved profile. Autosave status tracks the latest draft; failed saves retain
+that draft and offer an explicit retry. Timeout editing has its own component.
+The UI reads its public Gateway URL at runtime, including the existing
+`NEXT_PUBLIC_GATEWAY_DATA_BASE` alias. Small screens use a navigation drawer and
+stacked profile controls.
+
+The PR CI browser suite runs the standalone UI against a disposable real
+Gateway/PostgreSQL/Adapter stack. Seven scenarios cover browser onboarding,
+upstream/profile/key creation and real CLI calls, delayed and failed saves, edits
+across panels and tab changes, transforms/MCP settings, two runtime URLs from one
+build, and phone navigation with keyboard dismissal/focus return. Test runs
+write browser artifacts under `output/playwright/`.
+
+The save queue coordinates one browser instance. It does not implement conflict
+detection between independent browsers or users. Docker packaging, the intended
+ingress and a live OAuth issuer remain deployment-specific checks.
 
 ## Performance baseline
 
@@ -65,6 +85,7 @@ defaults. It is a single-client baseline, not a capacity test.
 make ci
 make test-gateway-contracts
 make test-v1-journey
+make test-ui-e2e
 MCP_GATEWAY_0131_BIN=/path/to/public/gateway-0.13.1 make test-v1-upgrade
 make bench-v1
 cd ui && npm test && npm run lint && npm run build
@@ -88,8 +109,9 @@ by the workflow runs for each revision.
 | Tenant API integration | 10 tests passed |
 | Real-client and restart scenarios | 2 tests passed |
 | Public 0.13.1 upgrade | Passed |
-| UI unit tests | 5 tests passed |
+| UI unit tests | 9 tests passed |
 | UI production build and lint | Passed |
+| Standalone UI browser scenarios | 7 tests passed |
 | Performance benchmark | 450 samples completed in each of two runs |
 
 ## Before tagging or deploying the RC

@@ -25,7 +25,7 @@
         kind-local-deploy kind-local-refresh kind-local-reset \
         up down logs status \
         inspector \
-        ci ci-quick test-ci test-gateway-contracts test-v1-journey test-v1-upgrade bench-v1 qa-release-gates \
+        ci ci-quick test-ci test-gateway-contracts test-v1-journey test-v1-upgrade test-ui-e2e bench-v1 qa-release-gates \
         helm-validate helm-validate-optional \
         crd-sync crd-sync-check \
         hooks-install bench help
@@ -124,6 +124,7 @@ test-integration-gateway:
 	cargo test -p unrelated-mcp-gateway --tests -- --nocapture --test-threads=1 && \
 	cargo test -p unrelated-mcp-gateway --tests -- --ignored --nocapture --test-threads=1 \
 	  --skip benchmark_upstream_scaling \
+	  --skip standalone_ui_fixture \
 	  --skip public_0131_database_upgrades_with_existing_profiles_keys_and_sessions
 
 ## Cross-milestone OSS release gates (gateway + operator + UI + compatibility)
@@ -133,7 +134,8 @@ qa-release-gates:
 	cargo test -p unrelated-mcp-gateway --test integration_mode1_config -- --nocapture --test-threads=1
 	cargo check -p unrelated-mcp-gateway-operator
 	cargo test -p unrelated-mcp-gateway-operator
-	cd ui && npm run lint && npm run test && npm run build
+	cd ui && npm run lint && npm run test
+	$(MAKE) test-ui-e2e
 	$(MAKE) helm-validate-optional
 
 # =============================================================================
@@ -458,6 +460,12 @@ test-v1-upgrade:
 	cargo build -p unrelated-mcp-adapter -p unrelated-cli --bins
 	cargo test -p unrelated-mcp-gateway --test integration_v1_upgrade -- --ignored --nocapture
 
+## Standalone browser acceptance suite (Docker + installed Playwright Chromium)
+test-ui-e2e:
+	cargo build -p unrelated-mcp-adapter -p unrelated-cli --bins
+	cargo test -p unrelated-mcp-gateway --test integration_ui_fixture --no-run
+	cd ui && npm run build && npm run test:e2e
+
 ## Mode 3 latency, PostgreSQL statement count and RSS benchmark (Linux + Docker)
 BENCH_OUTPUT ?= $(CURDIR)/output/benchmarks/v1.json
 BENCH_SAMPLES ?= 10
@@ -540,6 +548,7 @@ help:
 	@echo "  test-cli             Run gateway CLI tests"
 	@echo "  test-integration     Run integration tests (requires Docker)"
 	@echo "  qa-release-gates     Run OSS release gate suite (gateway/operator/ui)"
+	@echo "  test-ui-e2e          Run standalone UI browser tests against disposable services"
 	@echo ""
 	@echo "Code Quality:"
 	@echo "  fmt            Format code"

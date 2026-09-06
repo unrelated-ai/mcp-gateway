@@ -97,6 +97,7 @@ pub struct GatewayOptions<'a> {
     pub database_url: Option<&'a str>,
     pub operation_timeout_secs: u64,
     pub concurrency: usize,
+    pub bootstrap_enabled: bool,
 }
 
 impl Default for GatewayOptions<'_> {
@@ -107,6 +108,7 @@ impl Default for GatewayOptions<'_> {
             database_url: None,
             operation_timeout_secs: 10,
             concurrency: 8,
+            bootstrap_enabled: false,
         }
     }
 }
@@ -146,6 +148,10 @@ impl Gateway {
                     "v1-journey-shared-encryption-key",
                 ),
                 ("UNRELATED_GATEWAY_ADMIN_TOKEN", ADMIN_TOKEN),
+                (
+                    "UNRELATED_GATEWAY_BOOTSTRAP_ENABLED",
+                    if options.bootstrap_enabled { "1" } else { "0" },
+                ),
                 ("UNRELATED_GATEWAY_OUTBOUND_ALLOW_PRIVATE_NETWORKS", "1"),
                 ("UNRELATED_GATEWAY_UPSTREAM_ALLOW_HTTP", "1"),
                 (

@@ -48,6 +48,50 @@ jobs:
         timeout-minutes: 10
         run: make test-v1-journey
 
+  ui:
+    name: ui (unit, build, browser)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@1.92.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: UI format, lint and unit tests
+        working-directory: ui
+        run: npm run format:check && npm run lint && npm test
+
+      - name: Install Chromium
+        working-directory: ui
+        run: npx playwright install --with-deps chromium
+
+      - name: Standalone UI and real Gateway journey
+        run: make test-ui-e2e
+
+      - name: Upload browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-browser-failure
+          path: output/playwright/e2e-*
+          retention-days: 7
+
   helm:
     name: helm (lint, template)
     runs-on: ubuntu-latest

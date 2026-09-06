@@ -130,7 +130,8 @@ For a local production UI build, use `npm run build` and serve the standalone
 output as the UI Dockerfile does, including `public` and `.next/static`.
 Set `GATEWAY_DATA_BASE` when starting the UI. The existing
 `NEXT_PUBLIC_GATEWAY_DATA_BASE` variable remains a runtime alias; the public URL
-is no longer frozen into the build.
+is no longer frozen into the build. `make test-ui-e2e` exercises the standalone
+artifact and its real Gateway/Adapter/CLI journey against disposable services.
 
 See [the recorded rehearsal and release checklist](V1_RC.md) and
 [the repeatable performance baseline](V1_BENCHMARK.md).
