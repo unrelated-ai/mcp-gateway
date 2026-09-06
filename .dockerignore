@@ -9,6 +9,10 @@
 !Cargo.lock
 !crates/
 !crates/**
+!deploy/
+!deploy/migrator/
+!deploy/migrator/go.mod
+!deploy/migrator/go.sum
 !tests/fixtures/stdio-smoke.yaml
 
 # --- Defense-in-depth: never include these even under allowed paths ---

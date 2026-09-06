@@ -23,7 +23,7 @@ sha2 = "0.11.0"
 tokio = { version = "1", features = ["full"] }
 toml = "0.9"
 url = "2"
-webbrowser = "1"
+webbrowser = "1.2.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3.6.3", features = ["async-secret-service", "crypto-rust", "tokio"] }

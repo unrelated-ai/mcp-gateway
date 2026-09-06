@@ -118,13 +118,19 @@ ENV UNRELATED_CONFIG=/config/config.yaml
 # -----------------------------------------------------------------------------
 # Stage 2c: dbmate builder (patched Go toolchain for migrator image)
 # -----------------------------------------------------------------------------
-FROM golang:1.26.5-alpine3.23 AS dbmate-builder
+FROM golang:1.26.7-alpine3.23 AS dbmate-builder
 
 ENV CGO_ENABLED=1
 
 RUN apk add --no-cache build-base git
 
-RUN go install github.com/amacneil/dbmate/v2@v2.34.1
+# Build with our locked dependency graph so dbmate's transitive security fixes
+# do not have to wait for a new upstream dbmate release.
+WORKDIR /src/migrator
+COPY deploy/migrator/go.mod deploy/migrator/go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go build -mod=readonly -o /go/bin/dbmate github.com/amacneil/dbmate/v2
 
 # -----------------------------------------------------------------------------
 # Stage 3: Gateway runtime
@@ -133,7 +139,7 @@ FROM alpine:3.23 AS gateway-runtime
 
 ARG TARGET=x86_64-unknown-linux-musl
 
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates && apk upgrade --no-cache
 
 WORKDIR /app
 
@@ -154,7 +160,7 @@ FROM alpine:3.23 AS gateway-operator-runtime
 
 ARG TARGET=x86_64-unknown-linux-musl
 
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates && apk upgrade --no-cache
 
 WORKDIR /app
 
