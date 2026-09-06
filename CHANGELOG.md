@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-09-06
+
+### Gateway security update (`0.13.1`)
+
+- Fixed a timing side-channel in Mode 1 static API-key authentication by comparing
+  fixed-size SHA-256 digests in constant time across every configured key.
+- Affects Mode 1 `static-api-keys` authentication in Gateway `0.8.0` through `0.13.0`.
+  Mode 3 PostgreSQL-managed keys use a separate authentication path and are not affected
+  by this comparison issue. Remote API-key recovery has not been demonstrated.
+- Preserved credential formats, key identifiers, input normalization, and both existing
+  Mode 1 request policies. No database migration or configuration change is required.
+- Reported by Abdurazzoqov Javohir
+  ([@abdurazzoqovjavohir700-dev](https://github.com/abdurazzoqovjavohir700-dev)).
+- Advisory: [GHSA-pqhm-fgr7-6833](https://github.com/unrelated-ai/mcp-gateway/security/advisories/GHSA-pqhm-fgr7-6833).
+
+Release tag: `gateway-v0.13.1`. Gateway, admin CLI, Operator, and migrator image versions
+are `0.13.1`. Compose defaults and the Gateway, Operator, and stack Helm charts now use
+these images; the three chart versions are `0.2.5`. Adapter and Web UI versions are unchanged.
+
 ## 2026-07-12
 
 Release versions:

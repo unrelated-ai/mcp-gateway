@@ -1,10 +1,10 @@
 dependencies:
 - name: unrelated-mcp-gateway-operator
   repository: file://../unrelated-mcp-gateway-operator
-  version: 0.2.4
+  version: 0.2.5
 - name: unrelated-mcp-gateway
   repository: file://../unrelated-mcp-gateway
-  version: 0.2.4
+  version: 0.2.5
 - name: unrelated-mcp-gateway-ui
   repository: file://../unrelated-mcp-gateway-ui
   version: 0.2.3
@@ -14,5 +14,5 @@ dependencies:
 - name: unrelated-mcp-gateway-managed-fixtures
   repository: file://../unrelated-mcp-gateway-managed-fixtures
   version: 0.2.4
-digest: sha256:6678ac1e9d45d51ad9e9004367736aac2192026635bd915095aa4b9b2b32e38d
-generated: "2026-07-12T19:39:13.470926342+04:00"
+digest: sha256:0c7ae083918484000ae817868ad74435c636494e9d8128f148e399445fe43ae0
+generated: "2026-09-06T21:39:14.317933473+04:00"
