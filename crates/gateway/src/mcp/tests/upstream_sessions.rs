@@ -275,3 +275,71 @@ fn routing_binding_accepts_legacy_stateful_and_new_sessionless_tokens() {
     let json = serde_json::to_value(sessionless).unwrap();
     assert!(json.get("session").is_none());
 }
+
+#[tokio::test]
+async fn initialization_and_discovery_contact_independent_upstreams_concurrently()
+-> anyhow::Result<()> {
+    let requests = Requests::default();
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let app = Router::new().route(
+        "/{source}",
+        post({
+            let requests = requests.clone();
+            move |Path(source): Path<String>,
+                  headers: HeaderMap,
+                  Json(message): Json<serde_json::Value>| {
+                let barrier = barrier.clone();
+                let requests = requests.clone();
+                async move {
+                    if matches!(
+                        message["method"].as_str(),
+                        Some("initialize" | "tools/list")
+                    ) {
+                        // A sequential implementation cannot get past the first upstream.
+                        barrier.wait().await;
+                    }
+                    fixture_post(Path(source), State(requests), headers, Json(message)).await
+                }
+            }
+        }),
+    );
+    let (base, server) = start_server(app).await;
+    let profile_id = Uuid::new_v4().to_string();
+    let state = gateway_state(&base, &profile_id).await?;
+    let profile = state.store.get_profile(&profile_id).await?.unwrap();
+    let message: ClientJsonRpcMessage = serde_json::from_value(serde_json::json!({
+        "jsonrpc":"2.0", "id":1, "method":"initialize", "params":{
+            "protocolVersion":"2025-11-25", "capabilities":{}, "clientInfo":{"name":"test","version":"1"}
+        }
+    }))?;
+    let initialized = tokio::time::timeout(
+        Duration::from_secs(5),
+        initialize_profile_sources(&state, &profile, &message, 0),
+    )
+    .await?
+    .unwrap();
+    assert!(initialized.warnings.is_empty());
+    assert_eq!(initialized.bindings.len(), 2);
+    let payload = TokenPayloadV1 {
+        profile_id: profile_id.clone(),
+        bindings: initialized.bindings,
+        auth: None,
+        oidc: None,
+        iat: None,
+        exp: None,
+        proxy_key: None,
+    };
+    let listed = tokio::time::timeout(
+        Duration::from_secs(5),
+        upstream::list_tools_all_upstreams(&state, &profile_id, &payload, 0),
+    )
+    .await?
+    .unwrap();
+    assert_eq!(
+        listed.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+        vec!["stateful", "stateless"]
+    );
+    assert!(listed.iter().all(|(_, tools)| tools.len() == 1));
+    server.abort();
+    Ok(())
+}

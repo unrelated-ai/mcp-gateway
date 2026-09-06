@@ -1,4 +1,5 @@
 use super::*;
+use futures::FutureExt as _;
 
 pub(super) async fn handle_get_stream(
     state: &McpState,
@@ -536,103 +537,119 @@ pub(super) struct OpenUpstreamStreamsInputs<'a> {
     pub(super) limits_shutdown: CancellationToken,
 }
 
+type UpstreamEventStream =
+    futures::stream::BoxStream<'static, Result<axum::response::sse::Event, Infallible>>;
+
 pub(super) async fn open_upstream_streams(
     inputs: OpenUpstreamStreamsInputs<'_>,
-) -> Result<
-    Vec<futures::stream::BoxStream<'static, Result<axum::response::sse::Event, Infallible>>>,
-    Response,
-> {
-    let OpenUpstreamStreamsInputs {
-        state,
-        profile,
-        bindings,
-        last,
-        resource_collision_counts,
-        proxy_key,
-        hop,
-        limits,
-        limits_shutdown,
-    } = inputs;
-    let mut streams: Vec<
-        futures::stream::BoxStream<'static, Result<axum::response::sse::Event, Infallible>>,
-    > = Vec::new();
-
-    for binding in bindings {
-        let Some(endpoint) =
-            upstream::resolve_endpoint(state, profile.id.as_str(), binding).await?
-        else {
-            continue;
-        };
-        if hop >= upstream::MAX_HOPS {
-            continue;
-        }
-        let endpoint_url: Arc<str> = Arc::<str>::from(upstream::apply_query_auth(
-            &endpoint.url,
-            endpoint.auth.as_ref(),
-        ));
-        let headers =
-            upstream::build_bound_upstream_headers(binding, endpoint.auth.as_ref(), hop + 1);
-
-        let upstream_policy = profile
-            .mcp
-            .security
-            .effective_upstream_policy(binding.upstream.as_str());
-        let server_requests_filter = upstream_policy.server_requests.clone();
-
-        let upstream_last = if last.resume_upstream.as_deref() == Some(binding.upstream.as_str()) {
-            last.resume_upstream_event_id.clone()
-        } else {
-            None
-        };
-
-        let upstream = streamable_http::get_stream(
-            &state.http,
-            endpoint_url.clone(),
-            binding.session.clone().map(Into::into),
-            upstream_last,
-            &headers,
+) -> Result<Vec<UpstreamEventStream>, Response> {
+    let results = super::aggregation::AggregationPolicy::from_env()
+        .collect(
+            inputs
+                .bindings
+                .iter()
+                .map(|binding| open_upstream_stream(&inputs, binding).boxed())
+                .collect(),
         )
-        .await
-        .map_err(|e| {
+        .await;
+    let mut streams = Vec::new();
+    for result in results {
+        let stream = result.map_err(|_| {
             (
-                StatusCode::BAD_GATEWAY,
-                format!("failed to open upstream stream: {e}"),
+                StatusCode::GATEWAY_TIMEOUT,
+                "upstream stream setup timed out",
             )
                 .into_response()
-        })?;
-
-        let Some(upstream) = upstream else {
-            continue;
-        };
-
-        let ctx = Arc::new(UpstreamSseMapCtx {
-            tenant_id: Arc::<str>::from(profile.tenant_id.clone()),
-            profile_id: Arc::<str>::from(profile.id.clone()),
-            upstream_id: Arc::<str>::from(binding.upstream.clone()),
-            upstream_session_id: binding.session.clone().map(Into::into),
-            endpoint_url: endpoint_url.clone(),
-            headers_for_post: headers.clone(),
-            server_requests_filter,
-            caps: effective_caps(profile),
-            notification_filter: profile.mcp.notifications.clone(),
-            ns_req: profile.mcp.namespacing.request_id,
-            ns_evt: profile.mcp.namespacing.sse_event_id,
-            counts: resource_collision_counts.clone(),
-            proxy_key: proxy_key.clone(),
-            http: state.http.clone(),
-            limits,
-            limits_shutdown: limits_shutdown.clone(),
-            audit: state.audit.clone(),
-        });
-
-        let mapped = upstream.filter_map(move |evt| {
-            let ctx = ctx.clone();
-            async move { map_upstream_sse_event(ctx.as_ref(), evt).await }
-        });
-        streams.push(mapped.boxed());
+        })??;
+        if let Some(stream) = stream {
+            streams.push(stream);
+        }
     }
-
     Ok(streams)
+}
+
+async fn open_upstream_stream(
+    inputs: &OpenUpstreamStreamsInputs<'_>,
+    binding: &UpstreamSessionBinding,
+) -> Result<Option<UpstreamEventStream>, Response> {
+    let state = inputs.state;
+    let profile = inputs.profile;
+    let last = inputs.last;
+    let resource_collision_counts = &inputs.resource_collision_counts;
+    let proxy_key = &inputs.proxy_key;
+    let hop = inputs.hop;
+    let limits = inputs.limits;
+    let limits_shutdown = &inputs.limits_shutdown;
+    let Some(endpoint) = upstream::resolve_endpoint(state, profile.id.as_str(), binding).await?
+    else {
+        return Ok(None);
+    };
+    if hop >= upstream::MAX_HOPS {
+        return Ok(None);
+    }
+    let endpoint_url: Arc<str> = Arc::<str>::from(upstream::apply_query_auth(
+        &endpoint.url,
+        endpoint.auth.as_ref(),
+    ));
+    let headers = upstream::build_bound_upstream_headers(binding, endpoint.auth.as_ref(), hop + 1);
+
+    let upstream_policy = profile
+        .mcp
+        .security
+        .effective_upstream_policy(binding.upstream.as_str());
+    let server_requests_filter = upstream_policy.server_requests.clone();
+
+    let upstream_last = if last.resume_upstream.as_deref() == Some(binding.upstream.as_str()) {
+        last.resume_upstream_event_id.clone()
+    } else {
+        None
+    };
+
+    let upstream = streamable_http::get_stream(
+        &state.http,
+        endpoint_url.clone(),
+        binding.session.clone().map(Into::into),
+        upstream_last,
+        &headers,
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            format!("failed to open upstream stream: {e}"),
+        )
+            .into_response()
+    })?;
+
+    let Some(upstream) = upstream else {
+        return Ok(None);
+    };
+
+    let ctx = Arc::new(UpstreamSseMapCtx {
+        tenant_id: Arc::<str>::from(profile.tenant_id.clone()),
+        profile_id: Arc::<str>::from(profile.id.clone()),
+        upstream_id: Arc::<str>::from(binding.upstream.clone()),
+        upstream_session_id: binding.session.clone().map(Into::into),
+        endpoint_url: endpoint_url.clone(),
+        headers_for_post: headers.clone(),
+        server_requests_filter,
+        caps: effective_caps(profile),
+        notification_filter: profile.mcp.notifications.clone(),
+        ns_req: profile.mcp.namespacing.request_id,
+        ns_evt: profile.mcp.namespacing.sse_event_id,
+        counts: resource_collision_counts.clone(),
+        proxy_key: proxy_key.clone(),
+        http: state.http.clone(),
+        limits,
+        limits_shutdown: limits_shutdown.clone(),
+        audit: state.audit.clone(),
+    });
+
+    let mapped = upstream.filter_map(move |evt| {
+        let ctx = ctx.clone();
+        async move { map_upstream_sse_event(ctx.as_ref(), evt).await }
+    });
+    Ok(Some(mapped.boxed()))
 }
 
 async fn compute_resource_collision_counts(

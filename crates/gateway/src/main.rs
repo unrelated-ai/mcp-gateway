@@ -387,6 +387,7 @@ fn build_no_redirect_http_client(label: &'static str) -> anyhow::Result<reqwest:
     // final URL.
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(5))
         .build()
         .with_context(|| format!("build {label}"))
 }

@@ -11,6 +11,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use base64::Engine as _;
+use futures::FutureExt as _;
 use rmcp::model::{
     ClientJsonRpcMessage, ClientRequest, InitializeResult, JsonRpcRequest, JsonRpcResponse,
     JsonRpcVersion2_0, ServerCapabilities, ServerJsonRpcMessage, ServerResult,
@@ -47,24 +48,12 @@ pub(super) async fn handle_initialize(
         "initialize profile session"
     );
 
-    let (bindings, warnings) =
-        initialize_profile_sources(state, profile, &message, parse_hop(headers)).await?;
+    let InitializedSources {
+        bindings,
+        warnings,
+        local_sources,
+    } = initialize_profile_sources(state, profile, &message, parse_hop(headers)).await?;
 
-    let mut local_sources: usize = 0;
-    for id in &profile.source_ids {
-        if state.catalog.is_local_tool_source(id) {
-            local_sources += 1;
-            continue;
-        }
-        if state
-            .tenant_catalog
-            .has_tool_source(state.store.as_ref(), &profile.tenant_id, id)
-            .await
-            .map_err(internal_error_response("check tenant tool source"))?
-        {
-            local_sources += 1;
-        }
-    }
     if bindings.is_empty() && local_sources == 0 {
         return Err((
             StatusCode::BAD_GATEWAY,
@@ -147,111 +136,128 @@ fn mint_proxy_key_b64() -> anyhow::Result<String> {
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }
 
+pub(super) struct InitializedSources {
+    pub bindings: Vec<UpstreamSessionBinding>,
+    pub warnings: Vec<String>,
+    pub local_sources: usize,
+}
+
+enum InitializedSource {
+    Local,
+    Upstream(UpstreamSessionBinding),
+    Unavailable(String),
+}
+
 pub(super) async fn initialize_profile_sources(
     state: &McpState,
     profile: &crate::store::Profile,
     init_message: &ClientJsonRpcMessage,
     hop: u32,
-) -> Result<(Vec<UpstreamSessionBinding>, Vec<String>), Response> {
-    let mut bindings = Vec::<UpstreamSessionBinding>::new();
-    let mut warnings = Vec::<String>::new();
-
-    for upstream_id in &profile.source_ids {
-        // Gateway-native tool sources do not require upstream MCP session initialization.
-        if state.catalog.is_local_tool_source(upstream_id) {
-            continue;
+) -> Result<InitializedSources, Response> {
+    let results = super::aggregation::AggregationPolicy::from_env()
+        .collect(
+            profile
+                .source_ids
+                .iter()
+                .map(|id| initialize_source(state, profile, init_message, hop, id).boxed())
+                .collect(),
+        )
+        .await;
+    let mut initialized = InitializedSources {
+        bindings: Vec::new(),
+        warnings: Vec::new(),
+        local_sources: 0,
+    };
+    for (id, result) in profile.source_ids.iter().zip(results) {
+        match result {
+            Ok(Ok(InitializedSource::Local)) => initialized.local_sources += 1,
+            Ok(Ok(InitializedSource::Upstream(binding))) => initialized.bindings.push(binding),
+            Ok(Ok(InitializedSource::Unavailable(warning))) => initialized.warnings.push(warning),
+            Ok(Err(response)) => return Err(response),
+            Err(_) => initialized
+                .warnings
+                .push(format!("Upstream '{id}' initialize timed out")),
         }
-        // Tenant-owned local tool sources do not require upstream MCP session initialization.
-        if state
+    }
+    Ok(initialized)
+}
+
+async fn initialize_source(
+    state: &McpState,
+    profile: &crate::store::Profile,
+    init_message: &ClientJsonRpcMessage,
+    hop: u32,
+    upstream_id: &str,
+) -> Result<InitializedSource, Response> {
+    if state.catalog.is_local_tool_source(upstream_id)
+        || state
             .tenant_catalog
             .has_tool_source(state.store.as_ref(), &profile.tenant_id, upstream_id)
             .await
             .map_err(internal_error_response("check tenant tool source"))?
-        {
-            continue;
-        }
-
-        let upstream = state
-            .store
-            .get_upstream(upstream_id)
-            .await
-            .map_err(internal_error_response("load upstream"))?
-            .ok_or_else(|| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("profile references unknown upstream '{upstream_id}'"),
-                )
-                    .into_response()
-            })?;
-
-        if upstream.endpoints.is_empty() {
-            warnings.push(format!("Upstream '{upstream_id}' has no endpoints"));
-            continue;
-        }
-
-        let active_endpoints: Vec<&crate::store::UpstreamEndpoint> = upstream
-            .endpoints
-            .iter()
-            .filter(|ep| {
-                ep.enabled
-                    && matches!(
-                        ep.lifecycle,
-                        crate::store::UpstreamEndpointLifecycle::Active
-                    )
-            })
-            .collect();
-        if active_endpoints.is_empty() {
-            warnings.push(format!(
-                "Upstream '{upstream_id}' has no active endpoints (all are draining/disabled)"
-            ));
-            continue;
-        }
-
-        let upstream_policy = profile.mcp.security.effective_upstream_policy(upstream_id);
-        let upstream_init_message =
-            upstream::rewrite_upstream_initialize_message(init_message, &upstream_policy);
-
-        // Pick a starting endpoint index randomly and then try all endpoints (failover on init).
-        let start = upstream::random_start_index(active_endpoints.len());
-
-        let mut last_err: Option<anyhow::Error> = None;
-        let mut initialized: Option<(String, upstream::UpstreamHandshake)> = None;
-        for i in 0..active_endpoints.len() {
-            let ep = active_endpoints[(start + i) % active_endpoints.len()];
-            let headers = upstream::build_upstream_headers(ep.auth.as_ref(), hop + 1);
-            let endpoint_url = upstream::apply_query_auth(&ep.url, ep.auth.as_ref());
-            match upstream::upstream_initialize(
-                &state.http,
-                &endpoint_url,
-                &upstream_init_message,
-                &headers,
-                upstream.network_class,
+    {
+        return Ok(InitializedSource::Local);
+    }
+    let upstream = state
+        .store
+        .get_upstream(upstream_id)
+        .await
+        .map_err(internal_error_response("load upstream"))?
+        .ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("profile references unknown upstream '{upstream_id}'"),
             )
-            .await
-            {
-                Ok(handshake) => {
-                    initialized = Some((ep.id.clone(), handshake));
-                    break;
-                }
-                Err(e) => last_err = Some(e),
+                .into_response()
+        })?;
+    let active_endpoints: Vec<_> = upstream
+        .endpoints
+        .iter()
+        .filter(|ep| {
+            ep.enabled
+                && matches!(
+                    ep.lifecycle,
+                    crate::store::UpstreamEndpointLifecycle::Active,
+                )
+        })
+        .collect();
+    if active_endpoints.is_empty() {
+        return Ok(InitializedSource::Unavailable(format!(
+            "Upstream '{upstream_id}' has no active endpoints"
+        )));
+    }
+    let policy = profile.mcp.security.effective_upstream_policy(upstream_id);
+    let message = upstream::rewrite_upstream_initialize_message(init_message, &policy);
+    let start = upstream::random_start_index(active_endpoints.len());
+    let mut last_error = None;
+    for i in 0..active_endpoints.len() {
+        let ep = active_endpoints[(start + i) % active_endpoints.len()];
+        let headers = upstream::build_upstream_headers(ep.auth.as_ref(), hop + 1);
+        let url = upstream::apply_query_auth(&ep.url, ep.auth.as_ref());
+        match upstream::upstream_initialize(
+            &state.http,
+            &url,
+            &message,
+            &headers,
+            upstream.network_class,
+        )
+        .await
+        {
+            Ok(handshake) => {
+                return Ok(InitializedSource::Upstream(UpstreamSessionBinding {
+                    upstream: upstream_id.to_owned(),
+                    endpoint: ep.id.clone(),
+                    session: handshake.session_id,
+                    protocol_version: Some(handshake.protocol_version),
+                }));
             }
-        }
-
-        if let Some((endpoint_id, handshake)) = initialized {
-            bindings.push(UpstreamSessionBinding {
-                upstream: upstream_id.clone(),
-                endpoint: endpoint_id,
-                session: handshake.session_id,
-                protocol_version: Some(handshake.protocol_version),
-            });
-        } else if let Some(e) = last_err {
-            warnings.push(format!("Upstream '{upstream_id}' initialize failed: {e}"));
-        } else {
-            warnings.push(format!("Upstream '{upstream_id}' initialize failed"));
+            Err(error) => last_error = Some(error),
         }
     }
-
-    Ok((bindings, warnings))
+    Ok(InitializedSource::Unavailable(format!(
+        "Upstream '{upstream_id}' initialize failed: {}",
+        last_error.map_or_else(|| "no usable endpoint".to_owned(), |e| e.to_string())
+    )))
 }
 
 // SEP-2577 keeps logging wire-compatible during its deprecation window. Continue advertising it

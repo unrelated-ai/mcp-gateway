@@ -1057,7 +1057,9 @@ async fn initialize_profile_sources_fails_over_endpoints() {
         request: ClientRequest::InitializeRequest(init),
     });
 
-    let (bindings, warnings) = initialize_profile_sources(&state, &profile, &init_msg, 0)
+    let super::initialize::InitializedSources {
+        bindings, warnings, ..
+    } = initialize_profile_sources(&state, &profile, &init_msg, 0)
         .await
         .expect("init ok");
     assert!(warnings.is_empty(), "no upstream should be fully down");
@@ -1435,9 +1437,10 @@ sharedSources:
     // We expect this to try resolving exactly one upstream id ("u1"), skipping local sources.
     // It will fail to initialize because endpoint is unreachable, but allow_partial_upstreams
     // should make it return a warning instead of an error.
-    let (_bindings, warnings) = initialize_profile_sources(&state, &profile, &init_msg, 0)
-        .await
-        .expect("init ok");
+    let super::initialize::InitializedSources { warnings, .. } =
+        initialize_profile_sources(&state, &profile, &init_msg, 0)
+            .await
+            .expect("init ok");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(warnings.len(), 1);
     Ok(())

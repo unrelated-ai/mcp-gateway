@@ -4,7 +4,7 @@ use crate::session_token::{TokenPayloadV1, UpstreamSessionBinding};
 use crate::store::{UpstreamClientCapabilitiesMode, UpstreamSecurityPolicy};
 use axum::{Json, http::StatusCode, response::IntoResponse as _, response::Response};
 use base64::Engine as _;
-use futures::StreamExt as _;
+use futures::{FutureExt as _, StreamExt as _};
 use reqwest::header::HeaderValue;
 use rmcp::model::{JsonRpcResponse, ServerJsonRpcMessage};
 use rmcp::{
@@ -383,8 +383,9 @@ async fn list_all_upstreams<T, FBuild, FExtract>(
     extract: FExtract,
 ) -> Result<Vec<(String, T)>, Response>
 where
-    FBuild: Fn() -> ClientJsonRpcMessage,
-    FExtract: Fn(ServerResult) -> Option<T>,
+    T: Send,
+    FBuild: Fn() -> ClientJsonRpcMessage + Sync,
+    FExtract: Fn(ServerResult) -> Option<T> + Sync,
 {
     if ctx.hop >= MAX_HOPS {
         return Err((
@@ -393,43 +394,40 @@ where
         )
             .into_response());
     }
-    let mut out = Vec::new();
-    for binding in &ctx.payload.bindings {
-        let Some(endpoint) = resolve_endpoint(ctx.state, ctx.profile_id, binding).await? else {
-            continue;
-        };
-        let endpoint_url = apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
-        let headers = build_bound_upstream_headers(binding, endpoint.auth.as_ref(), ctx.hop + 1);
-        let request = build_request();
-        match streamable_http::post_message(
-            &ctx.state.http,
-            endpoint_url.into(),
-            request,
-            binding.session.clone().map(Into::into),
-            &headers,
-        )
-        .await
-        {
-            Ok(resp) => match read_first_response(resp).await {
-                Ok(result) => {
-                    if let Some(v) = extract(result) {
-                        out.push((binding.upstream.clone(), v));
+    let results = super::aggregation::AggregationPolicy::from_env().collect(
+        ctx.payload.bindings.iter().map(|binding| async {
+            let Some(endpoint) = resolve_endpoint(ctx.state, ctx.profile_id, binding).await? else {
+                return Ok(None);
+            };
+            let endpoint_url = apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
+            let headers = build_bound_upstream_headers(binding, endpoint.auth.as_ref(), ctx.hop + 1);
+            let response = streamable_http::post_message(
+                &ctx.state.http, endpoint_url.into(), build_request(),
+                binding.session.clone().map(Into::into), &headers,
+            ).await;
+            match response {
+                Ok(response) => match read_first_response(response).await {
+                    Ok(result) => Ok(extract(result).map(|value| (binding.upstream.clone(), value))),
+                    Err(error) => {
+                        tracing::warn!(upstream_id = %binding.upstream, %error, "{}", ctx.request_failed_message);
+                        Ok(None)
                     }
+                },
+                Err(error) => {
+                    tracing::warn!(upstream_id = %binding.upstream, %error, "{}", ctx.transport_failed_message);
+                    Ok(None)
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        upstream_id = %binding.upstream,
-                        error = %e,
-                        "{}", ctx.request_failed_message
-                    );
-                }
-            },
-            Err(e) => {
-                tracing::warn!(
-                    upstream_id = %binding.upstream,
-                    error = %e,
-                    "{}", ctx.transport_failed_message
-                );
+            }
+        }.boxed()).collect(),
+    ).await;
+    let mut out = Vec::new();
+    for (binding, result) in ctx.payload.bindings.iter().zip(results) {
+        match result {
+            Ok(Ok(Some(value))) => out.push(value),
+            Ok(Ok(None)) => {}
+            Ok(Err(response)) => return Err(response),
+            Err(_) => {
+                tracing::warn!(upstream_id = %binding.upstream, "upstream list request timed out");
             }
         }
     }

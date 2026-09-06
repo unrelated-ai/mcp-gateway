@@ -1,5 +1,6 @@
 use super::{McpState, ProfileSurfaceSource, streamable_http, surface, upstream};
 use crate::tools_cache::ToolRouteKind;
+use futures::FutureExt as _;
 use rmcp::model::{
     ClientJsonRpcMessage, ClientRequest, JsonRpcRequest, JsonRpcVersion2_0, ServerResult,
 };
@@ -320,23 +321,22 @@ async fn post_and_read_first(
     timeout_message: &'static str,
     transport_failed_prefix: &'static str,
 ) -> Result<ServerResult, String> {
-    let resp = tokio::time::timeout(
-        PROBE_TIMEOUT,
-        streamable_http::post_message(
+    tokio::time::timeout(PROBE_TIMEOUT, async {
+        let response = streamable_http::post_message(
             &state.http,
             u.endpoint_url.clone().into(),
             request,
             u.session_id.clone().map(Into::into),
             &u.headers,
-        ),
-    )
+        )
+        .await
+        .map_err(|e| format!("{transport_failed_prefix}: {e}"))?;
+        upstream::read_first_response(response)
+            .await
+            .map_err(|e| e.to_string())
+    })
     .await
     .map_err(|_| timeout_message.to_string())?
-    .map_err(|e| format!("{transport_failed_prefix}: {e}"))?;
-
-    upstream::read_first_response(resp)
-        .await
-        .map_err(|e| e.to_string())
 }
 
 async fn probe_upstreams_lists(
@@ -425,19 +425,23 @@ async fn probe_upstreams_lists(
 }
 
 async fn cleanup_upstream_sessions(state: &McpState, upstreams: &[UpstreamCtx]) {
-    // Best-effort upstream session cleanup.
-    for u in upstreams {
-        let Some(session_id) = u.session_id.as_deref() else {
-            continue;
-        };
-        let _ = streamable_http::delete_session(
-            &state.http,
-            u.endpoint_url.clone().into(),
-            session_id.to_owned().into(),
-            &u.headers,
-        )
+    let tasks = upstreams
+        .iter()
+        .filter_map(|u| {
+            u.session_id.as_ref().map(|session_id| {
+                streamable_http::delete_session(
+                    &state.http,
+                    u.endpoint_url.clone().into(),
+                    session_id.clone().into(),
+                    &u.headers,
+                )
+                .boxed()
+            })
+        })
+        .collect();
+    let _ = super::aggregation::AggregationPolicy::from_env()
+        .collect(tasks)
         .await;
-    }
 }
 
 fn finalize_sources(

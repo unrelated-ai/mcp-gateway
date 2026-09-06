@@ -42,6 +42,7 @@ use std::{collections::HashMap, convert::Infallible, sync::Arc};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+mod aggregation;
 mod auth;
 mod ids;
 mod initialize;
