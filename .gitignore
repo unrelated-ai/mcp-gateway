@@ -26,3 +26,7 @@ docs/_work/
 # Helm generated dependency bundles (created by `helm dependency build`)
 deploy/helm/**/charts/*.tgz
 deploy/helm/**/charts/*.tar.gz
+
+# Local acceptance-test and benchmark artifacts
+/.playwright-cli/
+/output/

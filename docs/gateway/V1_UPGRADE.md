@@ -83,6 +83,7 @@ sessionless upstreams; older code cannot read their new routing-token bindings.
 ```bash
 cargo test --workspace --all-targets
 make test-gateway-contracts
+make test-v1-journey
 ```
 
 The second command requires Docker and runs PostgreSQL migration, profile isolation,
@@ -92,3 +93,42 @@ explicitly as an additional step.
 
 For concurrency limits, deadlines, cache lifetime, and module responsibilities, see
 [architecture](ARCHITECTURE.md#request-configuration-concurrency-and-cache-lifetime).
+
+## Repeat the public-release rehearsal
+
+`make test-v1-upgrade` starts a disposable PostgreSQL database, runs the public
+0.13.1 executable against its original schema, creates a tenant/profile/API key,
+and calls an Adapter-backed stdio tool. It then stops that Gateway, applies the v1
+migration, and verifies the existing profile, tenant token, API key, and signed
+routing token. It also adds a sessionless upstream and calls both tools through
+`unrelated`. No existing database is used.
+
+On Linux, extract the historical executable from the pinned public release image:
+
+```bash
+mkdir -p /tmp/mcp-v1-rehearsal
+old_container=$(docker create ghcr.io/unrelated-ai/mcp-gateway@sha256:dc4f2750df6526e65bb83b7b83e37f8aa47e8ff6d5f33562d67e5f5ffb157ea9)
+docker cp "$old_container:/app/unrelated-mcp-gateway" /tmp/mcp-v1-rehearsal/gateway-0.13.1
+docker rm "$old_container"
+MCP_GATEWAY_0131_BIN=/tmp/mcp-v1-rehearsal/gateway-0.13.1 make test-v1-upgrade
+```
+
+This image identifies release commit `173f44e9a37bf16d78014dfbb63bfcce9c6a788e`.
+The test checks the executable version. Its default candidate is the current Cargo
+build; use the same revision for the Gateway, UI, Adapter and CLI when packaging.
+
+For an optional browser check, also set `MCP_V1_UPGRADE_UI_STATE` to a fresh absolute
+JSON path. After the automatic assertions pass, the test writes temporary Gateway
+URLs and a disposable tenant token there and keeps the stack running for up to
+30 minutes. Start the UI with `GATEWAY_ADMIN_BASE` and
+`NEXT_PUBLIC_GATEWAY_DATA_BASE` taken from that file. Unlock with the token, inspect
+the migrated profile and key, probe both tools, and save/reload profile edits.
+Create a file at the same path with its extension changed to `.done` to finish.
+The test removes both handoff files and destroys its services/database.
+
+For a local production UI build, use `npm run build` and serve the standalone
+output as the UI Dockerfile does, including `public` and `.next/static`.
+`NEXT_PUBLIC_GATEWAY_DATA_BASE` must be present at build time for local builds.
+
+See [the recorded rehearsal and release checklist](V1_RC.md) and
+[the repeatable performance baseline](V1_BENCHMARK.md).

@@ -23,6 +23,8 @@ Common use cases:
   - Running & testing: [`docs/adapter/TESTING.md`](adapter/TESTING.md)
 - **Gateway (beta)**: [`docs/gateway/INDEX.md`](gateway/INDEX.md)
   - [v1 upgrade and deployment guide](gateway/V1_UPGRADE.md)
+  - [v1 release-candidate validation](gateway/V1_RC.md)
+  - [v1 performance baseline](gateway/V1_BENCHMARK.md)
   - MCP proxying & aggregation behavior: [`docs/gateway/MCP_PROXYING.md`](gateway/MCP_PROXYING.md)
   - Data-plane auth (API keys + OIDC/JWT): [`docs/gateway/DATA_PLANE_AUTH.md`](gateway/DATA_PLANE_AUTH.md)
   - Profile MCP settings (capabilities/notifications/namespacing, trust controls, transport limits): [`docs/gateway/MCP_SETTINGS.md`](gateway/MCP_SETTINGS.md)
