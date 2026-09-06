@@ -249,14 +249,14 @@ export function ToolsNewTab({
       <SaveStatus {...pipelineAutosave} onRetry={pipelineAutosave.retry} label="Tool transforms" />
 
       <Card className="overflow-hidden">
-        <div className="flex items-start justify-between gap-3 border-b border-edge px-5 py-3.5">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-edge px-5 py-3.5">
           <div className="min-w-0">
             <div className="eyebrow">Tool list</div>
             <div className="mt-1 text-sm text-muted">
               Probe once, then configure transforms and call policies per tool.
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <Toggle
               checked={showDisabledTools}
               onChange={setShowDisabledTools}
@@ -283,7 +283,7 @@ export function ToolsNewTab({
         ) : allTools.length === 0 ? (
           <div className="p-5 text-sm text-muted">No tools discovered.</div>
         ) : (
-          <div className="grid md:grid-cols-[340px_1fr]">
+          <div className="grid xl:grid-cols-[300px_minmax(0,1fr)]">
             <div className="border-r border-edge">
               <div className="border-b border-edge px-4 py-3 text-xs text-faint">
                 Tools: <span className="font-mono text-fg">{surface.tools.length}</span>

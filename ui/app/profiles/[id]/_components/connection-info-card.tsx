@@ -92,7 +92,7 @@ export function ConnectionInfoCard({
 
       {/* MCP client config */}
       <div className="border-t border-edge pt-5">
-        <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <h3 className="eyebrow">MCP client config (mcp.json)</h3>
           <div className="flex items-center gap-2">
             <Button
