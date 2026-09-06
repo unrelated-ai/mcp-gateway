@@ -25,7 +25,7 @@
         kind-local-deploy kind-local-refresh kind-local-reset \
         up down logs status \
         inspector \
-        ci ci-quick test-ci qa-release-gates \
+        ci ci-quick test-ci test-gateway-contracts qa-release-gates \
         helm-validate helm-validate-optional \
         crd-sync crd-sync-check \
         hooks-install bench help
@@ -430,9 +430,17 @@ ci: fmt-check clippy crd-sync-check test-ci
 ## Fast CI for PRs (check + test-unit)
 ci-quick: check fmt-check test-unit
 
-## CI test command (mirrors .github/workflows/ci.yml)
+## Default CI tests (PostgreSQL contracts run separately via test-gateway-contracts)
 test-ci:
 	cargo test --workspace --all-targets
+
+## Gateway PostgreSQL and cross-replica contracts (requires Docker)
+test-gateway-contracts:
+	cargo test -p unrelated-mcp-gateway \
+	  --test integration_mode3_limits \
+	  --test integration_mode3_pg \
+	  --test integration_pg_fanout_notifications \
+	  -- --ignored --nocapture --test-threads=1
 
 ## Sync canonical operator CRD into Helm chart copy
 crd-sync:

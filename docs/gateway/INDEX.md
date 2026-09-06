@@ -25,7 +25,7 @@ The Adapter stays “dumb plumbing” on purpose: it turns systems into MCP and 
     - Resource URI collisions: rewritten into stable gateway URNs (`urn:unrelated-mcp-gateway:resource:...`)
   - `tools/call`, `resources/read`, `prompts/get`: routed to the owning upstream session
     - `tools/call`: gateway-enforced timeout budgets (global default + per-profile/per-tool overrides) and optional per-tool retries
-  - `GET` stream: opens one SSE stream per upstream and merges events (event ids are prefixed to reduce collisions)
+  - `GET` stream: opens available upstream SSE streams concurrently and merges events (405 means no stream) (event ids are prefixed to reduce collisions)
   - Partial upstream availability is supported via per-profile `allow_partial_upstreams`
 - **Control plane (admin API)**: implemented (Mode 3 only)
   - Supports machine auth via either:
@@ -40,8 +40,11 @@ The Adapter stays “dumb plumbing” on purpose: it turns systems into MCP and 
 
 ## Docs
 
+- [Upgrading to v1 and choosing a deployment](V1_UPGRADE.md)
+- [Client CLI and compact MCP proxy](../unrelated-cli/README.md)
+
 - Architecture (incl. HA session routing “Model B”): [`docs/gateway/ARCHITECTURE.md`](ARCHITECTURE.md)
-- Data-plane auth (Mode 1 API keys + Mode 3 API keys + OIDC/JWT, per-profile policy): [`docs/gateway/DATA_PLANE_AUTH.md`](DATA_PLANE_AUTH.md)
+- Data-plane auth (Mode 1 API keys + Mode 3 API keys + OAuth, per-profile policy): [`docs/gateway/DATA_PLANE_AUTH.md`](DATA_PLANE_AUTH.md)
 - MCP proxying & aggregation behavior: [`docs/gateway/MCP_PROXYING.md`](MCP_PROXYING.md)
 - Profile MCP settings (capabilities, notifications, namespacing, upstream trust controls, transport limits): [`docs/gateway/MCP_SETTINGS.md`](MCP_SETTINGS.md)
 - Outbound HTTP safety (SSRF hardening for tool sources + upstream MCP endpoints): [`docs/gateway/OUTBOUND_HTTP_SAFETY.md`](OUTBOUND_HTTP_SAFETY.md)

@@ -4,6 +4,7 @@ This repository ships **MCP infrastructure** for turning existing systems into M
 
 - **Adapter**: expose HTTP/OpenAPI/stdio MCP as a single MCP server over streamable HTTP (`/mcp`)
 - **Gateway**: expose tenant-owned “virtual MCP servers” (`/{profile_id}/mcp`) backed by native HTTP/OpenAPI sources and upstream MCP servers, with data-plane auth and policy
+- **Client tooling**: [`unrelated` CLI and compact MCP proxy](unrelated-cli/README.md)
 - **Admin tooling**: CLI (operator workflows) + Web UI (tenant workflows)
 
 ## Why use this
@@ -21,6 +22,7 @@ Common use cases:
   - Config reference: [`docs/adapter/CONFIG.md`](adapter/CONFIG.md)
   - Running & testing: [`docs/adapter/TESTING.md`](adapter/TESTING.md)
 - **Gateway (beta)**: [`docs/gateway/INDEX.md`](gateway/INDEX.md)
+  - [v1 upgrade and deployment guide](gateway/V1_UPGRADE.md)
   - MCP proxying & aggregation behavior: [`docs/gateway/MCP_PROXYING.md`](gateway/MCP_PROXYING.md)
   - Data-plane auth (API keys + OIDC/JWT): [`docs/gateway/DATA_PLANE_AUTH.md`](gateway/DATA_PLANE_AUTH.md)
   - Profile MCP settings (capabilities/notifications/namespacing, trust controls, transport limits): [`docs/gateway/MCP_SETTINGS.md`](gateway/MCP_SETTINGS.md)

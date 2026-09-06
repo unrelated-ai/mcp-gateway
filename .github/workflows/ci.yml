@@ -40,6 +40,10 @@ jobs:
       - name: Test
         run: cargo test --workspace --all-targets
 
+      - name: Gateway PostgreSQL and cross-replica contracts
+        timeout-minutes: 15
+        run: make test-gateway-contracts
+
   helm:
     name: helm (lint, template)
     runs-on: ubuntu-latest
