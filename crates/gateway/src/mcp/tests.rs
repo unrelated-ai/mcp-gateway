@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::GatewayConfig;
+use crate::store::DataPlaneAuthMode;
 use crate::tool_policy::{RetryPolicy, ToolPolicy};
 use crate::tools_cache::{CachedToolsSurface, ToolRoute, ToolRouteKind, profile_fingerprint};
 use async_trait::async_trait;
