@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
+use subtle::{Choice, ConstantTimeEq};
 use unrelated_http_tools::config::AuthConfig;
 use unrelated_http_tools::config::HttpServerConfig;
 use unrelated_openapi_tools::config::ApiServerConfig;
@@ -445,6 +446,93 @@ mod tests {
             crate::store::DataPlaneAuthMode::ApiKey
         );
         assert!(!p.accept_x_api_key);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mode1_static_api_keys_match_full_secrets_and_preserve_identity() -> anyhow::Result<()>
+    {
+        use super::Store as _;
+
+        let keys = ["k1", "shared-prefix-first", "shared-prefix-second", "last"];
+        let store = super::ConfigStore::new(crate::config::GatewayConfig {
+            data_plane_auth: crate::config::DataPlaneAuthConfig {
+                mode: crate::config::Mode1AuthMode::StaticApiKeys,
+                api_keys: keys.iter().map(ToString::to_string).collect(),
+                accept_x_api_key: false,
+            },
+            ..Default::default()
+        });
+
+        for key in keys {
+            let auth = store
+                .authenticate_api_key("tenant", "profile", key)
+                .await?
+                .expect("every configured key must authenticate");
+            assert_eq!(auth.tenant_id, "tenant");
+            let padded = store
+                .authenticate_api_key("tenant", "profile", &format!(" \t{key}\n"))
+                .await?
+                .expect("surrounding whitespace remains accepted");
+            assert_eq!(auth.api_key_id, padded.api_key_id);
+            if key == "k1" {
+                // Existing SHA-256 identifier must remain stable for session bindings.
+                assert_eq!(
+                    auth.api_key_id,
+                    "6ab9f1eb8f7d3388f4f9d586f66e99fd54080df2c446f0e58668b09c08a16dd0"
+                );
+            }
+        }
+
+        for invalid in [
+            "",
+            " \t\n",
+            "k",
+            "k2",
+            "k10",
+            "shared-prefix",
+            "shared-prefix-firsX",
+            "shared-prefix-second-extra",
+            "lasT",
+        ] {
+            assert!(
+                store
+                    .authenticate_api_key("tenant", "profile", invalid)
+                    .await?
+                    .is_none(),
+                "incorrect key must be rejected: {invalid:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mode1_static_api_keys_disabled_or_empty_never_authenticate() -> anyhow::Result<()> {
+        use super::Store as _;
+        use crate::config::Mode1AuthMode;
+
+        for (mode, keys) in [
+            (Mode1AuthMode::None, vec!["k1".to_string()]),
+            (Mode1AuthMode::StaticApiKeys, vec![]),
+            (Mode1AuthMode::StaticApiKeys, vec![String::new()]),
+        ] {
+            let store = super::ConfigStore::new(crate::config::GatewayConfig {
+                data_plane_auth: crate::config::DataPlaneAuthConfig {
+                    mode,
+                    api_keys: keys,
+                    accept_x_api_key: false,
+                },
+                ..Default::default()
+            });
+            for secret in ["k1", "", " "] {
+                assert!(
+                    store
+                        .authenticate_api_key("tenant", "profile", secret)
+                        .await?
+                        .is_none()
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -1283,12 +1371,21 @@ pub struct PutProfileInput<'a> {
 #[derive(Clone)]
 pub struct ConfigStore {
     config: Arc<GatewayConfig>,
+    static_api_key_hashes: Arc<[[u8; 32]]>,
 }
 
 impl ConfigStore {
     pub fn new(config: GatewayConfig) -> Self {
+        let static_api_key_hashes = config
+            .data_plane_auth
+            .api_keys
+            .iter()
+            .map(|secret| sha2::Sha256::digest(secret.as_bytes()).into())
+            .collect::<Vec<[u8; 32]>>()
+            .into();
         Self {
             config: Arc::new(config),
+            static_api_key_hashes,
         }
     }
 
@@ -1409,18 +1506,21 @@ impl Store for ConfigStore {
         if secret.is_empty() {
             return Ok(None);
         }
-        if !self
-            .config
-            .data_plane_auth
-            .api_keys
+        let secret_hash: [u8; 32] = sha2::Sha256::digest(secret.as_bytes()).into();
+        // Compare fixed-size digests so configured key lengths and matching prefixes do not
+        // affect comparison timing. Visit every key, including after a successful match.
+        let matched = self
+            .static_api_key_hashes
             .iter()
-            .any(|k| k == secret)
-        {
+            .fold(Choice::from(0), |matched, configured_hash| {
+                matched | configured_hash.ct_eq(&secret_hash)
+            });
+        if !bool::from(matched) {
             return Ok(None);
         }
 
         // Mode 1: compute a stable, non-secret identifier from the secret.
-        let api_key_id = hex::encode(sha2::Sha256::digest(secret.as_bytes()));
+        let api_key_id = hex::encode(secret_hash);
         Ok(Some(ApiKeyAuth {
             api_key_id,
             tenant_id: tenant_id.to_string(),

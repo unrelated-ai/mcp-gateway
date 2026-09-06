@@ -26,6 +26,7 @@ jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
 base64 = "0.22"
 hmac = "0.13.0"
 sha2 = "0.11.0"
+subtle = "2.6.1"
 hex = "0.4"
 uuid = { version = "1", features = ["v4"] }
 sse-stream = "0.2"

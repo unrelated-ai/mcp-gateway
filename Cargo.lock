@@ -5107,6 +5107,7 @@ dependencies = [
  "sqlx",
  "sse-stream",
  "strsim",
+ "subtle",
  "tempfile",
  "testcontainers",
  "time",
