@@ -8,7 +8,8 @@ import { SectionCard, Toggle } from "@/components/ui";
 import { qk } from "@/src/lib/queryKeys";
 import { getTenantExpFromCookies, lockTenantSession } from "@/src/lib/tenant-session";
 import { LockIcon } from "@/components/icons";
-import { GATEWAY_DATA_BASE, UI_VERSION } from "@/src/lib/env";
+import { UI_VERSION } from "@/src/lib/env";
+import { useRuntimeConfig } from "@/src/lib/runtime-config";
 import { useToastStore } from "@/src/lib/toast-store";
 import { useMutation } from "@tanstack/react-query";
 import {
@@ -49,7 +50,7 @@ function parsePositiveIntegerInput(raw: string): number | null {
 export default function SettingsPage() {
   const [showConfirmLock, setShowConfirmLock] = useState(false);
   const toast = useToastStore((s) => s.push);
-  const dataBase = GATEWAY_DATA_BASE;
+  const { gatewayDataBase: dataBase } = useRuntimeConfig();
   const uiVersion = UI_VERSION;
   const exp = getTenantExpFromCookies();
   const expHuman = exp ? new Date(exp * 1000).toLocaleString() : "unknown";

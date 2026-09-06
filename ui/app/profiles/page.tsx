@@ -21,13 +21,13 @@ import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
 import { useToastStore } from "@/src/lib/toast-store";
 import { authModeTone, formatDataPlaneAuthMode } from "@/src/lib/display";
-import { GATEWAY_DATA_BASE } from "@/src/lib/env";
+import { useRuntimeConfig } from "@/src/lib/runtime-config";
 
 const EMPTY_PROFILES: Profile[] = [];
 
 export default function ProfilesPage() {
   const router = useRouter();
-  const dataBase = GATEWAY_DATA_BASE;
+  const { gatewayDataBase: dataBase } = useRuntimeConfig();
   const profilesQuery = useQuery({
     queryKey: qk.profiles(),
     queryFn: tenantApi.listProfiles,

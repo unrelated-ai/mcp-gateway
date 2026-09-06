@@ -27,7 +27,7 @@ import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
 import type { ProfileSurface } from "@/src/lib/tenantApi";
 import { useToastStore } from "@/src/lib/toast-store";
-import { GATEWAY_DATA_BASE } from "@/src/lib/env";
+import { useRuntimeConfig } from "@/src/lib/runtime-config";
 import { invalidateProfile, invalidateProfiles } from "@/src/lib/queries/profileQueries";
 import { PencilIcon } from "@/components/icons";
 import { ToolsNewTab } from "./_components/tools-new-tab";
@@ -51,7 +51,8 @@ export default function ProfileDetailPage() {
   const [editingMeta, setEditingMeta] = useState(false);
   const [authDraft, setAuthDraft] = useState<AuthDraft | null>(null);
   const [confirmWeakAuthMode, setConfirmWeakAuthMode] = useState<AuthDraft | null>(null);
-  const mcpUrl = `${GATEWAY_DATA_BASE}/${profileId}/mcp`;
+  const { gatewayDataBase } = useRuntimeConfig();
+  const mcpUrl = `${gatewayDataBase}/${profileId}/mcp`;
 
   const queryClient = useQueryClient();
   const pushToast = useToastStore((s) => s.push);

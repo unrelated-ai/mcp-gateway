@@ -128,7 +128,9 @@ The test removes both handoff files and destroys its services/database.
 
 For a local production UI build, use `npm run build` and serve the standalone
 output as the UI Dockerfile does, including `public` and `.next/static`.
-`NEXT_PUBLIC_GATEWAY_DATA_BASE` must be present at build time for local builds.
+Set `GATEWAY_DATA_BASE` when starting the UI. The existing
+`NEXT_PUBLIC_GATEWAY_DATA_BASE` variable remains a runtime alias; the public URL
+is no longer frozen into the build.
 
 See [the recorded rehearsal and release checklist](V1_RC.md) and
 [the repeatable performance baseline](V1_BENCHMARK.md).

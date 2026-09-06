@@ -2,7 +2,8 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { UnlockTenantCard } from "./_components/UnlockTenantCard";
 import { TENANT_TOKEN_COOKIE } from "@/src/lib/tenant-session";
-import { GATEWAY_DATA_BASE, UI_VERSION } from "@/src/lib/env";
+import { UI_VERSION } from "@/src/lib/env";
+import { readRuntimeConfig } from "@/src/lib/server/runtime-config";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +13,7 @@ export default async function Home() {
   if (hasSession) {
     redirect("/profiles");
   }
-  const dataBase = GATEWAY_DATA_BASE;
+  const { gatewayDataBase: dataBase } = readRuntimeConfig();
 
   return (
     <div className="min-h-full bg-bg">

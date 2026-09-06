@@ -25,7 +25,8 @@ npm run dev
 ### Environment variables
 
 - **`GATEWAY_ADMIN_BASE`**: UI server → Gateway admin/control plane base URL (example: `http://gateway:4001` inside the repository's Compose network)
-- **`NEXT_PUBLIC_GATEWAY_DATA_BASE`**: what users copy into MCP client configs (example: `http://localhost:27100`)
+- **`GATEWAY_DATA_BASE`**: public Gateway URL used in copied MCP client configs (example: `http://localhost:27100`). Read by the UI server at request time, so one image can serve different deployments.
+- **`NEXT_PUBLIC_GATEWAY_DATA_BASE`**: supported runtime alias for existing Compose/Helm deployments; `GATEWAY_DATA_BASE` takes precedence. Neither URL needs to be set while building the UI.
 
 ### Notes
 
