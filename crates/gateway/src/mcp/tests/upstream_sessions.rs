@@ -343,3 +343,24 @@ async fn initialization_and_discovery_contact_independent_upstreams_concurrently
     server.abort();
     Ok(())
 }
+
+#[tokio::test]
+async fn endpoint_resolution_does_not_depend_on_cache_retention() -> anyhow::Result<()> {
+    let mut state = gateway_state("http://127.0.0.1:1", &Uuid::new_v4().to_string()).await?;
+    Arc::get_mut(&mut state).unwrap().endpoint_cache = Arc::new(
+        crate::endpoint_cache::UpstreamEndpointCache::new(Duration::ZERO),
+    );
+    let binding = UpstreamSessionBinding {
+        upstream: "stateless".into(),
+        endpoint: "one".into(),
+        session: None,
+        protocol_version: None,
+    };
+    let endpoint = upstream::resolve_endpoint(&state, "profile", &binding)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(endpoint.url, "http://127.0.0.1:1/stateless");
+    assert!(state.endpoint_cache.get("stateless", "one").is_none());
+    Ok(())
+}

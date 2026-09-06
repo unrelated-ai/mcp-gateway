@@ -287,16 +287,16 @@ pub(super) async fn proxy_to_single_upstream(
     })
 }
 
-pub(super) async fn resolve_endpoint_url(
+pub(super) async fn resolve_endpoint(
     state: &McpState,
     _profile_id: &str,
     binding: &UpstreamSessionBinding,
-) -> Result<Option<String>, Response> {
+) -> Result<Option<crate::endpoint_cache::UpstreamEndpoint>, Response> {
     if let Some(ep) = state
         .endpoint_cache
         .get(&binding.upstream, &binding.endpoint)
     {
-        return Ok(Some(ep.url));
+        return Ok(Some(ep));
     }
 
     let upstream = state
@@ -343,28 +343,12 @@ pub(super) async fn resolve_endpoint_url(
             },
         );
     }
-    let url = endpoints.get(&binding.endpoint).map(|e| e.url.clone());
+    let endpoint = endpoints.get(&binding.endpoint).cloned();
     state
         .endpoint_cache
         .put(binding.upstream.clone(), endpoints);
-    Ok(url)
-}
-
-pub(super) async fn resolve_endpoint(
-    state: &McpState,
-    profile_id: &str,
-    binding: &UpstreamSessionBinding,
-) -> Result<Option<crate::endpoint_cache::UpstreamEndpoint>, Response> {
-    if let Some(ep) = state
-        .endpoint_cache
-        .get(&binding.upstream, &binding.endpoint)
-    {
-        return Ok(Some(ep));
-    }
-    let _ = resolve_endpoint_url(state, profile_id, binding).await?;
-    Ok(state
-        .endpoint_cache
-        .get(&binding.upstream, &binding.endpoint))
+    // The cache may expire or evict this entry immediately; return the loaded value directly.
+    Ok(endpoint)
 }
 
 #[derive(Clone, Copy)]
