@@ -25,7 +25,7 @@
         kind-local-deploy kind-local-refresh kind-local-reset \
         up down logs status \
         inspector \
-        ci ci-quick test-ci test-gateway-contracts test-v1-journey qa-release-gates \
+        ci ci-quick test-ci test-gateway-contracts test-v1-journey bench-v1 qa-release-gates \
         helm-validate helm-validate-optional \
         crd-sync crd-sync-check \
         hooks-install bench help
@@ -448,6 +448,13 @@ test-gateway-contracts:
 test-v1-journey:
 	cargo build -p unrelated-mcp-adapter -p unrelated-cli --bins
 	cargo test -p unrelated-mcp-gateway --test integration_v1_journey -- --ignored --nocapture --test-threads=1
+
+## Mode 3 latency, PostgreSQL statement count and RSS benchmark (Linux + Docker)
+BENCH_OUTPUT ?= $(CURDIR)/output/benchmarks/v1.json
+BENCH_SAMPLES ?= 10
+bench-v1:
+	MCP_V1_BENCH_OUTPUT="$(BENCH_OUTPUT)" MCP_V1_BENCH_SAMPLES="$(BENCH_SAMPLES)" \
+	  cargo test --release -p unrelated-mcp-gateway --test benchmark_v1 -- --ignored --nocapture
 
 ## Sync canonical operator CRD into Helm chart copy
 crd-sync:
