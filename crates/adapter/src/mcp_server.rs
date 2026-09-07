@@ -15,11 +15,12 @@ use parking_lot::RwLock;
 use rmcp::{
     ErrorData as McpError, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, CompleteRequestParams, CompleteResult, ContentBlock,
-        GetPromptRequestParams, GetPromptResult, Implementation, ListPromptsResult,
-        ListResourcesResult, ListToolsResult, PaginatedRequestParams, Prompt, ProtocolVersion,
-        ReadResourceRequestParams, ReadResourceResult, Reference, Resource, ServerCapabilities,
-        ServerInfo, SetLevelRequestParams, SubscribeRequestParams, Tool, UnsubscribeRequestParams,
+        CallToolRequestParams, CallToolResponse, CallToolResult, CompleteRequestParams,
+        CompleteResult, ContentBlock, GetPromptRequestParams, GetPromptResponse, Implementation,
+        ListPromptsResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams, Prompt,
+        ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse, Reference, Resource,
+        ServerCapabilities, ServerInfo, SetLevelRequestParams, SubscribeRequestParams, Tool,
+        UnsubscribeRequestParams,
     },
     service::{RequestContext, RoleServer},
 };
@@ -37,7 +38,7 @@ fn mcp_session_id_from_context(context: &RequestContext<RoleServer>) -> Option<&
         .and_then(|h| h.to_str().ok())
 }
 
-fn timeout_budget_from_meta(meta: &rmcp::model::Meta) -> Option<Duration> {
+fn timeout_budget_from_meta(meta: &rmcp::model::RequestMetaObject) -> Option<Duration> {
     let unrelated = meta.get("unrelated").and_then(Value::as_object)?;
     let timeout_ms = unrelated.get("timeoutMs").and_then(Value::as_u64)?;
     if timeout_ms == 0 {
@@ -55,7 +56,7 @@ mod tests {
 
     #[test]
     fn timeout_budget_from_meta_parses_and_clamps() {
-        let mut meta = rmcp::model::Meta::default();
+        let mut meta = rmcp::model::RequestMetaObject::default();
         assert!(timeout_budget_from_meta(&meta).is_none());
 
         meta.insert("unrelated".to_string(), json!({ "timeoutMs": 0 }));
@@ -117,6 +118,16 @@ impl AdapterMcpServer {
     reason = "Keep logging and catalog access deferred until handler futures are polled"
 )]
 impl ServerHandler for AdapterMcpServer {
+    fn supported_protocol_versions(&self) -> std::borrow::Cow<'static, [ProtocolVersion]> {
+        // Per-session backends and notifications currently implement the legacy lifecycle.
+        std::borrow::Cow::Borrowed(&[
+            ProtocolVersion::V_2024_11_05,
+            ProtocolVersion::V_2025_03_26,
+            ProtocolVersion::V_2025_06_18,
+            ProtocolVersion::V_2025_11_25,
+        ])
+    }
+
     fn get_info(&self) -> ServerInfo {
         let capabilities = ServerCapabilities::builder()
             .enable_logging()
@@ -385,7 +396,7 @@ impl ServerHandler for AdapterMcpServer {
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<CallToolResponse, McpError> {
         let session_id = mcp_session_id_from_context(&context);
         if let Some(id) = session_id {
             self.contracts.observe_peer(id, context.peer.clone());
@@ -448,7 +459,7 @@ impl ServerHandler for AdapterMcpServer {
                     elapsed = ?start.elapsed(),
                     "tools/call ok"
                 );
-                Ok(result)
+                Ok(result.into())
             }
             Err(e) => {
                 tracing::warn!(
@@ -461,9 +472,7 @@ impl ServerHandler for AdapterMcpServer {
                     elapsed = ?start.elapsed(),
                     "tools/call failed"
                 );
-                Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                    "Error: {e}"
-                ))]))
+                Ok(CallToolResult::error(vec![ContentBlock::text(format!("Error: {e}"))]).into())
             }
         }
     }
@@ -473,7 +482,7 @@ impl ServerHandler for AdapterMcpServer {
         &self,
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, McpError> {
+    ) -> Result<ReadResourceResponse, McpError> {
         let session_id = mcp_session_id_from_context(&context);
         if let Some(id) = session_id {
             self.contracts.observe_peer(id, context.peer.clone());
@@ -537,7 +546,7 @@ impl ServerHandler for AdapterMcpServer {
             elapsed = ?start.elapsed(),
             "resources/read ok"
         );
-        Ok(result)
+        Ok(result.into())
     }
 
     /// List resources from all backends.
@@ -583,7 +592,7 @@ impl ServerHandler for AdapterMcpServer {
         &self,
         request: GetPromptRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<GetPromptResult, McpError> {
+    ) -> Result<GetPromptResponse, McpError> {
         let session_id = mcp_session_id_from_context(&context);
         if let Some(id) = session_id {
             self.contracts.observe_peer(id, context.peer.clone());
@@ -648,7 +657,7 @@ impl ServerHandler for AdapterMcpServer {
             elapsed = ?start.elapsed(),
             "prompts/get ok"
         );
-        Ok(result)
+        Ok(result.into())
     }
 
     /// List prompts from all backends.

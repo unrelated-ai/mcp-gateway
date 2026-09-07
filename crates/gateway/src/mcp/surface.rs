@@ -16,7 +16,7 @@ use std::{
 pub(crate) const UNRELATED_TOOL_REF_META_KEY: &str = "ai.unrelated/tool-ref";
 
 fn set_stable_tool_ref(tool: &mut rmcp::model::Tool, source_id: &str, original_name: &str) {
-    let meta = tool.meta.get_or_insert_with(rmcp::model::Meta::new);
+    let meta = tool.meta.get_or_insert_with(rmcp::model::MetaObject::new);
     meta.0.insert(
         UNRELATED_TOOL_REF_META_KEY.to_string(),
         serde_json::Value::String(format!("{source_id}:{original_name}")),
@@ -458,7 +458,7 @@ pub(super) async fn aggregate_list_tools(
         id: req_id,
         result: ServerResult::ListToolsResult(result),
     });
-    Ok(super::sse_single_message(&msg))
+    Ok(super::sse_single_message(msg))
 }
 
 pub(super) async fn aggregate_list_resources(
@@ -490,7 +490,7 @@ pub(super) async fn aggregate_list_resources(
         id: req_id,
         result: ServerResult::ListResourcesResult(result),
     });
-    Ok(super::sse_single_message(&msg))
+    Ok(super::sse_single_message(msg))
 }
 
 pub(super) async fn aggregate_list_prompts(
@@ -522,7 +522,7 @@ pub(super) async fn aggregate_list_prompts(
         id: req_id,
         result: ServerResult::ListPromptsResult(result),
     });
-    Ok(super::sse_single_message(&msg))
+    Ok(super::sse_single_message(msg))
 }
 
 pub(super) async fn resolve_prompt_owner(

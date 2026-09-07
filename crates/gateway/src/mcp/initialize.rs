@@ -108,10 +108,7 @@ pub(super) async fn handle_initialize(
     record_upstream_bindings_activity_best_effort(state, profile, &token, &bindings, "initialize")
         .await;
 
-    Ok(sse_single_message_with_session_id(
-        &response_message,
-        &token,
-    ))
+    Ok(sse_single_message_with_session_id(response_message, &token))
 }
 
 fn parse_initialize_request(

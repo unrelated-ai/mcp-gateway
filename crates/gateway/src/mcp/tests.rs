@@ -62,7 +62,7 @@ fn tool_surface_adds_trusted_stable_refs_and_preserves_other_metadata() {
             serde_json::json!("object"),
         )])),
     );
-    upstream.meta = Some(rmcp::model::Meta(serde_json::Map::from_iter([
+    upstream.meta = Some(rmcp::model::MetaObject(serde_json::Map::from_iter([
         (
             UNRELATED_TOOL_REF_META_KEY.to_string(),
             serde_json::json!("spoofed:tool"),
@@ -1811,5 +1811,7 @@ async fn tool_call_propagates_timeout_budget_meta_and_retries_when_configured() 
 }
 
 mod request_context;
+
+mod sdk_compatibility;
 
 mod upstream_sessions;

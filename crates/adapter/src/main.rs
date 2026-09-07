@@ -197,7 +197,7 @@ fn build_streamable_http_service(
         },
         session_manager,
         StreamableHttpServerConfig::default()
-            .with_stateful_mode(true)
+            .with_legacy_session_mode(true)
             .with_json_response(false)
             .with_sse_keep_alive(Some(Duration::from_secs(15)))
             // Keep retry unset to preserve existing client/test behavior expectations

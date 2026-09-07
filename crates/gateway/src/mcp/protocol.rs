@@ -158,7 +158,11 @@ pub(super) fn as_request_ref(
     Some(req)
 }
 
-pub(super) fn sse_single_message(msg: &ServerJsonRpcMessage) -> Response {
+pub(super) fn sse_single_message(mut msg: ServerJsonRpcMessage) -> Response {
+    // This transport serves the initialize/session lifecycle. Keep its result wire shape.
+    if let ServerJsonRpcMessage::Response(response) = &mut msg {
+        response.result.strip_result_type_for_legacy_peer();
+    }
     let data = serde_json::to_string(&msg).expect("valid json");
     let stream = futures::stream::once(async move {
         Ok::<_, Infallible>(axum::response::sse::Event::default().data(data))
@@ -172,7 +176,7 @@ pub(super) fn sse_single_message(msg: &ServerJsonRpcMessage) -> Response {
 }
 
 pub(super) fn sse_single_message_with_session_id(
-    msg: &ServerJsonRpcMessage,
+    msg: ServerJsonRpcMessage,
     session_id: &str,
 ) -> Response {
     let mut resp = sse_single_message(msg);
@@ -290,5 +294,5 @@ pub(super) fn jsonrpc_error_response_with_data(
         id: Some(id),
         error: ErrorData::new(code, message, data),
     });
-    sse_single_message(&error)
+    sse_single_message(error)
 }

@@ -12,9 +12,9 @@ use rmcp::{
     },
     service::{NotificationContext, RunningService},
     transport::{
-        AuthClient, AuthorizationManager, AuthorizationSession, CredentialStore as _,
-        StoredCredentials, StreamableHttpClientTransport, auth::OAuthClientConfig,
-        streamable_http_client::StreamableHttpClientTransportConfig,
+        AuthClient, AuthorizationManager, AuthorizationRequest, AuthorizationSession,
+        CredentialStore as _, StoredCredentials, StreamableHttpClientTransport,
+        auth::OAuthClientConfig, streamable_http_client::StreamableHttpClientTransportConfig,
     },
 };
 use std::{
@@ -59,8 +59,21 @@ impl ClientHandler for GatewayClientHandler {
 
 pub type GatewayConnection = RunningService<RoleClient, GatewayClientHandler>;
 
-#[allow(clippy::too_many_lines)]
 pub async fn connect(
+    context_name: &str,
+    context: &ContextConfig,
+    timeout: Duration,
+) -> anyhow::Result<GatewayConnection> {
+    let connection = connect_with_auth(context_name, context, timeout).await?;
+    // The CLI catalog owns freshness; upstream errors must still reach callers.
+    connection
+        .set_response_cache_config(rmcp::service::ClientCacheConfig::disabled())
+        .await;
+    Ok(connection)
+}
+
+#[allow(clippy::too_many_lines)]
+async fn connect_with_auth(
     context_name: &str,
     context: &ContextConfig,
     timeout: Duration,
@@ -353,10 +366,10 @@ where
         .context("failed to initialize OAuth")?;
     manager.set_credential_store(credential_store);
     let metadata = manager
-        .discover_metadata()
+        .resolve_metadata()
         .await
         .context("OAuth metadata discovery failed")?;
-    manager.set_metadata(metadata);
+    manager.set_metadata(metadata.metadata);
     let scopes = manager.select_scopes(None, &["mcp:access"]);
     let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
 
@@ -372,12 +385,12 @@ where
     } else {
         let session = AuthorizationSession::new(
             manager,
-            &scope_refs,
-            redirect_uri,
-            Some("Unrelated CLI"),
-            None,
+            AuthorizationRequest::new(redirect_uri)
+                .with_scopes(scopes)
+                .with_client_name("Unrelated CLI"),
         )
         .await
+        .map_err(|(_, error)| error)
         .context("OAuth client registration failed")?;
         Ok(PreparedOAuthLogin::Dynamic(session))
     }
@@ -460,7 +473,7 @@ pub async fn logout(context_name: &str, context: &ContextConfig) -> anyhow::Resu
 
 async fn try_revoke(context: &ContextConfig, stored: &StoredCredentials) -> anyhow::Result<()> {
     let manager = AuthorizationManager::new(context.mcp_url.clone()).await?;
-    let metadata = manager.discover_metadata().await?;
+    let metadata = manager.resolve_metadata().await?.metadata;
     let endpoint = metadata
         .additional_fields
         .get("revocation_endpoint")

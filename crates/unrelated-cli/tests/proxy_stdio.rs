@@ -2,8 +2,8 @@ use axum::{Router, http::StatusCode, response::IntoResponse as _, routing::post}
 use rmcp::{
     ErrorData as McpError, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, ContentBlock, Implementation, ListToolsResult,
-        ServerCapabilities, ServerInfo, Tool,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
+        ListToolsResult, ServerCapabilities, ServerInfo, Tool,
     },
     service::{RequestContext, RoleServer},
     transport::streamable_http_server::{
@@ -44,7 +44,7 @@ impl ServerHandler for RemoteTools {
                 ("properties".into(), json!({"unread": {"type": "boolean"}})),
             ])),
         );
-        tool.meta = Some(rmcp::model::Meta(serde_json::Map::from_iter([(
+        tool.meta = Some(rmcp::model::MetaObject(serde_json::Map::from_iter([(
             TOOL_REF_META_KEY.to_string(),
             json!("telegram:get_messages"),
         )])));
@@ -55,13 +55,14 @@ impl ServerHandler for RemoteTools {
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<CallToolResult, McpError>> {
+    ) -> impl Future<Output = Result<CallToolResponse, McpError>> {
         if request.name != "exposed_get_messages" {
             return std::future::ready(Err(McpError::invalid_params("unknown tool", None)));
         }
         std::future::ready(Ok(CallToolResult::success(vec![ContentBlock::text(
             "Hi Mom — 2 unread messages",
-        )])))
+        )])
+        .into()))
     }
 }
 

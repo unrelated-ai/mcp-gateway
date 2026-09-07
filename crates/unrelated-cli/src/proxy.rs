@@ -6,8 +6,8 @@ use crate::{
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt as _,
     model::{
-        CallToolRequestParams, CallToolResult, Implementation, JsonObject, ListToolsResult,
-        ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
+        CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, JsonObject,
+        ListToolsResult, ProtocolVersion, ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
     },
     service::{RequestContext, RoleServer},
     transport::stdio,
@@ -51,6 +51,16 @@ impl CompactProxy {
 }
 
 impl ServerHandler for CompactProxy {
+    fn supported_protocol_versions(&self) -> std::borrow::Cow<'static, [ProtocolVersion]> {
+        // Continuations and subscriptions still require end-to-end proxy support.
+        std::borrow::Cow::Borrowed(&[
+            ProtocolVersion::V_2024_11_05,
+            ProtocolVersion::V_2025_03_26,
+            ProtocolVersion::V_2025_06_18,
+            ProtocolVersion::V_2025_11_25,
+        ])
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("unrelated", env!("CARGO_PKG_VERSION")))
@@ -74,7 +84,7 @@ impl ServerHandler for CompactProxy {
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<CallToolResponse, McpError> {
         let arguments = request.arguments.unwrap_or_default();
         match request.name.as_ref() {
             "search_tools" => {
@@ -113,7 +123,7 @@ impl ServerHandler for CompactProxy {
                     )
                     .map_err(proxy_invalid_params)?;
                 let value = serde_json::to_value(results).map_err(proxy_error)?;
-                Ok(CallToolResult::structured(json!({"tools": value})))
+                Ok(CallToolResult::structured(json!({"tools": value})).into())
             }
             "execute_tool" => {
                 let reference = required_string(&arguments, "toolRef")?;
@@ -130,6 +140,7 @@ impl ServerHandler for CompactProxy {
                 };
                 client::call_tool(&self.remote, &tool, tool_arguments, self.timeout)
                     .await
+                    .map(Into::into)
                     .map_err(proxy_error)
             }
             _ => Err(McpError::invalid_params(

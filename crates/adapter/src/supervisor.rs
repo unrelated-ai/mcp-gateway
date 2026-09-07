@@ -548,12 +548,14 @@ impl StdioBackend {
         let client = self.connect_client(handler).await?;
 
         // Get server info (best-effort)
-        if let Some(server_info) = client.peer_info() {
+        if let Some(peer_info) = client.peer_info()
+            && let Some(server_info) = peer_info.server_info.as_ref()
+        {
             tracing::info!(
                 "MCP server '{}' connected: name={}, version={}",
                 name,
-                server_info.server_info.name,
-                server_info.server_info.version,
+                server_info.name,
+                server_info.version,
             );
         } else {
             tracing::info!("MCP server '{}' connected (peer_info unavailable)", name);
@@ -609,10 +611,15 @@ impl StdioBackend {
         let transport = TokioChildProcess::new(cmd)
             .map_err(|e| AdapterError::Startup(format!("Failed to spawn '{name}': {e}")))?;
 
-        handler
+        let client = handler
             .serve(transport)
             .await
-            .map_err(|e| AdapterError::Startup(format!("Failed to connect to '{name}': {e}")))
+            .map_err(|e| AdapterError::Startup(format!("Failed to connect to '{name}': {e}")))?;
+        // Catalog refresh and failure handling are owned by the supervisor.
+        client
+            .set_response_cache_config(rmcp::service::ClientCacheConfig::disabled())
+            .await;
+        Ok(client)
     }
 
     fn get_or_create_session_process(&self, session_id: &str) -> Arc<SessionProcess> {

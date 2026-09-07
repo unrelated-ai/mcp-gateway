@@ -225,7 +225,7 @@ async fn benchmark_upstream_scaling() -> anyhow::Result<()> {
         .unwrap_or("unknown")
         .to_string();
     let report = json!({"revision":String::from_utf8(revision.stdout)?.trim(), "iterations":iterations,
-        "upstream_delay_ms":20, "upstream_implementation":"rmcp 2.2.0, sessionless, JSON responses, 50 independent loopback listeners in one fixture process",
+        "upstream_delay_ms":20, "upstream_implementation":"rmcp 3.2.0, legacy sessionless mode, JSON responses, 50 independent loopback listeners in one fixture process",
         "client":"rmcp StreamableHttpClient plumbing (McpSession); initialize includes notifications/initialized; no background client GET stream",
         "database":"disposable PostgreSQL 16 with pg_stat_statements; separate Gateway role; counts include all statements executed by that role during each operation",
         "memory":"Gateway process VmRSS after each operation; excludes database and fixture", "cpu":cpu,

@@ -4,8 +4,8 @@ use axum::{Router, body::Body, extract::State, http::Request, response::Response
 use rmcp::{
     ErrorData, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, ContentBlock, Implementation, ListToolsResult,
-        ServerCapabilities, ServerInfo, Tool,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
+        ListToolsResult, ServerCapabilities, ServerInfo, Tool,
     },
     service::{RequestContext, RoleServer},
     transport::streamable_http_server::{
@@ -256,13 +256,14 @@ impl ServerHandler for Remote {
         &self,
         request: CallToolRequestParams,
         _: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<CallToolResult, ErrorData>> {
+    ) -> impl Future<Output = Result<CallToolResponse, ErrorData>> {
         if request.name != "echo" {
             return std::future::ready(Err(ErrorData::invalid_params("unknown tool", None)));
         }
         std::future::ready(Ok(CallToolResult::success(vec![ContentBlock::text(
             self.generation,
-        )])))
+        )])
+        .into()))
     }
 }
 
@@ -318,7 +319,7 @@ impl RemoteServer {
                 move || Ok(remote.clone()),
                 Arc::default(),
                 StreamableHttpServerConfig::default()
-                    .with_stateful_mode(false)
+                    .with_legacy_session_mode(false)
                     .with_json_response(true)
                     .with_cancellation_token(cancellation.child_token()),
             );

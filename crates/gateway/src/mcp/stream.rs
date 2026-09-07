@@ -205,6 +205,8 @@ pub(super) enum NotificationKind {
     PromptListChanged,
     ElicitationCompletion,
     TaskStatus,
+    TaskStatusUpdate,
+    Unsupported,
     Custom(String),
 }
 
@@ -220,6 +222,8 @@ impl NotificationKind {
             NotificationKind::PromptListChanged => "notifications/prompts/list_changed",
             NotificationKind::ElicitationCompletion => "notifications/elicitation/complete",
             NotificationKind::TaskStatus => "notifications/tasks/status",
+            NotificationKind::TaskStatusUpdate => "notifications/tasks",
+            NotificationKind::Unsupported => "",
             NotificationKind::Custom(method) => method,
         }
     }
@@ -236,11 +240,21 @@ pub(super) fn classify_server_notification(notification: &ServerNotification) ->
         }
         ServerNotification::ToolListChangedNotification(_) => NotificationKind::ToolListChanged,
         ServerNotification::PromptListChangedNotification(_) => NotificationKind::PromptListChanged,
-        ServerNotification::ElicitationCompleteNotification(_) => {
+        ServerNotification::CustomNotification(n)
+            if n.method == "notifications/elicitation/complete" =>
+        {
             NotificationKind::ElicitationCompletion
         }
-        ServerNotification::TaskStatusNotification(_) => NotificationKind::TaskStatus,
+        ServerNotification::CustomNotification(n) if n.method == "notifications/tasks/status" => {
+            NotificationKind::TaskStatus
+        }
+        ServerNotification::TaskStatusNotification(_) => NotificationKind::TaskStatusUpdate,
+        ServerNotification::CustomNotification(n) if n.method == "notifications/tasks" => {
+            NotificationKind::TaskStatusUpdate
+        }
         ServerNotification::CustomNotification(n) => NotificationKind::Custom(n.method.clone()),
+        // New protocol-only variants are not exposed by the legacy Gateway transport.
+        _ => NotificationKind::Unsupported,
     }
 }
 
@@ -255,7 +269,9 @@ pub(super) fn allowed_by_caps_for_notification_kind(
         NotificationKind::PromptListChanged => caps.prompts_list_changed(),
         // Tasks are not advertised or routed end-to-end yet. Do not leak unrouteable task ids to
         // downstream clients if a non-conforming upstream sends a status notification anyway.
-        NotificationKind::TaskStatus => false,
+        NotificationKind::TaskStatus
+        | NotificationKind::TaskStatusUpdate
+        | NotificationKind::Unsupported => false,
         _ => true,
     }
 }

@@ -526,7 +526,7 @@ async fn execute_local_tool_call(
             id: req_id,
             result: rmcp::model::ServerResult::CallToolResult(result),
         });
-        return Ok(Some(super::sse_single_message(&msg)));
+        return Ok(Some(super::sse_single_message(msg)));
     }
 
     if route.kind == ToolRouteKind::TenantLocal {
@@ -559,7 +559,7 @@ async fn execute_local_tool_call(
             id: req_id,
             result: rmcp::model::ServerResult::CallToolResult(result),
         });
-        return Ok(Some(super::sse_single_message(&msg)));
+        return Ok(Some(super::sse_single_message(msg)));
     }
 
     Ok(None)

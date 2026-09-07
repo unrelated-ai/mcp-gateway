@@ -282,7 +282,7 @@ mod tests {
             ])),
         );
         if let Some(reference) = reference {
-            tool.meta = Some(rmcp::model::Meta(serde_json::Map::from_iter([(
+            tool.meta = Some(rmcp::model::MetaObject(serde_json::Map::from_iter([(
                 TOOL_REF_META_KEY.into(),
                 serde_json::json!(reference),
             )])));

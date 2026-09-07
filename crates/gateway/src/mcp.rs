@@ -594,7 +594,7 @@ async fn handle_logging_set_level_in_session(
         id: req_id,
         result: ServerResult::EmptyResult(rmcp::model::EmptyResult {}),
     });
-    Ok(sse_single_message(&msg))
+    Ok(sse_single_message(msg))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -744,7 +744,7 @@ async fn handle_post_in_session_request(
                 id: req_id,
                 result: ServerResult::EmptyResult(rmcp::model::EmptyResult {}),
             });
-            Ok(sse_single_message(&msg))
+            Ok(sse_single_message(msg))
         }
         other => Err(jsonrpc_error_response(
             req_id,
