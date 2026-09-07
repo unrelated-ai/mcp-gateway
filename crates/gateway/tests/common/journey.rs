@@ -252,17 +252,17 @@ impl ServerHandler for Remote {
             ),
         )]))
     }
-    async fn call_tool(
+    fn call_tool(
         &self,
         request: CallToolRequestParams,
         _: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
+    ) -> impl Future<Output = Result<CallToolResult, ErrorData>> {
         if request.name != "echo" {
-            return Err(ErrorData::invalid_params("unknown tool", None));
+            return std::future::ready(Err(ErrorData::invalid_params("unknown tool", None)));
         }
-        Ok(CallToolResult::success(vec![ContentBlock::text(
+        std::future::ready(Ok(CallToolResult::success(vec![ContentBlock::text(
             self.generation,
-        )]))
+        )])))
     }
 }
 

@@ -9,6 +9,10 @@ use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
+#[allow(
+    clippy::result_large_err,
+    reason = "HTTP handlers return complete Axum responses for early exits"
+)]
 mod admin;
 mod audit;
 mod audit_retention;
@@ -18,6 +22,10 @@ mod config;
 mod contracts;
 mod endpoint_cache;
 mod managed_mcp;
+#[allow(
+    clippy::result_large_err,
+    reason = "HTTP handlers return complete Axum responses for early exits"
+)]
 mod mcp;
 mod oauth;
 mod oidc;
@@ -30,6 +38,10 @@ mod secrets_crypto;
 mod serde_helpers;
 mod session_token;
 mod store;
+#[allow(
+    clippy::result_large_err,
+    reason = "HTTP handlers return complete Axum responses for early exits"
+)]
 mod tenant;
 mod tenant_catalog;
 mod tenant_token;

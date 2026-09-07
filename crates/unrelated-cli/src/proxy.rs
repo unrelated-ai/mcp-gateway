@@ -59,15 +59,15 @@ impl ServerHandler for CompactProxy {
             )
     }
 
-    async fn list_tools(
+    fn list_tools(
         &self,
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, McpError> {
-        Ok(ListToolsResult::with_all_items(vec![
+    ) -> impl Future<Output = Result<ListToolsResult, McpError>> {
+        std::future::ready(Ok(ListToolsResult::with_all_items(vec![
             search_tool_definition(),
             execute_tool_definition(),
-        ]))
+        ])))
     }
 
     async fn call_tool(

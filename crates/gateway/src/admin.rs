@@ -1036,8 +1036,7 @@ fn validate_managed_mcp_status_patch_request(
             .upstream_id
             .as_deref()
             .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .is_none()
+            .is_none_or(str::is_empty)
     {
         return Err("upstreamId is required when status is ready");
     }

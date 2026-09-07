@@ -112,6 +112,10 @@ impl AdapterMcpServer {
     }
 }
 
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "Keep logging and catalog access deferred until handler futures are polled"
+)]
 impl ServerHandler for AdapterMcpServer {
     fn get_info(&self) -> ServerInfo {
         let capabilities = ServerCapabilities::builder()

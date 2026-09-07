@@ -31,11 +31,11 @@ impl ServerHandler for RemoteTools {
             .with_server_info(Implementation::new("proxy-test-remote", "1"))
     }
 
-    async fn list_tools(
+    fn list_tools(
         &self,
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, McpError> {
+    ) -> impl Future<Output = Result<ListToolsResult, McpError>> {
         let mut tool = Tool::new(
             "exposed_get_messages".to_string(),
             "Find unread Telegram messages".to_string(),
@@ -48,20 +48,20 @@ impl ServerHandler for RemoteTools {
             TOOL_REF_META_KEY.to_string(),
             json!("telegram:get_messages"),
         )])));
-        Ok(ListToolsResult::with_all_items(vec![tool]))
+        std::future::ready(Ok(ListToolsResult::with_all_items(vec![tool])))
     }
 
-    async fn call_tool(
+    fn call_tool(
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> impl Future<Output = Result<CallToolResult, McpError>> {
         if request.name != "exposed_get_messages" {
-            return Err(McpError::invalid_params("unknown tool", None));
+            return std::future::ready(Err(McpError::invalid_params("unknown tool", None)));
         }
-        Ok(CallToolResult::success(vec![ContentBlock::text(
+        std::future::ready(Ok(CallToolResult::success(vec![ContentBlock::text(
             "Hi Mom — 2 unread messages",
-        )]))
+        )])))
     }
 }
 

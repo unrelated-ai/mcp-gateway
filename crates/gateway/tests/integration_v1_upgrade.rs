@@ -266,7 +266,7 @@ async fn public_0131_database_upgrades_with_existing_profiles_keys_and_sessions(
             done.display()
         );
         let started = Instant::now();
-        while !done.exists() && started.elapsed() < Duration::from_secs(1800) {
+        while !done.exists() && started.elapsed() < Duration::from_mins(30) {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
         let finished = done.exists();

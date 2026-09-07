@@ -23,7 +23,7 @@ on:
       rust_toolchain:
         description: "Rust toolchain version"
         required: false
-        default: "1.92.0"
+        default: "1.98.1"
         type: string
       runner:
         description: "GitHub-hosted runner label"

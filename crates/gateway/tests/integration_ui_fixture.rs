@@ -45,7 +45,7 @@ async fn standalone_ui_fixture() -> anyhow::Result<()> {
             "cli": journey::sibling_binary("unrelated")?,
         }))?,
     )?;
-    let finished = tokio::time::timeout(Duration::from_secs(900), async {
+    let finished = tokio::time::timeout(Duration::from_mins(15), async {
         while !done.exists() {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
