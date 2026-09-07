@@ -470,7 +470,7 @@ async fn tenant_create_api_key(
 #[ignore = "requires Docker (testcontainers)"]
 async fn put_tenant_audit_settings_emits_tenant_audit_settings_event() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -536,7 +536,7 @@ async fn put_tenant_audit_settings_emits_tenant_audit_settings_event() -> anyhow
 #[ignore = "requires Docker (testcontainers)"]
 async fn put_upstream_emits_upstream_invalidation_event() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -592,7 +592,7 @@ async fn put_upstream_emits_upstream_invalidation_event() -> anyhow::Result<()> 
 #[ignore = "requires Docker (testcontainers)"]
 async fn put_profile_emits_profile_invalidation_event() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -675,7 +675,7 @@ async fn put_profile_emits_profile_invalidation_event() -> anyhow::Result<()> {
 #[ignore = "requires Docker (testcontainers)"]
 async fn put_tool_source_emits_tenant_tool_source_invalidation_event() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -743,7 +743,7 @@ async fn put_tool_source_emits_tenant_tool_source_invalidation_event() -> anyhow
 #[allow(clippy::too_many_lines)]
 async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -1020,7 +1020,7 @@ async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
 #[allow(clippy::too_many_lines)]
 async fn pg_replay_replays_missed_contract_notifications() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")

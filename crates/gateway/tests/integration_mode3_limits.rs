@@ -44,7 +44,7 @@ struct Pg {
 }
 
 async fn start_postgres() -> anyhow::Result<Pg> {
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -67,7 +67,7 @@ async fn start_postgres() -> anyhow::Result<Pg> {
 }
 
 async fn start_postgres_before_oauth_migration() -> anyhow::Result<Pg> {
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")

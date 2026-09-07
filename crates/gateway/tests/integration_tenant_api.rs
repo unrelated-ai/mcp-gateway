@@ -265,7 +265,7 @@ async fn admin_issue_tenant_token(
 #[allow(clippy::too_many_lines)]
 async fn tenant_profiles_are_scoped_and_cross_tenant_access_is_404() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -442,7 +442,7 @@ async fn assert_profile_nullable_updates(
 #[allow(clippy::too_many_lines)]
 async fn profile_name_is_unique_per_tenant_case_insensitive() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -517,7 +517,7 @@ async fn profile_name_is_unique_per_tenant_case_insensitive() -> anyhow::Result<
 #[allow(clippy::too_many_lines)]
 async fn bootstrap_tenant_creates_first_tenant_and_returns_tenant_token() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -598,7 +598,7 @@ async fn bootstrap_tenant_creates_first_tenant_and_returns_tenant_token() -> any
 #[allow(clippy::too_many_lines)]
 async fn tenant_can_create_upstream_and_attach_to_profile() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -723,7 +723,7 @@ async fn tenant_can_create_upstream_and_attach_to_profile() -> anyhow::Result<()
 async fn tenant_tool_source_requires_secret_and_appears_in_tools_list_after_put_secret()
 -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -873,7 +873,7 @@ async fn tenant_tool_source_requires_secret_and_appears_in_tools_list_after_put_
 #[ignore = "requires Docker (testcontainers)"]
 async fn tenant_tool_source_get_returns_spec_for_round_trip() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -967,7 +967,7 @@ async fn tenant_tool_source_get_returns_spec_for_round_trip() -> anyhow::Result<
 #[allow(clippy::too_many_lines)]
 async fn tenant_profile_surface_probe_returns_tools_and_source_status() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -1130,7 +1130,7 @@ async fn tenant_profile_surface_probe_returns_tools_and_source_status() -> anyho
 #[allow(clippy::too_many_lines)]
 async fn tenant_can_patch_delete_and_inspect_upstream_endpoints() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -1311,7 +1311,7 @@ async fn tenant_can_patch_delete_and_inspect_upstream_endpoints() -> anyhow::Res
 #[allow(clippy::too_many_lines)]
 async fn tenant_managed_mcp_deployables_and_requests_are_scoped() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -1721,7 +1721,7 @@ async fn tenant_managed_mcp_deployables_and_requests_are_scoped() -> anyhow::Res
 #[allow(clippy::too_many_lines)]
 async fn tenant_managed_upstream_created_via_admin_is_tenant_scoped() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")

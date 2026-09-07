@@ -126,7 +126,7 @@ ENV UNRELATED_CONFIG=/config/config.yaml
 # -----------------------------------------------------------------------------
 # Stage 2c: dbmate builder (patched Go toolchain for migrator image)
 # -----------------------------------------------------------------------------
-FROM golang:1.26.7-alpine3.23 AS dbmate-builder
+FROM golang:1.27.1-alpine3.24 AS dbmate-builder
 
 ENV CGO_ENABLED=1
 
@@ -143,7 +143,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # -----------------------------------------------------------------------------
 # Stage 3: Gateway runtime
 # -----------------------------------------------------------------------------
-FROM alpine:3.23 AS gateway-runtime
+FROM alpine:3.24.1 AS gateway-runtime
 
 ARG TARGET=x86_64-unknown-linux-musl
 
@@ -164,7 +164,7 @@ ENTRYPOINT ["/app/unrelated-mcp-gateway"]
 # -----------------------------------------------------------------------------
 # Stage 4: Gateway operator runtime
 # -----------------------------------------------------------------------------
-FROM alpine:3.23 AS gateway-operator-runtime
+FROM alpine:3.24.1 AS gateway-operator-runtime
 
 ARG TARGET=x86_64-unknown-linux-musl
 
@@ -179,7 +179,7 @@ ENTRYPOINT ["/app/unrelated-mcp-gateway-operator"]
 # -----------------------------------------------------------------------------
 # Stage 5: Gateway migrator (dbmate + baked migrations)
 # -----------------------------------------------------------------------------
-FROM alpine:3.23 AS gateway-migrator
+FROM alpine:3.24.1 AS gateway-migrator
 
 RUN apk add --no-cache \
         mariadb-client \

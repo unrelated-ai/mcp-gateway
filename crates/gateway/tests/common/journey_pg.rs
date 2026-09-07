@@ -6,7 +6,7 @@ use testcontainers::{
 };
 
 pub async fn start(statements: bool) -> anyhow::Result<(ContainerAsync<GenericImage>, String)> {
-    let mut request = GenericImage::new("postgres", "16-alpine")
+    let mut request = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
