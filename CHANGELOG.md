@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-09-07
+
+### Security dependency updates (Gateway `0.13.2`, Web UI `0.9.1`)
+
+- Updated the Rust dependency lockfile to patched `h2`, `event-listener`,
+  `chacha20`, and `spin` releases.
+- Updated Gateway and Operator images to install current Alpine security patches.
+- Updated the migrator to Go `1.26.7` and dbmate `2.35.1`, with a checked-in Go
+  dependency graph selecting patched cryptography, networking, text, and gRPC modules.
+- Updated Next.js to `16.3.4`, Sharp to `0.35.4`, and affected UI tooling dependencies;
+  removed obsolete overrides that forced vulnerable transitive versions.
+- Updated release workflows to refresh runtime packages even when Docker build caches
+  are available.
+- Aligned Gateway, admin CLI, Operator, and migrator versions at `0.13.2`; Web UI is
+  `0.9.1`. Updated Compose defaults and the corresponding Helm chart versions and image pins.
+
+Release tags: `gateway-v0.13.2` and `ui-v0.9.1`. Gateway, Operator, and stack
+charts are `0.2.6`; the UI chart is `0.2.4`. No database or configuration migration
+is required. These releases retain the static API-key timing fix from `0.13.1`.
+
 ## 2026-09-06
 
 ### Gateway security update (`0.13.1`)

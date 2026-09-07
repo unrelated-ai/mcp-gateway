@@ -132,7 +132,7 @@ ENV CGO_ENABLED=1
 
 RUN apk add --no-cache build-base git
 
-# Build with our locked dependency graph so dbmate's transitive security fixes
+# Build with the locked dependency graph so dbmate's transitive security fixes
 # do not have to wait for a new upstream dbmate release.
 WORKDIR /src/migrator
 COPY deploy/migrator/go.mod deploy/migrator/go.sum ./
