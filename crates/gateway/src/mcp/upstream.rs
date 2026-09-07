@@ -418,6 +418,12 @@ where
     Ok(out)
 }
 
+// Catalog reads also run while a notification stream opens. Each request needs
+// its own ID on a shared upstream session, including across Gateway replicas.
+fn new_internal_request_id() -> rmcp::model::RequestId {
+    rmcp::model::RequestId::String(format!("gateway:{}", Uuid::new_v4()).into())
+}
+
 pub(super) async fn list_tools_all_upstreams(
     state: &McpState,
     profile_id: &str,
@@ -436,7 +442,7 @@ pub(super) async fn list_tools_all_upstreams(
         || {
             ClientJsonRpcMessage::Request(JsonRpcRequest {
                 jsonrpc: JsonRpcVersion2_0,
-                id: rmcp::model::RequestId::Number(1),
+                id: new_internal_request_id(),
                 request: ClientRequest::ListToolsRequest(rmcp::model::ListToolsRequest {
                     method: rmcp::model::ListToolsRequestMethod,
                     params: None,
@@ -470,7 +476,7 @@ pub(super) async fn list_resources_all_upstreams(
         || {
             ClientJsonRpcMessage::Request(JsonRpcRequest {
                 jsonrpc: JsonRpcVersion2_0,
-                id: rmcp::model::RequestId::Number(1),
+                id: new_internal_request_id(),
                 request: ClientRequest::ListResourcesRequest(rmcp::model::ListResourcesRequest {
                     method: rmcp::model::ListResourcesRequestMethod,
                     params: None,
@@ -504,7 +510,7 @@ pub(super) async fn list_prompts_all_upstreams(
         || {
             ClientJsonRpcMessage::Request(JsonRpcRequest {
                 jsonrpc: JsonRpcVersion2_0,
-                id: rmcp::model::RequestId::Number(1),
+                id: new_internal_request_id(),
                 request: ClientRequest::ListPromptsRequest(rmcp::model::ListPromptsRequest {
                     method: rmcp::model::ListPromptsRequestMethod,
                     params: None,

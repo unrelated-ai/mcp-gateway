@@ -364,3 +364,89 @@ async fn endpoint_resolution_does_not_depend_on_cache_retention() -> anyhow::Res
     assert!(state.endpoint_cache.get("stateless", "one").is_none());
     Ok(())
 }
+
+#[derive(Clone)]
+struct OverlappingCatalogReads(Arc<tokio::sync::Barrier>);
+
+impl rmcp::ServerHandler for OverlappingCatalogReads {
+    fn get_info(&self) -> rmcp::model::ServerInfo {
+        rmcp::model::ServerInfo::new(
+            rmcp::model::ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
+        )
+    }
+
+    async fn list_tools(
+        &self,
+        _: Option<rmcp::model::PaginatedRequestParams>,
+        _: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        self.0.wait().await;
+        Ok(rmcp::model::ListToolsResult::with_all_items(vec![]))
+    }
+
+    async fn list_resources(
+        &self,
+        _: Option<rmcp::model::PaginatedRequestParams>,
+        _: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListResourcesResult, rmcp::ErrorData> {
+        self.0.wait().await;
+        Ok(rmcp::model::ListResourcesResult::with_all_items(vec![]))
+    }
+}
+
+#[tokio::test]
+async fn concurrent_catalog_reads_keep_response_streams_isolated() -> anyhow::Result<()> {
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+    };
+
+    // Both requests must reach each session before either handler responds. This
+    // exercises the upstream SDK's routing by JSON-RPC ID without relying on timing.
+    let service: StreamableHttpService<OverlappingCatalogReads, LocalSessionManager> =
+        StreamableHttpService::new(
+            || {
+                Ok(OverlappingCatalogReads(Arc::new(
+                    tokio::sync::Barrier::new(2),
+                )))
+            },
+            Arc::default(),
+            StreamableHttpServerConfig::default(),
+        );
+    let (upstream_base, upstream_server) = start_server(
+        Router::new()
+            .nest_service("/stateful", service.clone())
+            .nest_service("/stateless", service),
+    )
+    .await;
+    let profile_id = Uuid::new_v4().to_string();
+    let state = gateway_state(&upstream_base, &profile_id).await?;
+    let (base, gateway_server) = start_server(router(state.clone())).await;
+    let response = reqwest::Client::new()
+        .post(format!("{base}/{profile_id}/mcp"))
+        .header("accept", "application/json, text/event-stream")
+        .json(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}
+        }}))
+        .send()
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = state
+        .signer
+        .verify(response.headers()[HEADER_SESSION_ID].to_str()?)?;
+    let reads = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(
+            upstream::list_tools_all_upstreams(&state, &profile_id, &payload, 0),
+            upstream::list_resources_all_upstreams(&state, &profile_id, &payload, 0),
+        )
+    })
+    .await;
+    gateway_server.abort();
+    upstream_server.abort();
+    let (tools, resources) = reads?;
+    assert_eq!(tools.unwrap().len(), 2);
+    assert_eq!(resources.unwrap().len(), 2);
+    Ok(())
+}
