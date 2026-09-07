@@ -100,11 +100,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # -----------------------------------------------------------------------------
 # Stage 2: Stdio integration image (adds extra runtimes; used for local testing)
 # -----------------------------------------------------------------------------
-FROM node:20-alpine AS stdio-node
+FROM node:24.20.0-alpine3.24 AS stdio-node
 
 ARG TARGET=x86_64-unknown-linux-musl
 
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates && apk upgrade --no-cache
+RUN npm install --global npm@11.19.1 && npm cache clean --force
 RUN mkdir -p /config
 
 WORKDIR /app

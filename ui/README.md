@@ -15,6 +15,8 @@ Docs live under `docs/ui/` (start at `docs/ui/INDEX.md`).
 
 ### Local development
 
+Use Node.js 24 LTS; the tested version is pinned in the root `.node-version`.
+
 ```bash
 cd ui
 npm ci
@@ -30,7 +32,7 @@ npm run dev
 
 ### Browser acceptance tests
 
-From the repository root, with Docker and Node.js 20+ available:
+From the repository root, with Docker and Node.js 24.20.0+ available:
 
 ```bash
 cd ui && npm ci && npx playwright install chromium && cd ..

@@ -8,8 +8,7 @@ export type TenantTokenPayloadV1 = {
 };
 
 type RawTenantTokenPayloadV1 =
-  | { tenant_id: string; exp_unix_secs: number }
-  | { tenantId: string; expUnixSecs: number };
+  { tenant_id: string; exp_unix_secs: number } | { tenantId: string; expUnixSecs: number };
 
 function base64UrlToBase64(input: string): string {
   const padded = input.replace(/-/g, "+").replace(/_/g, "/");

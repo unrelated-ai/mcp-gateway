@@ -2,8 +2,7 @@ import { buildPutProfileBody, type PutProfileBody } from "./profilePut";
 import type { Profile } from "./types";
 
 export type ProfileUpdate =
-  | Partial<PutProfileBody>
-  | ((current: Profile) => Partial<PutProfileBody>);
+  Partial<PutProfileBody> | ((current: Profile) => Partial<PutProfileBody>);
 
 /** Serialize edits from every panel in this browser, without sending stale fields.
  * The Gateway expects a complete PUT, so read the current profile inside the queue.
