@@ -74,7 +74,7 @@ curl -fsSL -o mcp-gateway-compose.yml \
 2. Start the Gateway and Web UI:
 
 ```bash
-GATEWAY_VERSION=0.13.1 UI_VERSION=0.9.0 \
+GATEWAY_VERSION=0.13.2 UI_VERSION=0.9.1 \
   docker compose -f mcp-gateway-compose.yml up -d
 ```
 

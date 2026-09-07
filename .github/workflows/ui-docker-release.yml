@@ -132,6 +132,9 @@ jobs:
           context: ${{ inputs.context }}
           file: ${{ inputs.dockerfile }}
           push: true
+          pull: true
+          # Rerun apk upgrade instead of restoring an old runtime layer.
+          no-cache-filters: runner
           build-args: |
             UI_VERSION=${{ needs.ui.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
