@@ -74,6 +74,9 @@ Notes:
 - **Tool sources**:
   - `GET /tenant/v1/tool-sources`
   - `GET|PUT|DELETE /tenant/v1/tool-sources/{source_id}`
+  - `POST /tenant/v1/tool-sources/openapi/inspect` accepts `specUrl` and optional
+    `auth` using the source auth format. Secret references are resolved within the
+    caller's tenant. Preview returns metadata and tools without creating a source.
 - **Secrets**:
   - `GET|POST /tenant/v1/secrets`
   - `DELETE /tenant/v1/secrets/{name}`
@@ -112,6 +115,13 @@ Example (conceptual):
 ```
 
 The Gateway resolves these placeholders at runtime when building cached tool source runtimes.
+
+For a protected OpenAPI spec, choose **Sources → Add Source → OpenAPI** and configure
+**Source authentication** before clicking **Next**. For example, select **Bearer token**
+and enter `${secret:api_token}`. Preview and source creation use the same authentication;
+the saved source retains the secret reference. The configured spec URL receives those
+credentials, so use a trusted URL. See the [OpenAPI auth configuration](../adapter/config/SERVERS_OPENAPI.md#auth)
+for redirect and external reference behavior.
 
 ---
 

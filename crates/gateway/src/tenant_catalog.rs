@@ -220,7 +220,7 @@ impl TenantCatalog {
     }
 }
 
-async fn resolve_auth_secrets(
+pub(crate) async fn resolve_auth_secrets(
     store: &dyn Store,
     tenant_id: &str,
     auth: Option<&mut AuthConfig>,
