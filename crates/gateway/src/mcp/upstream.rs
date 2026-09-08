@@ -4,7 +4,9 @@ use crate::session_token::{TokenPayloadV1, UpstreamSessionBinding};
 use crate::store::{UpstreamClientCapabilitiesMode, UpstreamSecurityPolicy};
 use axum::{Json, http::StatusCode, response::IntoResponse as _, response::Response};
 use base64::Engine as _;
-use futures::StreamExt as _;
+use futures::{FutureExt as _, StreamExt as _};
+use reqwest::header::HeaderValue;
+use rmcp::model::{JsonRpcResponse, ServerJsonRpcMessage};
 use rmcp::{
     model::{ClientJsonRpcMessage, ClientRequest, JsonRpcRequest, JsonRpcVersion2_0, ServerResult},
     transport::streamable_http_client::StreamableHttpPostResponse,
@@ -16,13 +18,18 @@ use uuid::Uuid;
 pub(super) const HOP_HEADER: &str = "x-unrelated-gateway-hop";
 pub(super) const MAX_HOPS: u32 = 8;
 
+pub(super) struct UpstreamHandshake {
+    pub session_id: Option<String>,
+    pub protocol_version: String,
+}
+
 pub(super) async fn upstream_initialize(
     http: &reqwest::Client,
     mcp_url: &str,
     init_message: &ClientJsonRpcMessage,
     headers: &reqwest::header::HeaderMap,
     network_class: crate::store::UpstreamNetworkClass,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<UpstreamHandshake> {
     if let Err(err) =
         crate::outbound_safety::check_upstream_scheme_policy_for_class(network_class, mcp_url)
     {
@@ -43,8 +50,20 @@ pub(super) async fn upstream_initialize(
         headers,
     )
     .await?;
-    let (_msg, session_id) = resp.expect_initialized::<reqwest::Error>().await?;
-    let session_id = session_id.ok_or_else(|| anyhow::anyhow!("missing upstream session id"))?;
+    let (msg, session_id) = resp.expect_initialized::<reqwest::Error>().await?;
+    let ServerJsonRpcMessage::Response(JsonRpcResponse {
+        result: ServerResult::InitializeResult(result),
+        ..
+    }) = msg
+    else {
+        anyhow::bail!("upstream did not return an initialize result");
+    };
+    let protocol_version = result.protocol_version.to_string();
+    let mut headers = headers.clone();
+    headers.insert(
+        "mcp-protocol-version",
+        HeaderValue::from_str(&protocol_version)?,
+    );
 
     // MCP handshake: client must send `notifications/initialized` after `initialize`.
     // Some upstream servers (including our adapter) treat the session as invalid until this occurs.
@@ -57,8 +76,8 @@ pub(super) async fn upstream_initialize(
         http,
         mcp_url.to_string().into(),
         initialized,
-        Some(session_id.clone().into()),
-        headers,
+        session_id.clone().map(Into::into),
+        &headers,
     )
     .await?
     {
@@ -70,7 +89,25 @@ pub(super) async fn upstream_initialize(
         }
     }
 
-    Ok(session_id)
+    Ok(UpstreamHandshake {
+        session_id,
+        protocol_version,
+    })
+}
+
+/// Headers for a request after initialization, including the upstream's negotiated version.
+pub(super) fn build_bound_upstream_headers(
+    binding: &UpstreamSessionBinding,
+    auth: Option<&unrelated_http_tools::config::AuthConfig>,
+    hop: u32,
+) -> reqwest::header::HeaderMap {
+    let mut headers = build_upstream_headers(auth, hop);
+    if let Some(version) = binding.protocol_version.as_deref()
+        && let Ok(value) = HeaderValue::from_str(version)
+    {
+        headers.insert("mcp-protocol-version", value);
+    }
+    headers
 }
 
 pub(super) fn build_upstream_headers(
@@ -218,13 +255,13 @@ pub(super) async fn proxy_to_single_upstream(
     };
 
     let endpoint_url = apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
-    let headers = build_upstream_headers(endpoint.auth.as_ref(), hop + 1);
+    let headers = build_bound_upstream_headers(binding, endpoint.auth.as_ref(), hop + 1);
 
     let resp = streamable_http::post_message(
         &state.http,
         endpoint_url.into(),
         message,
-        Some(binding.session.clone().into()),
+        binding.session.clone().map(Into::into),
         &headers,
     )
     .await
@@ -250,16 +287,16 @@ pub(super) async fn proxy_to_single_upstream(
     })
 }
 
-pub(super) async fn resolve_endpoint_url(
+pub(super) async fn resolve_endpoint(
     state: &McpState,
     _profile_id: &str,
     binding: &UpstreamSessionBinding,
-) -> Result<Option<String>, Response> {
+) -> Result<Option<crate::endpoint_cache::UpstreamEndpoint>, Response> {
     if let Some(ep) = state
         .endpoint_cache
         .get(&binding.upstream, &binding.endpoint)
     {
-        return Ok(Some(ep.url));
+        return Ok(Some(ep));
     }
 
     let upstream = state
@@ -306,28 +343,12 @@ pub(super) async fn resolve_endpoint_url(
             },
         );
     }
-    let url = endpoints.get(&binding.endpoint).map(|e| e.url.clone());
+    let endpoint = endpoints.get(&binding.endpoint).cloned();
     state
         .endpoint_cache
         .put(binding.upstream.clone(), endpoints);
-    Ok(url)
-}
-
-pub(super) async fn resolve_endpoint(
-    state: &McpState,
-    profile_id: &str,
-    binding: &UpstreamSessionBinding,
-) -> Result<Option<crate::endpoint_cache::UpstreamEndpoint>, Response> {
-    if let Some(ep) = state
-        .endpoint_cache
-        .get(&binding.upstream, &binding.endpoint)
-    {
-        return Ok(Some(ep));
-    }
-    let _ = resolve_endpoint_url(state, profile_id, binding).await?;
-    Ok(state
-        .endpoint_cache
-        .get(&binding.upstream, &binding.endpoint))
+    // The cache may expire or evict this entry immediately; return the loaded value directly.
+    Ok(endpoint)
 }
 
 #[derive(Clone, Copy)]
@@ -346,8 +367,9 @@ async fn list_all_upstreams<T, FBuild, FExtract>(
     extract: FExtract,
 ) -> Result<Vec<(String, T)>, Response>
 where
-    FBuild: Fn() -> ClientJsonRpcMessage,
-    FExtract: Fn(ServerResult) -> Option<T>,
+    T: Send,
+    FBuild: Fn() -> ClientJsonRpcMessage + Sync,
+    FExtract: Fn(ServerResult) -> Option<T> + Sync,
 {
     if ctx.hop >= MAX_HOPS {
         return Err((
@@ -356,47 +378,50 @@ where
         )
             .into_response());
     }
-    let mut out = Vec::new();
-    for binding in &ctx.payload.bindings {
-        let Some(endpoint) = resolve_endpoint(ctx.state, ctx.profile_id, binding).await? else {
-            continue;
-        };
-        let endpoint_url = apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
-        let headers = build_upstream_headers(endpoint.auth.as_ref(), ctx.hop + 1);
-        let request = build_request();
-        match streamable_http::post_message(
-            &ctx.state.http,
-            endpoint_url.into(),
-            request,
-            Some(binding.session.clone().into()),
-            &headers,
-        )
-        .await
-        {
-            Ok(resp) => match read_first_response(resp).await {
-                Ok(result) => {
-                    if let Some(v) = extract(result) {
-                        out.push((binding.upstream.clone(), v));
+    let results = super::aggregation::AggregationPolicy::from_env().collect(
+        ctx.payload.bindings.iter().map(|binding| async {
+            let Some(endpoint) = resolve_endpoint(ctx.state, ctx.profile_id, binding).await? else {
+                return Ok(None);
+            };
+            let endpoint_url = apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
+            let headers = build_bound_upstream_headers(binding, endpoint.auth.as_ref(), ctx.hop + 1);
+            let response = streamable_http::post_message(
+                &ctx.state.http, endpoint_url.into(), build_request(),
+                binding.session.clone().map(Into::into), &headers,
+            ).await;
+            match response {
+                Ok(response) => match read_first_response(response).await {
+                    Ok(result) => Ok(extract(result).map(|value| (binding.upstream.clone(), value))),
+                    Err(error) => {
+                        tracing::warn!(upstream_id = %binding.upstream, %error, "{}", ctx.request_failed_message);
+                        Ok(None)
                     }
+                },
+                Err(error) => {
+                    tracing::warn!(upstream_id = %binding.upstream, %error, "{}", ctx.transport_failed_message);
+                    Ok(None)
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        upstream_id = %binding.upstream,
-                        error = %e,
-                        "{}", ctx.request_failed_message
-                    );
-                }
-            },
-            Err(e) => {
-                tracing::warn!(
-                    upstream_id = %binding.upstream,
-                    error = %e,
-                    "{}", ctx.transport_failed_message
-                );
+            }
+        }.boxed()).collect(),
+    ).await;
+    let mut out = Vec::new();
+    for (binding, result) in ctx.payload.bindings.iter().zip(results) {
+        match result {
+            Ok(Ok(Some(value))) => out.push(value),
+            Ok(Ok(None)) => {}
+            Ok(Err(response)) => return Err(response),
+            Err(_) => {
+                tracing::warn!(upstream_id = %binding.upstream, "upstream list request timed out");
             }
         }
     }
     Ok(out)
+}
+
+// Catalog reads also run while a notification stream opens. Each request needs
+// its own ID on a shared upstream session, including across Gateway replicas.
+fn new_internal_request_id() -> rmcp::model::RequestId {
+    rmcp::model::RequestId::String(format!("gateway:{}", Uuid::new_v4()).into())
 }
 
 pub(super) async fn list_tools_all_upstreams(
@@ -417,7 +442,7 @@ pub(super) async fn list_tools_all_upstreams(
         || {
             ClientJsonRpcMessage::Request(JsonRpcRequest {
                 jsonrpc: JsonRpcVersion2_0,
-                id: rmcp::model::RequestId::Number(1),
+                id: new_internal_request_id(),
                 request: ClientRequest::ListToolsRequest(rmcp::model::ListToolsRequest {
                     method: rmcp::model::ListToolsRequestMethod,
                     params: None,
@@ -451,7 +476,7 @@ pub(super) async fn list_resources_all_upstreams(
         || {
             ClientJsonRpcMessage::Request(JsonRpcRequest {
                 jsonrpc: JsonRpcVersion2_0,
-                id: rmcp::model::RequestId::Number(1),
+                id: new_internal_request_id(),
                 request: ClientRequest::ListResourcesRequest(rmcp::model::ListResourcesRequest {
                     method: rmcp::model::ListResourcesRequestMethod,
                     params: None,
@@ -485,7 +510,7 @@ pub(super) async fn list_prompts_all_upstreams(
         || {
             ClientJsonRpcMessage::Request(JsonRpcRequest {
                 jsonrpc: JsonRpcVersion2_0,
-                id: rmcp::model::RequestId::Number(1),
+                id: new_internal_request_id(),
                 request: ClientRequest::ListPromptsRequest(rmcp::model::ListPromptsRequest {
                     method: rmcp::model::ListPromptsRequestMethod,
                     params: None,

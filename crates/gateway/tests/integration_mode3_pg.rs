@@ -10,7 +10,7 @@ use common::mcp::McpSession;
 use common::pg::{apply_dbmate_migrations, wait_pg_ready};
 use common::{KillOnDrop, pick_unused_port, spawn_gateway, wait_http_ok};
 use rmcp::model::{
-    CallToolResult, ClientJsonRpcMessage, ClientRequest, Content, ErrorData, InitializeResult,
+    CallToolResult, ClientJsonRpcMessage, ClientRequest, ContentBlock, ErrorData, InitializeResult,
     JsonObject, JsonRpcError, JsonRpcRequest, JsonRpcResponse, JsonRpcVersion2_0, ListToolsResult,
     ServerCapabilities, ServerJsonRpcMessage, ServerResult, Tool,
 };
@@ -155,7 +155,7 @@ impl MockUpstream {
                 ClientRequest::CallToolRequest(call) => {
                     let name = call.params.name.to_string();
                     let text = format!("upstream={}, tool={name}", self.upstream_id);
-                    let mut result = CallToolResult::success(vec![Content::text(text)]);
+                    let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
                     result.is_error = None;
                     let msg = ServerJsonRpcMessage::Response(JsonRpcResponse {
                         jsonrpc: JsonRpcVersion2_0,
@@ -268,7 +268,7 @@ async fn tenant_create_api_key(
 async fn mode3_pg_profile_aggregates_two_upstreams_and_prefixes_on_collision() -> anyhow::Result<()>
 {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -373,7 +373,7 @@ async fn mode3_pg_profile_aggregates_two_upstreams_and_prefixes_on_collision() -
         .context("create profile response missing id")?
         .to_string();
 
-    // Mode 3 data-plane requires an API key (profile default: ApiKeyInitializeOnly).
+    // Mode 3 data-plane requires an API key by default.
     let t1_token = admin_issue_tenant_token(&client, &admin_base, "t1").await?;
     let api_key = tenant_create_api_key(&client, &admin_base, &t1_token, &profile_id).await?;
 
@@ -384,9 +384,7 @@ async fn mode3_pg_profile_aggregates_two_upstreams_and_prefixes_on_collision() -
     .await?;
 
     // No allowlist configured: tools/list should include all tools (collision => prefixed names).
-    let tools_msg = session
-        .request_value_no_auth(1, "tools/list", json!({}))
-        .await?;
+    let tools_msg = session.request_value(1, "tools/list", json!({})).await?;
     let tools = tools_msg
         .get("result")
         .and_then(|r| r.get("tools"))
@@ -424,9 +422,7 @@ async fn mode3_pg_profile_aggregates_two_upstreams_and_prefixes_on_collision() -
     .await?;
 
     // With only one tool enabled, there is no collision, so tools/list should show the base name.
-    let tools_msg = session
-        .request_value_no_auth(2, "tools/list", json!({}))
-        .await?;
+    let tools_msg = session.request_value(2, "tools/list", json!({})).await?;
     let tools = tools_msg
         .get("result")
         .and_then(|r| r.get("tools"))
@@ -444,9 +440,17 @@ async fn mode3_pg_profile_aggregates_two_upstreams_and_prefixes_on_collision() -
 
     assert_eq!(names, vec!["echo_request".to_string()]);
 
+    // Existing drain-visibility rows must be refreshed for every bound endpoint.
+    let activity_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await?;
+    sqlx::query("update upstream_session_activity set last_seen_at = now() - interval '1 hour' where profile_id = $1")
+        .bind(uuid::Uuid::parse_str(&profile_id)?).execute(&activity_pool).await?;
+
     // tools/call route to specific upstream.
     let call_msg = session
-        .request_value_no_auth(
+        .request_value(
             3,
             "tools/call",
             json!({ "name": "u1:echo_request", "arguments": {} }),
@@ -465,6 +469,15 @@ async fn mode3_pg_profile_aggregates_two_upstreams_and_prefixes_on_collision() -
         "expected tools/call to hit upstream u1, got: {text}"
     );
 
+    let activity: (i64, i64, bool) = sqlx::query_as(
+        "select count(*), count(*) filter (where last_seen_at > now() - interval '1 minute'), min(last_seen_at) = max(last_seen_at) from upstream_session_activity where profile_id = $1"
+    ).bind(uuid::Uuid::parse_str(&profile_id)?).fetch_one(&activity_pool).await?;
+    assert_eq!(
+        activity,
+        (2, 2, true),
+        "both bindings refreshed once with the same timestamp"
+    );
+
     // Cleanup upstream servers.
     u1_task.abort();
     u2_task.abort();
@@ -476,7 +489,7 @@ async fn mode3_pg_profile_aggregates_two_upstreams_and_prefixes_on_collision() -
 #[ignore = "requires Docker (testcontainers)"]
 async fn admin_profile_prefers_tenant_owned_upstream_binding() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -593,7 +606,7 @@ async fn admin_profile_prefers_tenant_owned_upstream_binding() -> anyhow::Result
 #[ignore = "requires Docker (testcontainers)"]
 async fn admin_static_token_can_set_cluster_internal_managed_network_class() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")

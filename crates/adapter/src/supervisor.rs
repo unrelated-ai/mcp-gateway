@@ -1,4 +1,8 @@
 //! Backend supervision and lifecycle management.
+
+// SEP-2577 keeps roots, sampling, and logging wire-compatible during their deprecation window.
+// Preserve those proxy paths until the protocol removes them or replacements are available.
+#![allow(deprecated)]
 //!
 //! This module manages both stdio MCP server processes and `OpenAPI` backends.
 
@@ -17,9 +21,9 @@ use rmcp::{
     ClientHandler, RoleClient, ServiceExt,
     model::{
         CallToolRequestParams, CallToolResult, ClientInfo, CompleteRequestParams, CompleteResult,
-        CreateElicitationRequestParams, CreateElicitationResult, CreateMessageRequestMethod,
-        CreateMessageRequestParams, CreateMessageResult, ErrorData as McpError,
-        GetPromptRequestParams, GetPromptResult, ListRootsResult, LoggingMessageNotificationParam,
+        CreateMessageRequestMethod, CreateMessageRequestParams, CreateMessageResult,
+        ElicitRequestParams, ElicitResult, ErrorData as McpError, GetPromptRequestParams,
+        GetPromptResult, ListRootsResult, LoggingMessageNotificationParam,
         ProgressNotificationParam, Prompt, ReadResourceRequestParams, ReadResourceResult, Resource,
         ResourceUpdatedNotificationParam, Tool,
     },
@@ -133,7 +137,8 @@ impl ProxyClientHandler {
         let downstream_peer = peers.get_peer(session_id);
         let downstream_client_info = downstream_peer
             .as_ref()
-            .and_then(|p| p.peer_info().cloned())
+            .and_then(rmcp::Peer::peer_info)
+            .map(|info| (*info).clone())
             .unwrap_or_default();
         Self {
             backend_name,
@@ -216,17 +221,14 @@ impl ClientHandler for ProxyClientHandler {
 
     fn create_elicitation(
         &self,
-        request: CreateElicitationRequestParams,
+        request: ElicitRequestParams,
         _context: RequestContext<RoleClient>,
-    ) -> impl std::future::Future<Output = std::result::Result<CreateElicitationResult, McpError>>
-    + Send
-    + '_ {
+    ) -> impl std::future::Future<Output = std::result::Result<ElicitResult, McpError>> + Send + '_
+    {
         let peer = self.downstream_peer.clone();
         async move {
             let Some(peer) = peer else {
-                return Ok(CreateElicitationResult::new(
-                    rmcp::model::ElicitationAction::Decline,
-                ));
+                return Ok(ElicitResult::new(rmcp::model::ElicitationAction::Decline));
             };
             peer.create_elicitation(request)
                 .await
@@ -546,12 +548,14 @@ impl StdioBackend {
         let client = self.connect_client(handler).await?;
 
         // Get server info (best-effort)
-        if let Some(server_info) = client.peer_info() {
+        if let Some(peer_info) = client.peer_info()
+            && let Some(server_info) = peer_info.server_info.as_ref()
+        {
             tracing::info!(
                 "MCP server '{}' connected: name={}, version={}",
                 name,
-                server_info.server_info.name,
-                server_info.server_info.version,
+                server_info.name,
+                server_info.version,
             );
         } else {
             tracing::info!("MCP server '{}' connected (peer_info unavailable)", name);
@@ -607,10 +611,15 @@ impl StdioBackend {
         let transport = TokioChildProcess::new(cmd)
             .map_err(|e| AdapterError::Startup(format!("Failed to spawn '{name}': {e}")))?;
 
-        handler
+        let client = handler
             .serve(transport)
             .await
-            .map_err(|e| AdapterError::Startup(format!("Failed to connect to '{name}': {e}")))
+            .map_err(|e| AdapterError::Startup(format!("Failed to connect to '{name}': {e}")))?;
+        // Catalog refresh and failure handling are owned by the supervisor.
+        client
+            .set_response_cache_config(rmcp::service::ClientCacheConfig::disabled())
+            .await;
+        Ok(client)
     }
 
     fn get_or_create_session_process(&self, session_id: &str) -> Arc<SessionProcess> {

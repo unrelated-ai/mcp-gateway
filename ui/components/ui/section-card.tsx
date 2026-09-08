@@ -27,7 +27,7 @@ export function SectionCard({
     <section className={`rounded-lg border border-edge bg-surface ${className ?? ""}`.trim()}>
       {(title || subtitle || right) && (
         <div
-          className={`flex items-start justify-between gap-4 border-b border-edge px-5 py-3.5 ${
+          className={`flex flex-col items-start justify-between gap-4 sm:flex-row border-b border-edge px-5 py-3.5 ${
             headerClassName ?? ""
           }`.trim()}
         >

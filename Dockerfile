@@ -22,8 +22,9 @@
 # -----------------------------------------------------------------------------
 # Stage 1: Build
 # -----------------------------------------------------------------------------
-FROM rust:1.92.0-slim AS builder
+FROM rust:1.98.0-slim-trixie AS builder
 
+ARG RUST_VERSION=1.98.1
 ARG TARGET=x86_64-unknown-linux-musl
 ENV RUSTFLAGS="-C strip=symbols"
 
@@ -37,7 +38,10 @@ RUN apt-get update && \
         && \
     rm -rf /var/lib/apt/lists/*
 
-RUN rustup target add "${TARGET}"
+# Install the patched compiler independently of Docker's Rust image release cadence.
+RUN rustup toolchain install "${RUST_VERSION}" --profile minimal && \
+    rustup default "${RUST_VERSION}" && \
+    rustup target add "${TARGET}"
 
 WORKDIR /app
 
@@ -51,7 +55,7 @@ RUN mkdir -p /config
 # Create dummy source files to build dependencies (and satisfy workspace members).
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    mkdir -p crates/adapter/src crates/env/src crates/gateway/src crates/gateway-cli/src crates/gateway-operator/src crates/http-tools/src crates/openapi-tools/src crates/test-support/src crates/tool-transforms/src && \
+    mkdir -p crates/adapter/src crates/env/src crates/gateway/src crates/gateway-cli/src crates/gateway-operator/src crates/http-tools/src crates/openapi-tools/src crates/test-support/src crates/tool-transforms/src crates/unrelated-cli/src && \
     echo "fn main() {}" > crates/adapter/src/main.rs && \
     echo "pub fn _dummy() {}" > crates/env/src/lib.rs && \
     echo "fn main() {}" > crates/gateway/src/main.rs && \
@@ -61,10 +65,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     echo "pub fn _dummy() {}" > crates/openapi-tools/src/lib.rs && \
     echo "pub fn _dummy() {}" > crates/test-support/src/lib.rs && \
     echo "pub fn _dummy() {}" > crates/tool-transforms/src/lib.rs && \
+    echo "pub fn _dummy() {}" > crates/unrelated-cli/src/lib.rs && \
+    echo "fn main() {}" > crates/unrelated-cli/src/main.rs && \
     cargo build --release --target "${TARGET}" -p unrelated-mcp-adapter --bin unrelated-mcp-adapter && \
     cargo build --release --target "${TARGET}" -p unrelated-mcp-gateway --bin unrelated-mcp-gateway && \
     cargo build --release --target "${TARGET}" -p unrelated-mcp-gateway-operator --bin unrelated-mcp-gateway-operator && \
-    rm -rf crates/adapter/src crates/env/src crates/gateway/src crates/gateway-cli/src crates/gateway-operator/src crates/http-tools/src crates/openapi-tools/src crates/test-support/src crates/tool-transforms/src
+    rm -rf crates/adapter/src crates/env/src crates/gateway/src crates/gateway-cli/src crates/gateway-operator/src crates/http-tools/src crates/openapi-tools/src crates/test-support/src crates/tool-transforms/src crates/unrelated-cli/src
 
 # Copy actual source code
 COPY crates/adapter/src ./crates/adapter/src
@@ -76,6 +82,7 @@ COPY crates/http-tools/src ./crates/http-tools/src
 COPY crates/openapi-tools/src ./crates/openapi-tools/src
 COPY crates/test-support/src ./crates/test-support/src
 COPY crates/tool-transforms/src ./crates/tool-transforms/src
+COPY crates/unrelated-cli/src ./crates/unrelated-cli/src
 
 RUN touch crates/env/src/lib.rs crates/http-tools/src/lib.rs crates/openapi-tools/src/lib.rs crates/tool-transforms/src/lib.rs
 
@@ -93,11 +100,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # -----------------------------------------------------------------------------
 # Stage 2: Stdio integration image (adds extra runtimes; used for local testing)
 # -----------------------------------------------------------------------------
-FROM node:20-alpine AS stdio-node
+FROM node:24.20.0-alpine3.24 AS stdio-node
 
 ARG TARGET=x86_64-unknown-linux-musl
 
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates && apk upgrade --no-cache
+RUN npm install --global npm@11.19.1 && npm cache clean --force
 RUN mkdir -p /config
 
 WORKDIR /app
@@ -118,7 +126,7 @@ ENV UNRELATED_CONFIG=/config/config.yaml
 # -----------------------------------------------------------------------------
 # Stage 2c: dbmate builder (patched Go toolchain for migrator image)
 # -----------------------------------------------------------------------------
-FROM golang:1.26.7-alpine3.23 AS dbmate-builder
+FROM golang:1.27.1-alpine3.24 AS dbmate-builder
 
 ENV CGO_ENABLED=1
 
@@ -135,7 +143,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # -----------------------------------------------------------------------------
 # Stage 3: Gateway runtime
 # -----------------------------------------------------------------------------
-FROM alpine:3.23 AS gateway-runtime
+FROM alpine:3.24.1 AS gateway-runtime
 
 ARG TARGET=x86_64-unknown-linux-musl
 
@@ -156,7 +164,7 @@ ENTRYPOINT ["/app/unrelated-mcp-gateway"]
 # -----------------------------------------------------------------------------
 # Stage 4: Gateway operator runtime
 # -----------------------------------------------------------------------------
-FROM alpine:3.23 AS gateway-operator-runtime
+FROM alpine:3.24.1 AS gateway-operator-runtime
 
 ARG TARGET=x86_64-unknown-linux-musl
 
@@ -171,7 +179,7 @@ ENTRYPOINT ["/app/unrelated-mcp-gateway-operator"]
 # -----------------------------------------------------------------------------
 # Stage 5: Gateway migrator (dbmate + baked migrations)
 # -----------------------------------------------------------------------------
-FROM alpine:3.23 AS gateway-migrator
+FROM alpine:3.24.1 AS gateway-migrator
 
 RUN apk add --no-cache \
         mariadb-client \

@@ -13,7 +13,7 @@ use futures::StreamExt as _;
 use rmcp::model::{
     ClientJsonRpcMessage, ClientRequest, ErrorData, InitializeResult, JsonRpcError, JsonRpcRequest,
     JsonRpcResponse, JsonRpcVersion2_0, ListPromptsResult, ListResourcesResult, ListToolsResult,
-    Prompt, RawResource, Resource, ServerCapabilities, ServerJsonRpcMessage, ServerResult, Tool,
+    Prompt, Resource, ServerCapabilities, ServerJsonRpcMessage, ServerResult, Tool,
 };
 use serde_json::json;
 use std::collections::HashSet;
@@ -206,15 +206,9 @@ impl DynamicUpstream {
                 }
                 ClientRequest::ListResourcesRequest(_) => {
                     let v = self.version.load(Ordering::SeqCst);
-                    let mut resources: Vec<Resource> = vec![rmcp::model::Annotated::new(
-                        RawResource::new("file:///r1".to_string(), "r1".to_string()),
-                        None,
-                    )];
+                    let mut resources: Vec<Resource> = vec![Resource::new("file:///r1", "r1")];
                     if v >= 1 {
-                        resources.push(rmcp::model::Annotated::new(
-                            RawResource::new("file:///r2".to_string(), "r2".to_string()),
-                            None,
-                        ));
+                        resources.push(Resource::new("file:///r2", "r2"));
                     }
                     let result = ListResourcesResult {
                         resources,
@@ -476,7 +470,7 @@ async fn tenant_create_api_key(
 #[ignore = "requires Docker (testcontainers)"]
 async fn put_tenant_audit_settings_emits_tenant_audit_settings_event() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -542,7 +536,7 @@ async fn put_tenant_audit_settings_emits_tenant_audit_settings_event() -> anyhow
 #[ignore = "requires Docker (testcontainers)"]
 async fn put_upstream_emits_upstream_invalidation_event() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -598,7 +592,7 @@ async fn put_upstream_emits_upstream_invalidation_event() -> anyhow::Result<()> 
 #[ignore = "requires Docker (testcontainers)"]
 async fn put_profile_emits_profile_invalidation_event() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -681,7 +675,7 @@ async fn put_profile_emits_profile_invalidation_event() -> anyhow::Result<()> {
 #[ignore = "requires Docker (testcontainers)"]
 async fn put_tool_source_emits_tenant_tool_source_invalidation_event() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -749,7 +743,7 @@ async fn put_tool_source_emits_tenant_tool_source_invalidation_event() -> anyhow
 #[allow(clippy::too_many_lines)]
 async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -833,7 +827,7 @@ async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
         .context("create profile response missing id")?
         .to_string();
 
-    // Mode 3 data-plane requires an API key (profile default: ApiKeyInitializeOnly).
+    // Mode 3 data-plane requires an API key by default.
     let t1_token = admin_issue_tenant_token(&client, &admin_base_a, "t1").await?;
     let api_key = tenant_create_api_key(&client, &admin_base_a, &t1_token, &profile_id).await?;
 
@@ -870,7 +864,7 @@ async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
                 &client,
                 &format!("{base}/{profile_id}/mcp"),
                 Some(&session_id),
-                None,
+                Some(&api_key),
                 json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}),
             )
             .await?,
@@ -882,7 +876,7 @@ async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
                 &client,
                 &format!("{base}/{profile_id}/mcp"),
                 Some(&session_id),
-                None,
+                Some(&api_key),
                 json!({"jsonrpc": "2.0", "id": 2, "method": "resources/list", "params": {}}),
             )
             .await?,
@@ -894,7 +888,7 @@ async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
                 &client,
                 &format!("{base}/{profile_id}/mcp"),
                 Some(&session_id),
-                None,
+                Some(&api_key),
                 json!({"jsonrpc": "2.0", "id": 3, "method": "prompts/list", "params": {}}),
             )
             .await?,
@@ -907,6 +901,7 @@ async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
         .get(format!("{data_base_a}/{profile_id}/mcp"))
         .header("Accept", "text/event-stream")
         .header("Mcp-Session-Id", &session_id)
+        .header("Authorization", format!("Bearer {api_key}"))
         .send()
         .await?
         .error_for_status()
@@ -920,7 +915,7 @@ async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
             &client,
             &format!("{data_base_b}/{profile_id}/mcp"),
             Some(&session_id),
-            None,
+            Some(&api_key),
             json!({"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {}}),
         )
         .await?,
@@ -932,7 +927,7 @@ async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
             &client,
             &format!("{data_base_b}/{profile_id}/mcp"),
             Some(&session_id),
-            None,
+            Some(&api_key),
             json!({"jsonrpc": "2.0", "id": 5, "method": "resources/list", "params": {}}),
         )
         .await?,
@@ -944,7 +939,7 @@ async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
             &client,
             &format!("{data_base_b}/{profile_id}/mcp"),
             Some(&session_id),
-            None,
+            Some(&api_key),
             json!({"jsonrpc": "2.0", "id": 6, "method": "prompts/list", "params": {}}),
         )
         .await?,
@@ -1025,7 +1020,7 @@ async fn pg_fanout_broadcasts_list_changed_cross_node() -> anyhow::Result<()> {
 #[allow(clippy::too_many_lines)]
 async fn pg_replay_replays_missed_contract_notifications() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -1102,7 +1097,7 @@ async fn pg_replay_replays_missed_contract_notifications() -> anyhow::Result<()>
         .context("create profile response missing id")?
         .to_string();
 
-    // Mode 3 data-plane requires an API key (profile default: ApiKeyInitializeOnly).
+    // Mode 3 data-plane requires an API key by default.
     let t1_token = admin_issue_tenant_token(&client, &admin_base, "t1").await?;
     let api_key = tenant_create_api_key(&client, &admin_base, &t1_token, &profile_id).await?;
 
@@ -1138,7 +1133,7 @@ async fn pg_replay_replays_missed_contract_notifications() -> anyhow::Result<()>
             &client,
             &format!("{data_base}/{profile_id}/mcp"),
             Some(&session_id),
-            None,
+            Some(&api_key),
             json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}),
         )
         .await?,
@@ -1150,6 +1145,7 @@ async fn pg_replay_replays_missed_contract_notifications() -> anyhow::Result<()>
         .get(format!("{data_base}/{profile_id}/mcp"))
         .header("Accept", "text/event-stream")
         .header("Mcp-Session-Id", &session_id)
+        .header("Authorization", format!("Bearer {api_key}"))
         .send()
         .await?
         .error_for_status()
@@ -1162,7 +1158,7 @@ async fn pg_replay_replays_missed_contract_notifications() -> anyhow::Result<()>
             &client,
             &format!("{data_base}/{profile_id}/mcp"),
             Some(&session_id),
-            None,
+            Some(&api_key),
             json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
         )
         .await?,
@@ -1183,7 +1179,7 @@ async fn pg_replay_replays_missed_contract_notifications() -> anyhow::Result<()>
             &client,
             &format!("{data_base}/{profile_id}/mcp"),
             Some(&session_id),
-            None,
+            Some(&api_key),
             json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}}),
         )
         .await?,
@@ -1195,6 +1191,7 @@ async fn pg_replay_replays_missed_contract_notifications() -> anyhow::Result<()>
         .get(format!("{data_base}/{profile_id}/mcp"))
         .header("Accept", "text/event-stream")
         .header("Mcp-Session-Id", &session_id)
+        .header("Authorization", format!("Bearer {api_key}"))
         .header("Last-Event-ID", &last_id)
         .send()
         .await?

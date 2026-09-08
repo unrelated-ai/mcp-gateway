@@ -402,10 +402,8 @@ fn schema_allows_string(schema: &Value) -> bool {
                     return true;
                 }
             }
-            Value::Array(arr) => {
-                if arr.iter().any(|v| v.as_str() == Some("string")) {
-                    return true;
-                }
+            Value::Array(arr) if arr.iter().any(|v| v.as_str() == Some("string")) => {
+                return true;
             }
             _ => {}
         }
@@ -476,10 +474,8 @@ fn schema_allows_array(schema: &Value) -> bool {
                     return true;
                 }
             }
-            Value::Array(arr) => {
-                if arr.iter().any(|v| v.as_str() == Some("array")) {
-                    return true;
-                }
+            Value::Array(arr) if arr.iter().any(|v| v.as_str() == Some("array")) => {
+                return true;
             }
             _ => {}
         }

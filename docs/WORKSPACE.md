@@ -14,6 +14,7 @@ Workspace members live under [`crates/`](../crates/):
 - [`crates/adapter/`](../crates/adapter/) (runtime adapter binary)
 - [`crates/env/`](../crates/env/) (shared environment parsing helpers)
 - [`crates/gateway/`](../crates/gateway/) (gateway binary; MCP proxy + upstream aggregation + admin API)
+- [`crates/unrelated-cli/`](../crates/unrelated-cli/) (user CLI, OAuth login, catalog search, and compact stdio MCP proxy)
 - [`crates/gateway-cli/`](../crates/gateway-cli/) (gateway admin CLI binary)
 - [`crates/gateway-operator/`](../crates/gateway-operator/) (Kubernetes and Docker managed-deployment reconciler)
 - [`crates/http-tools/`](../crates/http-tools/) (shared HTTP tool DSL and runtime)

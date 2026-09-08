@@ -33,42 +33,18 @@ export function normalizePipeline(input: unknown): TransformPipeline {
   return { toolOverrides: { ...toolOverrides } };
 }
 
-export function stableStringifyPipeline(p: TransformPipeline): string {
-  const toolKeys = Object.keys(p.toolOverrides ?? {}).sort();
-  const stable: TransformPipeline = { toolOverrides: {} };
-  for (const k of toolKeys) {
-    const ov = p.toolOverrides[k] ?? {};
-    const paramsRaw = ov.params ?? {};
-    const paramKeys = Object.keys(paramsRaw).sort();
-    const params: Record<string, ParamOverride> = {};
-    for (const pk of paramKeys) {
-      const po = paramsRaw[pk] ?? {};
-      params[pk] = {
-        rename: po.rename,
-        default: "default" in po ? po.default : undefined,
-        visible: po.visible,
-        treatNullAsMissing: po.treatNullAsMissing,
-      };
-    }
-    stable.toolOverrides[k] = {
-      rename: ov.rename,
-      description: ov.description,
-      params: paramKeys.length > 0 ? params : undefined,
-    };
-  }
-  return JSON.stringify(stable);
-}
-
 export function ToolTransformEditor({
   tool,
   pipeline,
   onCommitPipeline,
+  onDirty,
   toolsPending,
   enabled,
 }: {
   tool: ProfileSurface["allTools"][number];
   pipeline: TransformPipeline;
   onCommitPipeline: (next: TransformPipeline) => void;
+  onDirty: () => void;
   toolsPending: boolean;
   enabled: boolean;
 }) {
@@ -225,6 +201,7 @@ export function ToolTransformEditor({
           onChange={(e) => {
             setError(null);
             setRenameTool(e.target.value);
+            onDirty();
           }}
           onBlur={commit}
           onKeyDown={(e) => {
@@ -245,6 +222,7 @@ export function ToolTransformEditor({
           onChange={(e) => {
             setError(null);
             setDescriptionText(e.target.value);
+            onDirty();
             setDescriptionTouched(true);
             setClearDescriptionOverride(false);
           }}
@@ -313,6 +291,7 @@ export function ToolTransformEditor({
                   value={row.rename}
                   onChange={(e) => {
                     setError(null);
+                    onDirty();
                     setParamRows((rows) =>
                       rows.map((r) => (r.name === row.name ? { ...r, rename: e.target.value } : r)),
                     );
@@ -347,6 +326,7 @@ export function ToolTransformEditor({
                 value={row.defaultText}
                 onChange={(e) => {
                   setError(null);
+                  onDirty();
                   setParamRows((rows) =>
                     rows.map((r) =>
                       r.name === row.name ? { ...r, defaultText: e.target.value } : r,

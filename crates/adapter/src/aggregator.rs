@@ -82,7 +82,7 @@ pub struct ResourceMapping {
     pub mime_type: Option<String>,
     /// Size in bytes (if known)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub size: Option<u32>,
+    pub size: Option<u64>,
 }
 
 /// Mapping information for a prompt.

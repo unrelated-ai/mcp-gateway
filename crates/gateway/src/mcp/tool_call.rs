@@ -18,13 +18,14 @@ use uuid::Uuid;
 
 pub(super) async fn route_and_proxy_tools_call(
     state: &McpState,
-    profile_id: &str,
-    profile: &crate::store::Profile,
+    request: &super::RequestContext,
     payload: &TokenPayloadV1,
     token: String,
     message: &mut ClientJsonRpcMessage,
     hop: u32,
 ) -> Result<Response, Response> {
+    let profile = &request.profile;
+    let profile_id = profile.id.as_str();
     let started = Instant::now();
     let audit_ctx = ToolsCallAuditCtx {
         state,
@@ -77,6 +78,7 @@ pub(super) async fn route_and_proxy_tools_call(
         state,
         profile_id,
         profile,
+        limits: request.limits,
         payload,
         route: &route,
         req_id: &req_id,
@@ -524,7 +526,7 @@ async fn execute_local_tool_call(
             id: req_id,
             result: rmcp::model::ServerResult::CallToolResult(result),
         });
-        return Ok(Some(super::sse_single_message(&msg)));
+        return Ok(Some(super::sse_single_message(msg)));
     }
 
     if route.kind == ToolRouteKind::TenantLocal {
@@ -557,7 +559,7 @@ async fn execute_local_tool_call(
             id: req_id,
             result: rmcp::model::ServerResult::CallToolResult(result),
         });
-        return Ok(Some(super::sse_single_message(&msg)));
+        return Ok(Some(super::sse_single_message(msg)));
     }
 
     Ok(None)
@@ -594,32 +596,6 @@ fn truncate_string_to_bytes(mut s: String, max_bytes: usize) -> (String, bool) {
     }
     s.truncate(cut);
     (s, true)
-}
-
-async fn effective_transport_limits_for_profile(
-    state: &McpState,
-    profile: &crate::store::Profile,
-) -> crate::transport_limits::EffectiveTransportLimits {
-    let tenant_limits = match state
-        .store
-        .get_tenant_transport_limits(&profile.tenant_id)
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                tenant_id = %profile.tenant_id,
-                "load tenant transport limits failed; using defaults"
-            );
-            None
-        }
-    };
-
-    crate::transport_limits::EffectiveTransportLimits::from_profile_and_tenant(
-        &profile.mcp.security.transport_limits,
-        tenant_limits.as_ref(),
-    )
 }
 
 async fn enforce_tool_call_sse_limits_or_close(ctx: &ToolCallSseLimitCtx, data: &str) -> bool {
@@ -736,6 +712,7 @@ struct UpstreamToolCall<'a> {
     state: &'a McpState,
     profile_id: &'a str,
     profile: &'a crate::store::Profile,
+    limits: crate::transport_limits::EffectiveTransportLimits,
     payload: &'a TokenPayloadV1,
     route: &'a ToolRoute,
     req_id: &'a RequestId,
@@ -803,7 +780,7 @@ async fn post_upstream_with_retry(
             &call.state.http,
             endpoint_url.to_owned().into(),
             msg,
-            Some(binding.session.clone().into()),
+            binding.session.clone().map(Into::into),
             headers,
         );
 
@@ -880,7 +857,11 @@ async fn proxy_upstream_tool_call_with_retry(
         ));
     }
     let endpoint_url = super::upstream::apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
-    let headers = super::upstream::build_upstream_headers(endpoint.auth.as_ref(), call.hop + 1);
+    let headers = super::upstream::build_bound_upstream_headers(
+        binding,
+        endpoint.auth.as_ref(),
+        call.hop + 1,
+    );
 
     let deadline = std::time::Instant::now() + call.timeout;
     let resp = post_upstream_with_retry(
@@ -909,7 +890,7 @@ async fn proxy_upstream_tool_call_with_retry(
                 tenant_id: call.profile.tenant_id.clone(),
                 profile_id: call.profile_id.to_string(),
                 upstream_id: call.route.source_id.clone(),
-                limits: effective_transport_limits_for_profile(call.state, call.profile).await,
+                limits: call.limits,
                 audit: call.state.audit.clone(),
                 stop: CancellationToken::new(),
             };

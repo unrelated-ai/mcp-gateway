@@ -60,7 +60,7 @@ postgres:
     database: gateway
   image:
     repository: postgres
-    tag: "16-alpine"
+    tag: "16.14-alpine3.24"
     pullPolicy: IfNotPresent
   service:
     port: 5432

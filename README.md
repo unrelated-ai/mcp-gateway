@@ -19,7 +19,7 @@ MCP Gateway sits between your MCP clients and the systems they need to use:
 - Connect existing **REST APIs**, **OpenAPI services**, and **MCP servers**.
 - Combine tools from multiple systems behind one stable endpoint.
 - Create focused tool surfaces for different teams, environments, or agents.
-- Control access with API keys or OIDC, tool policies, limits, secrets, and audit logging.
+- Control access with API keys or OAuth, tool policies, limits, secrets, and audit logging.
 - Run locally with Docker or deploy to Kubernetes.
 
 ![Profiles in the MCP Gateway Web UI](docs/assets/ui_main_screen.png)
@@ -57,6 +57,13 @@ Use it when you want to:
 - Expose different tools to development, production, or read-only clients.
 - Put authentication, quotas, timeouts, retries, and audit logging in front of MCP tools.
 - Isolate teams or projects without deploying a separate gateway for each one.
+
+## Upcoming v1
+
+This branch includes OAuth resource-server support, the `unrelated` client CLI with
+compact tool discovery, and stateful/sessionless upstream interoperability. The
+published quickstart below remains on the current release. See the
+[v1 upgrade guide](docs/gateway/V1_UPGRADE.md) before deploying a v1 build.
 
 ## Try it locally
 
@@ -145,8 +152,9 @@ provides the public endpoint and shared policy layer.
   streamable HTTP MCP endpoint.
 - **Web UI**: tenant onboarding and management for sources, profiles, keys, secrets, audit, and
   settings.
+- **Client CLI** (`unrelated`): named profile contexts, login, tool search/calls, and a compact stdio MCP proxy.
 - **Admin CLI** (`unrelated-gateway-admin`): operator and automation workflows.
-- **Gateway Operator**: managed MCP deployment support for Kubernetes.
+- **Gateway Operator**: managed MCP deployment support for Kubernetes and Docker.
 
 ## Documentation
 
@@ -161,7 +169,8 @@ provides the public endpoint and shared policy layer.
   - [OpenAPI tools](docs/adapter/config/SERVERS_OPENAPI.md)
   - [stdio MCP servers](docs/adapter/config/SERVERS_STDIO.md)
 - [Web UI](docs/ui/INDEX.md)
-- [Gateway CLI](docs/gateway-cli/INDEX.md)
+- [Client CLI and compact proxy](docs/unrelated-cli/README.md)
+- [Gateway admin CLI](docs/gateway-cli/INDEX.md)
 - [Helm deployment](docs/deploy/HELM.md)
 - [CI/CD and releases](docs/CICD.md)
 - [Workspace layout](docs/WORKSPACE.md)

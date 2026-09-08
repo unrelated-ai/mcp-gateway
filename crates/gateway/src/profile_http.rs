@@ -17,6 +17,18 @@ pub(crate) enum NullableU64 {
     Value(u64),
 }
 
+/// Preserve a present JSON null separately from an omitted update field.
+/// `#[serde(default)]` handles absence; this function handles every present value.
+pub(crate) fn deserialize_present_nullable<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
 pub(crate) fn resolve_nullable_u64(req: Option<NullableU64>, existing: Option<u64>) -> Option<u64> {
     match req {
         None => existing,
@@ -25,17 +37,87 @@ pub(crate) fn resolve_nullable_u64(req: Option<NullableU64>, existing: Option<u6
     }
 }
 
-pub(crate) const fn default_data_plane_auth_mode() -> DataPlaneAuthMode {
-    DataPlaneAuthMode::ApiKeyInitializeOnly
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) enum DataPlaneAuthSettings {
+    Disabled,
+    ApiKey {
+        #[serde(default, rename = "acceptXApiKey")]
+        accept_x_api_key: bool,
+    },
+    #[serde(rename = "oauth")]
+    OAuth {
+        #[serde(default = "default_oauth_scopes", rename = "requiredScopes")]
+        required_scopes: Vec<String>,
+    },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DataPlaneAuthSettings {
-    #[serde(default = "default_data_plane_auth_mode")]
-    pub(crate) mode: DataPlaneAuthMode,
-    #[serde(default)]
-    pub(crate) accept_x_api_key: bool,
+impl Default for DataPlaneAuthSettings {
+    fn default() -> Self {
+        Self::ApiKey {
+            accept_x_api_key: false,
+        }
+    }
+}
+
+pub(crate) fn default_oauth_scopes() -> Vec<String> {
+    vec!["mcp:access".to_string()]
+}
+
+impl DataPlaneAuthSettings {
+    pub(crate) const fn mode(&self) -> DataPlaneAuthMode {
+        match self {
+            Self::Disabled => DataPlaneAuthMode::Disabled,
+            Self::ApiKey { .. } => DataPlaneAuthMode::ApiKey,
+            Self::OAuth { .. } => DataPlaneAuthMode::OAuth,
+        }
+    }
+
+    pub(crate) const fn accept_x_api_key(&self) -> bool {
+        match self {
+            Self::ApiKey { accept_x_api_key } => *accept_x_api_key,
+            Self::Disabled | Self::OAuth { .. } => false,
+        }
+    }
+
+    pub(crate) fn required_scopes(&self) -> &[String] {
+        match self {
+            Self::OAuth { required_scopes } => required_scopes,
+            Self::Disabled | Self::ApiKey { .. } => &[],
+        }
+    }
+
+    pub(crate) fn validate(&mut self) -> Result<(), String> {
+        let Self::OAuth { required_scopes } = self else {
+            return Ok(());
+        };
+        if required_scopes.is_empty() {
+            return Err("requiredScopes must contain at least one scope".to_string());
+        }
+        let mut seen = std::collections::HashSet::new();
+        required_scopes.retain(|scope| seen.insert(scope.clone()));
+        if required_scopes.iter().any(|scope| {
+            scope.is_empty()
+                || !scope
+                    .bytes()
+                    .all(|b| b == 0x21 || (0x23..=0x5b).contains(&b) || (0x5d..=0x7e).contains(&b))
+        }) {
+            return Err("requiredScopes contains an invalid OAuth scope token".to_string());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn from_parts(
+        mode: DataPlaneAuthMode,
+        accept_x_api_key: bool,
+        required_scopes: Vec<String>,
+    ) -> Self {
+        match mode {
+            DataPlaneAuthMode::Disabled => Self::Disabled,
+            DataPlaneAuthMode::ApiKey => Self::ApiKey { accept_x_api_key },
+            DataPlaneAuthMode::OAuth => Self::OAuth { required_scopes },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,4 +236,46 @@ pub(crate) fn validate_tool_allowlist(tools: &[String]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::*;
+
+    #[test]
+    fn oauth_scopes_validate_and_deduplicate() {
+        let mut auth: DataPlaneAuthSettings = serde_json::from_value(serde_json::json!({
+            "mode": "oauth",
+            "requiredScopes": ["mcp:access", "tools:read", "mcp:access"]
+        }))
+        .unwrap();
+        auth.validate().unwrap();
+        assert_eq!(auth.required_scopes(), &["mcp:access", "tools:read"]);
+    }
+
+    #[test]
+    fn oauth_scopes_reject_empty_invalid_and_incompatible_fields() {
+        let mut empty: DataPlaneAuthSettings = serde_json::from_value(serde_json::json!({
+            "mode": "oauth",
+            "requiredScopes": []
+        }))
+        .unwrap();
+        assert!(empty.validate().is_err());
+
+        let mut invalid: DataPlaneAuthSettings = serde_json::from_value(serde_json::json!({
+            "mode": "oauth",
+            "requiredScopes": ["has space"]
+        }))
+        .unwrap();
+        assert!(invalid.validate().is_err());
+
+        assert!(
+            serde_json::from_value::<DataPlaneAuthSettings>(serde_json::json!({
+                "mode": "oauth",
+                "requiredScopes": ["mcp:access"],
+                "acceptXApiKey": true
+            }))
+            .is_err()
+        );
+    }
 }

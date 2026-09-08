@@ -20,9 +20,9 @@ serde_json = "1"
 anyhow = "1"
 async-trait = "0.1"
 futures = "0.3"
-rmcp = { version = "1.7.0", features = ["client", "transport-streamable-http-client-reqwest", "elicitation"] }
+rmcp = { version = "3.2.0", features = ["client", "transport-streamable-http-client-reqwest", "elicitation"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
-jsonwebtoken = "10.3.0"
+jsonwebtoken = { version = "10.4.0", features = ["aws_lc_rs"] }
 base64 = "0.22"
 hmac = "0.13.0"
 sha2 = "0.11.0"
@@ -38,11 +38,11 @@ unrelated-tool-transforms = { path = "../tool-transforms" }
 unrelated-env = { path = "../env" }
 rusty_paseto = "0.9.0"
 time = { version = "0.3", features = ["formatting"] }
-jsonschema = "0.46.5"
+jsonschema = "0.46.10"
 strsim = "0.11.1"
 chacha20poly1305 = "0.10.1"
-getrandom = "0.4.2"
-zeroize = "1.8.2"
+getrandom = "0.4.3"
+zeroize = "1.9.0"
 
 [[bin]]
 name = "unrelated-mcp-gateway"
@@ -53,3 +53,4 @@ rsa = { version = "0.9.10", features = ["pem"] }
 tempfile = "3"
 testcontainers = "0.27.3"
 unrelated-test-support = { path = "../test-support" }
+unrelated-cli = { path = "../unrelated-cli" }

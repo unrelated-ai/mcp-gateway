@@ -19,15 +19,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7.0.1
 
       - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@1.92.0
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: rustfmt, clippy
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
 
@@ -47,15 +47,67 @@ jobs:
         timeout-minutes: 5
         run: cargo test -p unrelated-mcp-gateway --test integration_openapi_inspect -- --ignored --nocapture
 
+      - name: Gateway PostgreSQL and cross-replica contracts
+        timeout-minutes: 15
+        run: make test-gateway-contracts
+
+      - name: Real v1 clients and restart contracts
+        timeout-minutes: 10
+        run: make test-v1-journey
+
+  ui:
+    name: ui (unit, build, browser)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Setup Node
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2.9.2
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: UI format, lint and unit tests
+        working-directory: ui
+        run: npm run format:check && npm run lint && npm test
+
+      - name: Install Chromium
+        working-directory: ui
+        run: npx playwright install --with-deps chromium
+
+      - name: Standalone UI and real Gateway journey
+        run: make test-ui-e2e
+
+      - name: Upload browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ui-browser-failure
+          path: output/playwright/e2e-*
+          retention-days: 7
+
   helm:
     name: helm (lint, template)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7.0.1
 
       - name: Setup Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5.0.1
 
       - name: Helm version
         run: helm version --short

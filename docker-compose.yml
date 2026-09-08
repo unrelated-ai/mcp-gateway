@@ -1,6 +1,6 @@
 services:
   gateway_db:
-    image: postgres:16-alpine
+    image: postgres:16.14-alpine3.24
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
@@ -23,7 +23,7 @@ services:
   # - docker compose run --rm gateway_db_reset
   # - docker compose up -d
   gateway_db_reset:
-    image: postgres:16-alpine
+    image: postgres:16.14-alpine3.24
     # Never start during `docker compose up` / `make up`.
     # This is a manual maintenance helper only.
     profiles: ["manual"]

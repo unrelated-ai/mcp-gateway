@@ -9,15 +9,25 @@ use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
+#[allow(
+    clippy::result_large_err,
+    reason = "HTTP handlers return complete Axum responses for early exits"
+)]
 mod admin;
 mod audit;
 mod audit_retention;
+mod cache_maintenance;
 mod catalog;
 mod config;
 mod contracts;
 mod endpoint_cache;
 mod managed_mcp;
+#[allow(
+    clippy::result_large_err,
+    reason = "HTTP handlers return complete Axum responses for early exits"
+)]
 mod mcp;
+mod oauth;
 mod oidc;
 mod outbound_safety;
 mod pg_fanout;
@@ -28,6 +38,10 @@ mod secrets_crypto;
 mod serde_helpers;
 mod session_token;
 mod store;
+#[allow(
+    clippy::result_large_err,
+    reason = "HTTP handlers return complete Axum responses for early exits"
+)]
 mod tenant;
 mod tenant_catalog;
 mod tenant_token;
@@ -35,6 +49,7 @@ mod timeouts;
 mod tool_policy;
 mod tools_cache;
 mod transport_limits;
+mod ttl_cache;
 mod upstream_validation;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -91,7 +106,8 @@ struct AppState {
     version: &'static str,
     config_loaded: bool,
     profile_count: usize,
-    oidc_issuer: Option<String>,
+    oauth_issuer: Option<String>,
+    public_data_base_url: Option<String>,
     runtime_mode: &'static str,
     topology: String,
     node_id: String,
@@ -105,7 +121,8 @@ struct PlaneAppsInputs {
     managed_mcp: managed_mcp::ManagedMcpRuntimeConfig,
     session_secret: Vec<u8>,
     shared_source_ids: Arc<std::collections::HashSet<String>>,
-    oidc_issuer: Option<String>,
+    oauth_issuer: Option<String>,
+    public_data_base_url: Option<String>,
     audit: Arc<dyn audit::AuditSink>,
     invalidation: Arc<pg_invalidation::InvalidationDispatcher>,
     control_plane_oidc: Option<oidc::OidcValidator>,
@@ -136,8 +153,9 @@ struct StatusResponse {
     node_id: String,
     managed_mcp: managed_mcp::ManagedMcpBackendStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
-    oidc_issuer: Option<String>,
-    oidc_configured: bool,
+    oauth_issuer: Option<String>,
+    public_data_base_url: Option<String>,
+    oauth_configured: bool,
 }
 
 #[tokio::main]
@@ -181,9 +199,27 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
     audit_retention::spawn_audit_retention_task(pg_pool.clone(), ct.clone());
 
     let http = build_no_redirect_http_client("upstream HTTP client")?;
-    let oidc_http = build_no_redirect_http_client("OIDC HTTP client")?;
-    let oidc = oidc::OidcValidator::from_env(oidc_http.clone()).await?;
-    let oidc_issuer = oidc.as_ref().map(|o| o.issuer().to_string());
+    let oidc_http = build_no_redirect_http_client("OAuth/OIDC HTTP client")?;
+    let oauth = oauth::OAuthRuntime::from_env(oidc_http.clone()).await?;
+    if oauth.is_some() && args.database_url.is_none() {
+        anyhow::bail!("data-plane OAuth is supported only in Mode 3");
+    }
+    if oauth.is_none()
+        && let Some(admin_store) = admin_store.as_ref()
+        && admin_store
+            .list_profiles()
+            .await?
+            .iter()
+            .any(|profile| profile.data_plane_auth_mode == store::DataPlaneAuthMode::OAuth)
+    {
+        anyhow::bail!(
+            "persisted OAuth profiles exist, but data-plane OAuth runtime configuration is absent"
+        );
+    }
+    let oauth_issuer = oauth.as_ref().map(|runtime| runtime.issuer().to_string());
+    let public_data_base_url = oauth
+        .as_ref()
+        .map(|runtime| runtime.public_data_base_url().to_string());
     let control_plane_oidc =
         oidc::OidcValidator::from_env_prefixed(oidc_http, "UNRELATED_GATEWAY_CONTROL_PLANE_OIDC")
             .await?;
@@ -201,7 +237,7 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
         signer: session_token::SessionSigner::new(session_secrets.clone(), session_ttl)
             .context("init session token signer")?,
         http,
-        oidc,
+        oauth,
         shutdown: ct.clone(),
         audit: audit.clone(),
         catalog,
@@ -213,6 +249,12 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
             Duration::from_secs(30),
         )),
     });
+
+    cache_maintenance::spawn(
+        mcp_state.tools_cache.clone(),
+        mcp_state.endpoint_cache.clone(),
+        ct.clone(),
+    );
 
     let invalidation = build_invalidation_dispatcher(pg_pool.clone(), &mcp_state);
 
@@ -239,7 +281,8 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
         managed_mcp: managed_mcp_cfg,
         session_secret: session_secrets[0].clone(),
         shared_source_ids,
-        oidc_issuer,
+        oauth_issuer,
+        public_data_base_url,
         audit,
         invalidation,
         control_plane_oidc,
@@ -298,7 +341,7 @@ fn build_plane_apps(inputs: PlaneAppsInputs) -> PlaneApps {
         bootstrap_enabled: env_truthy("UNRELATED_GATEWAY_BOOTSTRAP_ENABLED"),
         tenant_signer: tenant_token::TenantSigner::new(inputs.session_secret.clone()),
         shared_source_ids: inputs.shared_source_ids.clone(),
-        oidc_issuer: inputs.oidc_issuer.clone(),
+        oidc_issuer: inputs.oauth_issuer.clone(),
         audit: inputs.audit.clone(),
         invalidation: inputs.invalidation.clone(),
     });
@@ -318,7 +361,8 @@ fn build_plane_apps(inputs: PlaneAppsInputs) -> PlaneApps {
         version: VERSION,
         config_loaded: inputs.config_loaded,
         profile_count: inputs.profile_count,
-        oidc_issuer: inputs.oidc_issuer,
+        oauth_issuer: inputs.oauth_issuer,
+        public_data_base_url: inputs.public_data_base_url,
         runtime_mode: inputs.runtime_mode,
         topology: inputs.topology,
         node_id: inputs.node_id,
@@ -355,6 +399,7 @@ fn build_no_redirect_http_client(label: &'static str) -> anyhow::Result<reqwest:
     // final URL.
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(5))
         .build()
         .with_context(|| format!("build {label}"))
 }
@@ -762,8 +807,9 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
         topology: state.topology.clone(),
         node_id: state.node_id.clone(),
         managed_mcp,
-        oidc_issuer: state.oidc_issuer.clone(),
-        oidc_configured: state.oidc_issuer.is_some(),
+        oauth_issuer: state.oauth_issuer.clone(),
+        public_data_base_url: state.public_data_base_url.clone(),
+        oauth_configured: state.oauth_issuer.is_some(),
     })
 }
 
