@@ -64,6 +64,15 @@ servers:
 
 - **Type**: object (see [`AUTH.md`](AUTH.md))
 - **Default**: none
+- Applies to API calls and downloads of the configured root `spec` URL, including
+  bearer, basic, custom-header, and query authentication. Configure a trusted spec
+  URL because it receives the source credentials even if it differs from `baseUrl`.
+- When redirects are allowed, authenticated spec downloads may only redirect within
+  the same origin (scheme, host, and port). Configure the final `spec` URL explicitly
+  if a protected document redirects to another origin. Gateway tenant sources disable
+  spec redirects by default.
+- External `$ref` documents do not receive the source credentials. Local spec files
+  are read directly without authentication.
 
 ### `autoDiscover`
 

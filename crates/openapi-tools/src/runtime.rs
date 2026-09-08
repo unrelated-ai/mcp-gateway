@@ -28,8 +28,12 @@ use unrelated_http_tools::config::{
 use unrelated_http_tools::response_shaping::{
     CompiledResponsePipeline, apply_chain, compile_pipeline_from_transforms,
 };
-use unrelated_http_tools::safety::{OutboundHttpSafety, RedirectPolicy, sanitize_reqwest_error};
+use unrelated_http_tools::safety::{
+    OutboundHttpSafety, RedirectPolicy, redact_url, sanitize_reqwest_error,
+};
 use url::Url;
+
+mod spec_fetch;
 
 /// `OpenAPI` tool source that exposes HTTP API endpoints as MCP tools.
 #[derive(Clone)]
@@ -334,30 +338,17 @@ impl OpenApiToolSource {
         let spec_content = if self.config.spec.starts_with("http://")
             || self.config.spec.starts_with("https://")
         {
-            // Fetch from URL
-            tracing::info!("Fetching OpenAPI spec from {}", self.config.spec);
             let url = Url::parse(&self.config.spec).map_err(|e| {
-                OpenApiToolsError::OpenApi(format!(
-                    "Invalid OpenAPI spec URL '{}': {e}",
-                    self.config.spec
-                ))
+                OpenApiToolsError::OpenApi(format!("Invalid OpenAPI spec URL: {e}"))
             })?;
-            self.safety
-                .check_url(&url)
-                .await
-                .map_err(|e| OpenApiToolsError::Http(format!("OpenAPI spec fetch blocked: {e}")))?;
-
-            let resp = self.client.get(url).send().await.map_err(|e| {
-                OpenApiToolsError::OpenApiSpecFetch {
-                    url: self.config.spec.clone(),
-                    message: sanitize_reqwest_error(&e),
-                }
-            })?;
+            let location = redact_url(&url);
+            tracing::info!("Fetching OpenAPI spec from {location}");
+            let resp = self.fetch_spec(url).await?;
 
             Self::read_response_body_limited(resp, self.safety.max_response_bytes)
                 .await
                 .map_err(|e| OpenApiToolsError::OpenApiSpecReadBody {
-                    url: self.config.spec.clone(),
+                    url: location,
                     message: e.to_string(),
                 })?
         } else {
@@ -397,7 +388,8 @@ impl OpenApiToolSource {
         // Parse spec (JSON is a valid subset of YAML, so serde_yaml alone is enough)
         let spec: OpenAPI = serde_yaml::from_str(&spec_content).map_err(|e| {
             OpenApiToolsError::OpenApiSpecParse {
-                location: self.config.spec.clone(),
+                location: Url::parse(&self.config.spec)
+                    .map_or_else(|_| self.config.spec.clone(), |url| redact_url(&url)),
                 source: e,
             }
         })?;

@@ -1231,7 +1231,7 @@ async fn get_tool_source_tools(
     {
         Ok(Some(tools)) => Json(ToolSourceToolsResponse { tools }).into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, "tool source not found").into_response(),
-        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
 
