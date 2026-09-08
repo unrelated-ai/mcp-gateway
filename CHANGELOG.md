@@ -6,7 +6,11 @@
   configured authentication to spec downloads, including tenant secret references.
   Discovery failures now include the upstream HTTP status. Authenticated spec
   redirects are restricted to the same origin.
-- Thanks to [@markokosticdev](https://github.com/markokosticdev) for reporting
+- Added authentication to the OpenAPI source wizard before spec preview, including
+  tenant secret references. The same auth configuration is saved when creating the source.
+- Thanks to [@markokosticdev](https://github.com/markokosticdev) for reports
+  [#14](https://github.com/unrelated-ai/mcp-gateway/issues/14),
+  [#15](https://github.com/unrelated-ai/mcp-gateway/issues/15), and
   [#16](https://github.com/unrelated-ai/mcp-gateway/issues/16).
 
 ## 2026-09-07
