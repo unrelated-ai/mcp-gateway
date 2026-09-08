@@ -400,6 +400,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tenant_openapi_discovery_uses_resolved_secret_and_recovers_after_rotation()
+    -> anyhow::Result<()> {
+        use axum::{Json, Router, http::HeaderMap, http::StatusCode, routing::get};
+
+        let app = Router::new().route(
+            "/openapi.json",
+            get(|headers: HeaderMap| async move {
+                if headers.get("authorization").and_then(|h| h.to_str().ok())
+                    != Some("Bearer test-token")
+                {
+                    return Err(StatusCode::UNAUTHORIZED);
+                }
+                Ok(Json(serde_json::json!({
+                    "openapi": "3.0.3",
+                    "info": {"title": "protected", "version": "1"},
+                    "paths": {"/ping": {"get": {
+                        "operationId": "ping", "responses": {"200": {"description": "OK"}}
+                    }}}
+                })))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let base_url = format!("http://{}", listener.local_addr()?);
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let shutdown_guard = cancel.clone().drop_guard();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(cancel.cancelled_owned())
+                .await
+        });
+        let store = FakeStore::default();
+        store.set_source(crate::store::TenantToolSource {
+            id: "protected".into(),
+            kind: ToolSourceKind::Openapi,
+            enabled: true,
+            spec: ToolSourceSpec::Openapi(serde_json::from_value(serde_json::json!({
+                "spec": format!("{base_url}/openapi.json"),
+                "baseUrl": base_url,
+                "auth": {"type": "bearer", "token": "${secret:API_TOKEN}"},
+                "autoDiscover": true
+            }))?),
+        });
+        let mut safety = OutboundHttpSafety::gateway_default();
+        safety.allow_private_networks = true;
+        let catalog = TenantCatalog::new_with_safety(safety);
+
+        store.put_secret("API_TOKEN", "wrong-token");
+        let error = catalog
+            .list_tools(&store, "t1", "protected")
+            .await
+            .unwrap_err();
+        let error = format!("{error:#}");
+        assert!(error.contains("401 Unauthorized"), "{error}");
+        assert!(!error.contains("wrong-token"), "{error}");
+
+        store.put_secret("API_TOKEN", "test-token");
+        let tools = catalog
+            .list_tools(&store, "t1", "protected")
+            .await?
+            .unwrap();
+        assert_eq!(tools[0].name, "ping");
+
+        // Rotating a secret must invalidate a previously successful discovery.
+        store.put_secret("API_TOKEN", "revoked-token");
+        let error = catalog
+            .list_tools(&store, "t1", "protected")
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("401 Unauthorized"));
+        let stored = store
+            .get_tenant_tool_source("t1", "protected")
+            .await?
+            .unwrap();
+        let ToolSourceSpec::Openapi(config) = stored.spec else {
+            panic!("expected OpenAPI source");
+        };
+        assert!(
+            matches!(config.auth, Some(AuthConfig::Bearer { token }) if token == "${secret:API_TOKEN}")
+        );
+        drop(shutdown_guard);
+        server.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn tenant_http_source_missing_secret_causes_list_tools_error_then_succeeds()
     -> anyhow::Result<()> {
         let store = FakeStore::default();

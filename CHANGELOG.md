@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Fixed OpenAPI tool discovery for protected spec URLs by applying the source's
+  configured authentication to spec downloads, including tenant secret references.
+  Discovery failures now include the upstream HTTP status. Authenticated spec
+  redirects are restricted to the same origin.
+- Thanks to [@markokosticdev](https://github.com/markokosticdev) for reporting
+  [#16](https://github.com/unrelated-ai/mcp-gateway/issues/16).
+
 ## 2026-09-07
 
 ### Security dependency updates (Gateway `0.13.2`, Web UI `0.9.1`)
