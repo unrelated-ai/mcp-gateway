@@ -4361,7 +4361,7 @@ dependencies = [
 
 [[package]]
 name = "unrelated-gateway-admin"
-version = "0.13.2"
+version = "0.13.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -4430,7 +4430,7 @@ dependencies = [
 
 [[package]]
 name = "unrelated-mcp-gateway"
-version = "0.13.2"
+version = "0.13.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4475,7 +4475,7 @@ dependencies = [
 
 [[package]]
 name = "unrelated-mcp-gateway-operator"
-version = "0.13.2"
+version = "0.13.3"
 dependencies = [
  "anyhow",
  "bollard",
