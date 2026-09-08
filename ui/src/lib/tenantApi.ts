@@ -358,11 +358,14 @@ export async function deleteToolSource(id: string): Promise<void> {
   await tenantFetchJson(`/api/tenant/tool-sources/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
-export async function openapiInspect(specUrl: string): Promise<OpenApiInspectResponse> {
+export async function openapiInspect(
+  specUrl: string,
+  auth?: AuthConfig,
+): Promise<OpenApiInspectResponse> {
   return await tenantFetchJson<OpenApiInspectResponse>("/api/tenant/tool-sources/openapi/inspect", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ specUrl }),
+    body: JSON.stringify({ specUrl, auth }),
   });
 }
 

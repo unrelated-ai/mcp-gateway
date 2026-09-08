@@ -156,6 +156,8 @@ struct ToolSourceToolsResponse {
 #[serde(rename_all = "camelCase")]
 struct OpenApiInspectRequest {
     spec_url: String,
+    #[serde(default)]
+    auth: Option<AuthConfig>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2413,7 +2415,17 @@ async fn openapi_inspect(
         return (StatusCode::BAD_REQUEST, "specUrl must be an http(s) URL").into_response();
     }
 
-    let cfg = openapi_default_config(spec_url);
+    let mut cfg = openapi_default_config(spec_url);
+    cfg.auth = req.auth;
+    if let Err(error) = crate::tenant_catalog::resolve_auth_secrets(
+        state.mcp_state.store.as_ref(),
+        &tenant_id,
+        cfg.auth.as_mut(),
+    )
+    .await
+    {
+        return (StatusCode::BAD_REQUEST, format!("{error:#}")).into_response();
+    }
     let safety = crate::outbound_safety::gateway_outbound_http_safety();
     let built = OpenApiToolSource::build_with_safety(
         "openapi-inspect".to_string(),
@@ -2612,7 +2624,7 @@ async fn get_tool_source_tools(
     {
         Ok(Some(tools)) => Json(ToolSourceToolsResponse { tools }).into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, "tool source not found").into_response(),
-        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
 

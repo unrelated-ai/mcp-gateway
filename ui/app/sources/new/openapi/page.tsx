@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
 import { Button, Callout, Input } from "@/components/ui";
 import * as tenantApi from "@/src/lib/tenantApi";
+import { OpenApiAuthFields } from "./auth-fields";
 
 type Step = 1 | 2 | 3 | 4;
 
@@ -51,6 +52,7 @@ export default function NewOpenApiSourceWizardPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [specUrl, setSpecUrl] = useState("");
+  const [auth, setAuth] = useState<tenantApi.AuthConfig>({ type: "none" });
   const [inspect, setInspect] = useState<tenantApi.OpenApiInspectResponse | null>(null);
   const [sourceId, setSourceId] = useState("");
 
@@ -96,7 +98,7 @@ export default function NewOpenApiSourceWizardPage() {
     try {
       const url = specUrl.trim();
       if (!url) throw new Error("OpenAPI spec URL is required");
-      const resp = await tenantApi.openapiInspect(url);
+      const resp = await tenantApi.openapiInspect(url, auth.type === "none" ? undefined : auth);
       setInspect(resp);
 
       const base = normalizeSuggestedId(resp.suggestedId ?? "openapi");
@@ -139,6 +141,7 @@ export default function NewOpenApiSourceWizardPage() {
         enabled: true,
         spec: specUrl.trim(),
         baseUrl: inspect.inferredBaseUrl,
+        auth: auth.type === "none" ? undefined : auth,
       };
       await tenantApi.putToolSource(id, JSON.stringify(payload));
       // Replace wizard entry to avoid "Back" returning to the wizard after creation.
@@ -182,11 +185,13 @@ export default function NewOpenApiSourceWizardPage() {
                       label="OpenAPI spec URL"
                       value={specUrl}
                       onChange={(e) => setSpecUrl(e.target.value)}
+                      disabled={busy}
                       placeholder="https://example.com/openapi.yaml"
                       className="font-mono"
                       hint="File paths are not supported in the UI."
                     />
                   </div>
+                  <OpenApiAuthFields auth={auth} onChange={setAuth} disabled={busy} />
                 </>
               )}
 
@@ -270,8 +275,8 @@ export default function NewOpenApiSourceWizardPage() {
                         {inspect.tools.length}
                       </div>
                       <div className="mt-2 text-xs text-faint">
-                        After creation, you can tune discovery/auth and other settings in the
-                        editor.
+                        Source authentication is saved with the source. You can adjust discovery and
+                        other settings in the editor after creation.
                       </div>
                     </div>
                   </div>

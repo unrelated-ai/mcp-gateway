@@ -23,7 +23,8 @@ pub struct ApiServerConfig {
     #[serde(default)]
     pub base_url: Option<String>,
 
-    /// Authentication configuration.
+    /// Authentication for API calls and the configured root `OpenAPI` spec URL.
+    /// Credentials are not forwarded to external `$ref` documents or across origins on redirects.
     #[serde(default)]
     pub auth: Option<AuthConfig>,
 

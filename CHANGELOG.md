@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-09-08
+
+### Protected OpenAPI sources (Gateway `0.13.3`, Web UI `0.9.2`)
+
+- Fixed OpenAPI tool discovery for protected spec URLs by applying the source's
+  configured authentication to spec downloads, including tenant secret references.
+  Discovery failures now include the upstream HTTP status. Authenticated spec
+  redirects are restricted to the same origin.
+- Added authentication to the OpenAPI source wizard before spec preview, including
+  tenant secret references. The same auth configuration is saved when creating the source.
+- Thanks to [@markokosticdev](https://github.com/markokosticdev) for reports
+  [#14](https://github.com/unrelated-ai/mcp-gateway/issues/14),
+  [#15](https://github.com/unrelated-ai/mcp-gateway/issues/15), and
+  [#16](https://github.com/unrelated-ai/mcp-gateway/issues/16).
+
+Release tags: `gateway-v0.13.3` and `ui-v0.9.2`. Upgrade both Gateway and Web UI
+for authenticated spec setup through the wizard. No database migration is required.
+Gateway, admin CLI, Operator, and migrator versions are `0.13.3`; Gateway, Operator,
+and stack charts are `0.2.7`, and the UI chart is `0.2.5`.
+
 ## 2026-09-07
 
 ### Security dependency updates (Gateway `0.13.2`, Web UI `0.9.1`)
