@@ -180,7 +180,8 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
 
     audit_retention::spawn_audit_retention_task(pg_pool.clone(), ct.clone());
 
-    let http = build_no_redirect_http_client("upstream HTTP client")?;
+    let http =
+        outbound_safety::UpstreamHttpClients::new().context("build upstream HTTP clients")?;
     let oidc_http = build_no_redirect_http_client("OIDC HTTP client")?;
     let oidc = oidc::OidcValidator::from_env(oidc_http.clone()).await?;
     let oidc_issuer = oidc.as_ref().map(|o| o.issuer().to_string());

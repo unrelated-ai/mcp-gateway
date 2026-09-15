@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Outbound HTTP security (Gateway `0.13.4`, pending release)
+
+- Fixed DNS rebinding bypasses in HTTP/OpenAPI tool execution, OpenAPI spec and reference
+  downloads, reachability probes, and upstream MCP requests by validating the actual
+  connection resolver's complete address set.
+- Isolated external and operator-managed upstream connection pools, checked redirect
+  destinations, blocked private IPv4-mapped IPv6 addresses, and removed the OpenAPI
+  fallback to an HTTP client without safety protections.
+- Restricted outbound clients now ignore system proxy environment variables because a
+  proxy can resolve destinations independently. Fully permissive policies retain proxy support.
+- Added an isolated DNS regression suite that checks for internal requests, including
+  when proxy environment variables are configured. No database migration is required.
+
+Gateway, admin CLI, Operator, and migrator versions are prepared as `0.13.4`; Gateway,
+Operator, and stack charts are `0.2.8`. These artifacts have not been published yet.
+
 ## 2026-09-08
 
 ### Protected OpenAPI sources (Gateway `0.13.3`, Web UI `0.9.2`)
