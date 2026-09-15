@@ -98,7 +98,7 @@ pub struct HttpResponseConfig {
     /// - The MCP `Tool.output_schema` requires the *root* schema to be an object, so we wrap this
     ///   into `{ "type": "object", "required": ["body"], "properties": { "body": <outputSchema> } }`.
     /// - When this is set, the runtime will also return `structured_content` as
-    ///   `{ "body": <parsed_response> }` (while still returning `Content::text(...)` for client
+    ///   `{ "body": <parsed_response> }` (while still returning `ContentBlock::text(...)` for client
     ///   interoperability, since some MCP clients only render `content`).
     #[serde(default)]
     pub output_schema: Option<serde_json::Value>,

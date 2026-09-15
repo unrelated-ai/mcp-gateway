@@ -10,7 +10,11 @@ This page describes how the Gateway behaves as an MCP server when it is aggregat
 
 ## What “aggregation” means for MCP
 
-Aggregation means the Gateway exposes **one** MCP endpoint (`/{profile_id}/mcp`) that is backed by **many** upstream sessions.
+Aggregation means the Gateway exposes **one** MCP endpoint (`/{profile_id}/mcp`) that is backed by **many** upstream MCP servers, with optional upstream sessions.
+
+Stateful and sessionless servers can share a profile. See [session handling and
+concurrency](ARCHITECTURE.md#stateful-and-sessionless-upstreams) for routing, stream
+setup, deadlines, and cleanup behavior.
 
 This introduces three classes of collisions:
 

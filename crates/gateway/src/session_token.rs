@@ -171,7 +171,7 @@ pub struct TokenPayloadV1 {
     pub bindings: Vec<UpstreamSessionBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<TokenAuthV1>,
-    /// Optional OIDC principal binding for `jwtEveryRequest` data-plane auth.
+    /// Optional issuer/subject binding for OAuth data-plane auth.
     ///
     /// When present, the Gateway will reject requests whose bearer JWT principal does not match.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -210,7 +210,12 @@ pub struct TokenOidcV1 {
 pub struct UpstreamSessionBinding {
     pub upstream: String,
     pub endpoint: String,
-    pub session: String,
+    /// Absent when the upstream did not establish a stateful HTTP session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// Absent in tokens minted before upstream protocol negotiation was retained.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_version: Option<String>,
 }
 
 #[derive(Clone)]
@@ -279,7 +284,8 @@ mod tests {
             bindings: vec![UpstreamSessionBinding {
                 upstream: "u1".to_string(),
                 endpoint: "e1".to_string(),
-                session: "s1".to_string(),
+                session: Some("s1".to_string()),
+                protocol_version: None,
             }],
             auth: Some(TokenAuthV1 {
                 tenant_id: "t1".to_string(),

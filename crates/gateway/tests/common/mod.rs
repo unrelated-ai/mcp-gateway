@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use anyhow::Context as _;
+use std::collections::VecDeque;
 use std::io::BufRead as _;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
@@ -59,22 +60,49 @@ pub fn wait_for_gateway_ports(
         }
     });
 
+    match wait_for_gateway_listeners(&rx, timeout) {
+        Ok((data_addr, admin_addr)) => Ok(SpawnedGateway {
+            child,
+            data_base: format!("http://{data_addr}"),
+            admin_base: format!("http://{admin_addr}"),
+        }),
+        Err(error) => {
+            // Reap failed startups and terminate processes that never become ready.
+            let _ = child.kill();
+            let status = child.wait().context("reap gateway after failed startup")?;
+            Err(error.context(format!("gateway startup failed ({status})")))
+        }
+    }
+}
+
+fn wait_for_gateway_listeners(
+    rx: &mpsc::Receiver<String>,
+    timeout: Duration,
+) -> anyhow::Result<(String, String)> {
     let start = Instant::now();
     let mut data_addr: Option<String> = None;
     let mut admin_addr: Option<String> = None;
-    let mut last_lines: Vec<String> = Vec::new();
+    let mut first_lines = Vec::new();
+    let mut last_lines = VecDeque::new();
 
-    while start.elapsed() < timeout {
-        if let Ok(Some(status)) = child.try_wait() {
-            anyhow::bail!("gateway process exited early: {status}");
+    // Drain output through EOF before reporting an exit: the error can still be queued
+    // after the child exits. Keep its beginning as well as the tail so a backtrace
+    // cannot displace the actual startup error.
+    let reason = loop {
+        if start.elapsed() >= timeout {
+            break "timed out waiting for gateway ports";
         }
 
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(line) => {
-                if last_lines.len() >= 50 {
-                    last_lines.remove(0);
+                if first_lines.len() < 50 {
+                    first_lines.push(line.clone());
+                } else {
+                    if last_lines.len() >= 50 {
+                        last_lines.pop_front();
+                    }
+                    last_lines.push_back(line.clone());
                 }
-                last_lines.push(line.clone());
 
                 if data_addr.is_none() {
                     data_addr = parse_listen_addr(&line, "Starting data plane HTTP server on ");
@@ -86,21 +114,23 @@ pub fn wait_for_gateway_ports(
 
                 if let (Some(data_addr), Some(admin_addr)) = (data_addr.clone(), admin_addr.clone())
                 {
-                    return Ok(SpawnedGateway {
-                        child,
-                        data_base: format!("http://{data_addr}"),
-                        admin_base: format!("http://{admin_addr}"),
-                    });
+                    return Ok((data_addr, admin_addr));
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                break "gateway output closed before listeners were ready";
+            }
         }
-    }
+    };
 
     anyhow::bail!(
-        "timed out waiting for gateway ports; last output:\n{}",
-        last_lines.join("\n")
+        "{reason}; startup output:\n{}",
+        first_lines
+            .into_iter()
+            .chain(last_lines)
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }
 

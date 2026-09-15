@@ -37,7 +37,7 @@ pub struct GatewayConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DataPlaneAuthConfig {
     /// Mode 1 only. Defaults to `none`.
     #[serde(default)]
@@ -48,10 +48,6 @@ pub struct DataPlaneAuthConfig {
     /// If true, accept `x-api-key: <secret>` as an alias for `Authorization: Bearer <secret>`.
     #[serde(default)]
     pub accept_x_api_key: bool,
-    /// If true, require the API key on every request (POST/GET/DELETE) rather than only on
-    /// `initialize`.
-    #[serde(default)]
-    pub require_every_request: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
@@ -161,8 +157,7 @@ profiles:
     }
 
     #[test]
-    fn mode1_data_plane_auth_accept_x_api_key_defaults_false_and_require_every_request_defaults_false()
-     {
+    fn mode1_data_plane_auth_accept_x_api_key_defaults_false() {
         let cfg: GatewayConfig = serde_yaml::from_str(
             r"
 tenants: {}
@@ -175,8 +170,20 @@ dataPlaneAuth: {}
         .expect("valid yaml");
 
         assert!(!cfg.data_plane_auth.accept_x_api_key);
-        assert!(!cfg.data_plane_auth.require_every_request);
         assert_eq!(cfg.data_plane_auth.mode, Mode1AuthMode::None);
+    }
+
+    #[test]
+    fn mode1_rejects_removed_initialize_only_setting() {
+        let parsed = serde_yaml::from_str::<GatewayConfig>(
+            r"
+dataPlaneAuth:
+  mode: static-api-keys
+  apiKeys: [k1]
+  requireEveryRequest: false
+",
+        );
+        assert!(parsed.is_err());
     }
 
     #[test]

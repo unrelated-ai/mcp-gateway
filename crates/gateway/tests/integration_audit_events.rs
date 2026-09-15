@@ -17,7 +17,7 @@ const SESSION_SECRET: &str = "test-session-secret";
 #[ignore = "requires Docker (testcontainers)"]
 async fn audit_events_are_written_when_enabled() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")

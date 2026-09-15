@@ -252,9 +252,7 @@ async fn check_mcp() {
                     .await
                     .is_err()
             }
-            "get" => get_stream(http, uri, "session".into(), None, &headers)
-                .await
-                .is_err(),
+            "get" => get_stream(http, uri, None, None, &headers).await.is_err(),
             _ => delete_session(http, uri, "session".into(), &headers)
                 .await
                 .is_err(),

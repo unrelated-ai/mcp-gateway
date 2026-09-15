@@ -23,7 +23,12 @@ on:
       rust_toolchain:
         description: "Rust toolchain version"
         required: false
-        default: "1.92.0"
+        default: "1.98.1"
+        type: string
+      runner:
+        description: "GitHub-hosted runner label"
+        required: false
+        default: "ubuntu-24.04"
         type: string
 
 permissions:
@@ -36,12 +41,14 @@ env:
 jobs:
   build_and_publish:
     name: binary (build + upload GitHub Release assets)
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7.0.1
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -50,7 +57,7 @@ jobs:
           targets: ${{ inputs.target }}
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
 
@@ -123,10 +130,19 @@ jobs:
 
           tarball="${bin}-v${version}-${target}.tar.gz"
           (cd dist && tar -czf "${tarball}" "${pkgdir}")
-          (cd dist && sha256sum "${tarball}" > "${tarball}.sha256")
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd dist && sha256sum "${tarball}" > "${tarball}.sha256")
+          else
+            (cd dist && shasum -a 256 "${tarball}" > "${tarball}.sha256")
+          fi
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
 
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.3
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true

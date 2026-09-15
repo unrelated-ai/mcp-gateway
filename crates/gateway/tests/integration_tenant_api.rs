@@ -265,7 +265,7 @@ async fn admin_issue_tenant_token(
 #[allow(clippy::too_many_lines)]
 async fn tenant_profiles_are_scoped_and_cross_tenant_access_is_404() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -359,6 +359,8 @@ async fn tenant_profiles_are_scoped_and_cross_tenant_access_is_404() -> anyhow::
         "expected created profile in tenant list"
     );
 
+    assert_profile_nullable_updates(&client, &admin_base, &profile_id, &t1_token).await?;
+
     // Cross-tenant access is 404 (not 403).
     let resp = client
         .get(format!("{admin_base}/tenant/v1/profiles/{profile_id}"))
@@ -380,12 +382,67 @@ async fn tenant_profiles_are_scoped_and_cross_tenant_access_is_404() -> anyhow::
     Ok(())
 }
 
+// Both profile APIs promise omitted => retain, explicit null => clear.
+async fn assert_profile_nullable_updates(
+    client: &reqwest::Client,
+    admin_base: &str,
+    profile_id: &str,
+    tenant_token: &str,
+) -> anyhow::Result<()> {
+    for (api, token) in [("tenant", tenant_token), ("admin", ADMIN_TOKEN)] {
+        let url = format!("{admin_base}/{api}/v1/profiles/{profile_id}");
+        for (fields, expected_description, expected_timeout) in [
+            (
+                json!({"description": "keep me", "toolCallTimeoutSecs": 15}),
+                json!("keep me"),
+                json!(15),
+            ),
+            (json!({}), json!("keep me"), json!(15)),
+            (
+                json!({"description": null, "toolCallTimeoutSecs": null}),
+                json!(null),
+                json!(null),
+            ),
+        ] {
+            let mut body = json!({"id": profile_id, "tenantId": "t1", "upstreams": []});
+            body.as_object_mut()
+                .unwrap()
+                .extend(fields.as_object().unwrap().clone());
+            let request = if api == "admin" {
+                client.post(format!("{admin_base}/admin/v1/profiles"))
+            } else {
+                client.put(&url)
+            };
+            request
+                .bearer_auth(token)
+                .json(&body)
+                .send()
+                .await?
+                .error_for_status()?;
+            let stored: serde_json::Value = client
+                .get(&url)
+                .bearer_auth(token)
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            assert_eq!(stored["description"], expected_description, "{api}: {body}");
+            assert_eq!(
+                stored["toolCallTimeoutSecs"], expected_timeout,
+                "{api}: {body}"
+            );
+        }
+    }
+    Ok(())
+}
+
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers)"]
 #[allow(clippy::too_many_lines)]
 async fn profile_name_is_unique_per_tenant_case_insensitive() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -460,7 +517,7 @@ async fn profile_name_is_unique_per_tenant_case_insensitive() -> anyhow::Result<
 #[allow(clippy::too_many_lines)]
 async fn bootstrap_tenant_creates_first_tenant_and_returns_tenant_token() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -541,7 +598,7 @@ async fn bootstrap_tenant_creates_first_tenant_and_returns_tenant_token() -> any
 #[allow(clippy::too_many_lines)]
 async fn tenant_can_create_upstream_and_attach_to_profile() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -648,9 +705,7 @@ async fn tenant_can_create_upstream_and_attach_to_profile() -> anyhow::Result<()
 
     // Data-plane initialize + tools/list should succeed.
     let mcp = McpSession::connect(format!("{data_base}/{profile_id}/mcp"), Some(secret)).await?;
-    let tools = mcp
-        .request_value_no_auth(1, "tools/list", json!({}))
-        .await?;
+    let tools = mcp.request_value(1, "tools/list", json!({})).await?;
     let arr = tools
         .get("result")
         .and_then(|r| r.get("tools"))
@@ -668,7 +723,7 @@ async fn tenant_can_create_upstream_and_attach_to_profile() -> anyhow::Result<()
 async fn tenant_tool_source_requires_secret_and_appears_in_tools_list_after_put_secret()
 -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -748,7 +803,7 @@ async fn tenant_tool_source_requires_secret_and_appears_in_tools_list_after_put_
         .context("create profile response missing id")?
         .to_string();
 
-    // Mode 3 data-plane requires an API key (profile default: ApiKeyInitializeOnly).
+    // Mode 3 data-plane requires an API key by default.
     let create_key_resp = client
         .post(format!("{admin_base}/tenant/v1/api-keys"))
         .header("Authorization", format!("Bearer {t1_token}"))
@@ -776,10 +831,7 @@ async fn tenant_tool_source_requires_secret_and_appears_in_tools_list_after_put_
     .await?;
 
     // tools/list: should be empty because the required secret is missing (source cannot be built).
-    // (ApiKeyInitializeOnly → follow-ups should work without auth.)
-    let tools_msg = session
-        .request_value_no_auth(1, "tools/list", json!({}))
-        .await?;
+    let tools_msg = session.request_value(1, "tools/list", json!({})).await?;
     let tools = tools_msg
         .get("result")
         .and_then(|r| r.get("tools"))
@@ -798,9 +850,7 @@ async fn tenant_tool_source_requires_secret_and_appears_in_tools_list_after_put_
     anyhow::ensure!(put_secret_resp.status().is_success());
 
     // tools/list: now the tool source can be built and the tool should appear.
-    let tools_msg = session
-        .request_value_no_auth(2, "tools/list", json!({}))
-        .await?;
+    let tools_msg = session.request_value(2, "tools/list", json!({})).await?;
     let tools = tools_msg
         .get("result")
         .and_then(|r| r.get("tools"))
@@ -823,7 +873,7 @@ async fn tenant_tool_source_requires_secret_and_appears_in_tools_list_after_put_
 #[ignore = "requires Docker (testcontainers)"]
 async fn tenant_tool_source_get_returns_spec_for_round_trip() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -917,7 +967,7 @@ async fn tenant_tool_source_get_returns_spec_for_round_trip() -> anyhow::Result<
 #[allow(clippy::too_many_lines)]
 async fn tenant_profile_surface_probe_returns_tools_and_source_status() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -1080,7 +1130,7 @@ async fn tenant_profile_surface_probe_returns_tools_and_source_status() -> anyho
 #[allow(clippy::too_many_lines)]
 async fn tenant_can_patch_delete_and_inspect_upstream_endpoints() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -1261,7 +1311,7 @@ async fn tenant_can_patch_delete_and_inspect_upstream_endpoints() -> anyhow::Res
 #[allow(clippy::too_many_lines)]
 async fn tenant_managed_mcp_deployables_and_requests_are_scoped() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -1671,7 +1721,7 @@ async fn tenant_managed_mcp_deployables_and_requests_are_scoped() -> anyhow::Res
 #[allow(clippy::too_many_lines)]
 async fn tenant_managed_upstream_created_via_admin_is_tenant_scoped() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")

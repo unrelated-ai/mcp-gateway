@@ -392,7 +392,6 @@ mod tests {
                 mode: Mode1AuthMode::None,
                 api_keys: vec![],
                 accept_x_api_key: true,
-                require_every_request: false,
             },
             shared_sources: std::collections::HashMap::new(),
         };
@@ -407,7 +406,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mode1_static_api_keys_maps_require_every_request_and_accept_x_api_key()
+    async fn mode1_static_api_keys_authenticates_every_request_and_maps_x_api_key()
     -> anyhow::Result<()> {
         use super::Store as _;
         use crate::config::{GatewayConfig, Mode1AuthMode, ProfileConfig};
@@ -436,7 +435,6 @@ mod tests {
                 mode: Mode1AuthMode::StaticApiKeys,
                 api_keys: vec!["k1".to_string()],
                 accept_x_api_key: false,
-                require_every_request: true,
             },
             shared_sources: std::collections::HashMap::new(),
         };
@@ -445,7 +443,7 @@ mod tests {
         let p = store.get_profile(&profile_id).await?.expect("profile");
         assert_eq!(
             p.data_plane_auth_mode,
-            crate::store::DataPlaneAuthMode::ApiKeyEveryRequest
+            crate::store::DataPlaneAuthMode::ApiKey
         );
         assert!(!p.accept_x_api_key);
         Ok(())
@@ -462,7 +460,6 @@ mod tests {
                 mode: crate::config::Mode1AuthMode::StaticApiKeys,
                 api_keys: keys.iter().map(ToString::to_string).collect(),
                 accept_x_api_key: false,
-                require_every_request: true,
             },
             ..Default::default()
         });
@@ -524,7 +521,6 @@ mod tests {
                     mode,
                     api_keys: keys,
                     accept_x_api_key: false,
-                    require_every_request: false,
                 },
                 ..Default::default()
             });
@@ -609,12 +605,11 @@ pub struct McpNamespacing {
 pub enum DataPlaneAuthMode {
     /// No auth required on the data plane for this profile.
     Disabled,
-    /// API key required only for `initialize`. Subsequent requests rely on the session token.
-    ApiKeyInitializeOnly,
     /// API key required on every data-plane request (in addition to the session token).
-    ApiKeyEveryRequest,
-    /// OIDC/JWT required on every data-plane request (POST/GET/DELETE).
-    JwtEveryRequest,
+    ApiKey,
+    /// OAuth JWT access token required on every data-plane request.
+    #[serde(rename = "oauth")]
+    OAuth,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -656,6 +651,8 @@ pub struct Profile {
     pub data_plane_auth_mode: DataPlaneAuthMode,
     /// If enabled, accept `x-api-key: <secret>` as an alias for `Authorization: Bearer <secret>`.
     pub accept_x_api_key: bool,
+    /// OAuth scopes required by this profile. Empty for non-OAuth profiles.
+    pub oauth_required_scopes: Vec<String>,
     /// Optional per-profile rate limit config (Mode 3). Disabled by default.
     pub rate_limit_enabled: bool,
     pub rate_limit_tool_calls_per_minute: Option<i64>,
@@ -728,6 +725,7 @@ pub struct AdminProfile {
     pub enabled_tools: Vec<String>,
     pub data_plane_auth_mode: DataPlaneAuthMode,
     pub accept_x_api_key: bool,
+    pub oauth_required_scopes: Vec<String>,
     pub rate_limit_enabled: bool,
     pub rate_limit_tool_calls_per_minute: Option<i64>,
     pub quota_enabled: bool,
@@ -1029,6 +1027,7 @@ pub trait Store: Send + Sync {
         secret: &str,
     ) -> anyhow::Result<Option<ApiKeyAuth>>;
 
+    #[allow(dead_code)]
     async fn is_api_key_active(&self, tenant_id: &str, api_key_id: &str) -> anyhow::Result<bool>;
 
     /// Update last-used timestamp and increment the per-key request counter (best-effort metering).
@@ -1335,10 +1334,11 @@ pub struct PutProfileFlags {
     pub allow_partial_upstreams: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct PutProfileDataPlaneAuth {
     pub mode: DataPlaneAuthMode,
     pub accept_x_api_key: bool,
+    pub oauth_required_scopes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1349,7 +1349,7 @@ pub struct PutProfileLimits {
     pub quota_tool_calls: Option<i64>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct PutProfileInput<'a> {
     pub profile_id: &'a str,
     pub tenant_id: &'a str,
@@ -1400,6 +1400,7 @@ impl ConfigStore {
             // Mode 1 defaults: data plane is unauthenticated unless configured otherwise.
             data_plane_auth_mode: DataPlaneAuthMode::Disabled,
             accept_x_api_key: false,
+            oauth_required_scopes: Vec::new(),
             // Mode 1: limits are disabled by default (and currently not configurable via config).
             rate_limit_enabled: false,
             rate_limit_tool_calls_per_minute: None,
@@ -1453,11 +1454,7 @@ impl Store for ConfigStore {
                 p.data_plane_auth_mode = DataPlaneAuthMode::Disabled;
             }
             Mode1AuthMode::StaticApiKeys => {
-                p.data_plane_auth_mode = if self.config.data_plane_auth.require_every_request {
-                    DataPlaneAuthMode::ApiKeyEveryRequest
-                } else {
-                    DataPlaneAuthMode::ApiKeyInitializeOnly
-                };
+                p.data_plane_auth_mode = DataPlaneAuthMode::ApiKey;
                 p.accept_x_api_key = self.config.data_plane_auth.accept_x_api_key;
             }
         }

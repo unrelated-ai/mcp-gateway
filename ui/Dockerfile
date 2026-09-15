@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1
 
-FROM node:20-alpine AS deps
+FROM node:24.20.0-alpine3.24 AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-FROM node:20-alpine AS builder
+FROM node:24.20.0-alpine3.24 AS builder
 WORKDIR /app
 ARG UI_VERSION=dev
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -14,7 +14,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-FROM node:20-alpine AS runner
+FROM node:24.20.0-alpine3.24 AS runner
 WORKDIR /app
 ARG UI_VERSION=dev
 ENV NODE_ENV=production

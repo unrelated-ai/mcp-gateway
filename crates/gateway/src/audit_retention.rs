@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 /// Background audit retention cleanup interval.
-const AUDIT_RETENTION_INTERVAL: Duration = Duration::from_secs(10 * 60);
+const AUDIT_RETENTION_INTERVAL: Duration = Duration::from_mins(10);
 
 /// Use a global advisory lock so only one HA replica performs cleanup per tick.
 ///

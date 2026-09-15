@@ -196,7 +196,7 @@ The MCP handler uses the aggregator’s mapping to route calls/resources/prompts
 
 ## Build, Docker, CI/CD
 
-- **Rust**: edition 2024, MSRV 1.92.0 (see workspace [`Cargo.toml`](../../Cargo.toml)).
+- **Rust**: edition 2024, MSRV 1.98.1 (see workspace [`Cargo.toml`](../../Cargo.toml)).
 - **Release build**: `cargo build --release -p unrelated-mcp-adapter`
 - **Docker image**: [`Dockerfile`](../../Dockerfile) builds an optimized static release binary and copies it into the default `scratch` runtime image. The optional `stdio-node` target adds Node/npm for stdio servers that need it.
 - **GitHub Actions**:

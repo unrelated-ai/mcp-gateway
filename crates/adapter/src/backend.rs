@@ -96,7 +96,7 @@ pub struct ResourceInfo {
     /// Optional MIME type
     pub mime_type: Option<String>,
     /// Optional size (bytes)
-    pub size: Option<u32>,
+    pub size: Option<u64>,
 }
 
 /// Information about a prompt provided by a backend.

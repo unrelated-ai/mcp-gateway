@@ -8,7 +8,6 @@ import type { Profile } from "@/src/lib/types";
 import * as tenantApi from "@/src/lib/tenantApi";
 import { qk } from "@/src/lib/queryKeys";
 import { useToastStore } from "@/src/lib/toast-store";
-import { buildPutProfileBody } from "@/src/lib/profilePut";
 
 type UpstreamListItem = { id: string; owner: string; enabled: boolean };
 type ToolSourceListItem = { id: string; type: string; enabled: boolean };
@@ -65,14 +64,11 @@ export function SourcesTab({
       sources: string[];
     }) => {
       if (!profile) throw new Error("Profile not loaded");
-      await tenantApi.putProfile(
-        profile.id,
-        buildPutProfileBody(profile, {
-          allowPartialUpstreams: next.allowPartialUpstreams,
-          upstreams: next.upstreams,
-          sources: next.sources,
-        }),
-      );
+      await tenantApi.updateProfile(profile.id, {
+        allowPartialUpstreams: next.allowPartialUpstreams,
+        upstreams: next.upstreams,
+        sources: next.sources,
+      });
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: qk.profile(profile?.id ?? "") });

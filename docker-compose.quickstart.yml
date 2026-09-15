@@ -1,6 +1,6 @@
 services:
   gateway_db:
-    image: postgres:16-alpine
+    image: postgres:16.14-alpine3.24
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres

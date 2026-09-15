@@ -337,7 +337,7 @@ struct ResourceMapEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     mime_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    size: Option<u32>,
+    size: Option<u64>,
 }
 
 #[derive(Serialize)]

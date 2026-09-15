@@ -1,29 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ProfileSurface } from "@/src/lib/tenantApi";
 import type { Profile, ToolPolicy } from "@/src/lib/types";
 import * as tenantApi from "@/src/lib/tenantApi";
 import { qk } from "@/src/lib/queryKeys";
-import { buildPutProfileBody } from "@/src/lib/profilePut";
-import { useQueuedAutosave } from "@/src/lib/useQueuedAutosave";
-import {
-  Badge,
-  Button,
-  Card,
-  Input,
-  Modal,
-  ModalActions,
-  SectionCard,
-  Tabs,
-  Toggle,
-} from "@/components/ui";
+import { useAutosave } from "@/src/lib/useAutosave";
+import { SaveStatus } from "@/components/ui/save-status";
+import { ToolTimeoutCard } from "./tool-timeout-card";
+import { Badge, Button, Card, Input, Modal, ModalActions, Tabs, Toggle } from "@/components/ui";
 import { ToolPolicyEditor } from "./tool-policy-editor";
 import {
   ToolTransformEditor,
   normalizePipeline,
-  stableStringifyPipeline,
   type TransformPipeline,
 } from "./tool-transform-editor";
 
@@ -132,14 +122,6 @@ export function ToolsNewTab({
   onSetToolEnabled: (toolRef: string, enabled: boolean) => void;
 }) {
   const queryClient = useQueryClient();
-  const autosaveCooldownUntilRef = useRef<number>(0);
-  const shouldSkipAutosave = () => Date.now() < autosaveCooldownUntilRef.current;
-  const applyAutosaveCooldownFromError = (msg: string) => {
-    if (msg.includes("502") || msg.toLowerCase().includes("bad gateway")) {
-      autosaveCooldownUntilRef.current = Date.now() + 3000;
-    }
-  };
-
   const [rightTab, setRightTab] = useState<"transforms" | "policies">("transforms");
   const [search, setSearch] = useState("");
   const [showDisabledTools, setShowDisabledTools] = useState(true);
@@ -185,109 +167,14 @@ export function ToolsNewTab({
   );
   const [pipeline, setPipeline] = useState<TransformPipeline>(() => pipelineFromProfile);
 
-  // ---------------------------
-  // Default tool call timeout
-  // ---------------------------
-  const initialTimeout = profile?.toolCallTimeoutSecs ?? null;
-  const [timeoutSecsText, setTimeoutSecsText] = useState(() =>
-    initialTimeout != null ? String(initialTimeout) : "",
-  );
-  const [timeoutError, setTimeoutError] = useState<string | null>(null);
-
-  const saveTimeoutMutation = useMutation({
-    mutationFn: async (toolCallTimeoutSecs: number | null) => {
-      if (!profile) throw new Error("Profile not loaded");
-      await tenantApi.putProfile(
-        profile.id,
-        buildPutProfileBody(profile, { transforms: pipeline, toolCallTimeoutSecs }),
-      );
-      return toolCallTimeoutSecs;
-    },
-    onSuccess: async (toolCallTimeoutSecs) => {
-      if (!profile) return;
-      await queryClient.invalidateQueries({ queryKey: qk.profile(profile.id) });
-      await queryClient.invalidateQueries({ queryKey: qk.profiles() });
-      queryClient.setQueryData(qk.profile(profile.id), (old: Profile | undefined) => {
-        if (!old) return old;
-        return { ...old, toolCallTimeoutSecs };
-      });
-      setTimeoutError(null);
-    },
-    onError: (e) => {
-      const msg = e instanceof Error ? e.message : "Failed to save default timeout";
-      const m = msg.match(/toolCallTimeoutSecs must be <= (\\d+)/);
-      if (m && m[1]) {
-        setTimeoutError(
-          `Too large: max is ${m[1]}s (Gateway cap). Ask your admin to raise UNRELATED_TOOL_CALL_TIMEOUT_MAX_SECS if you need longer calls.`,
-        );
-      } else if (msg.includes("502") || msg.toLowerCase().includes("bad gateway")) {
-        setTimeoutError("Gateway is temporarily unavailable (502). Try again in a moment.");
-      } else {
-        setTimeoutError("Could not save timeout. Please try again.");
-      }
-      applyAutosaveCooldownFromError(msg);
-    },
+  const pipelineAutosave = useAutosave<TransformPipeline>(async (nextTransforms) => {
+    if (!profile) throw new Error("Profile not loaded");
+    await tenantApi.updateProfile(profile.id, { transforms: nextTransforms });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: qk.profile(profile.id) }),
+      queryClient.invalidateQueries({ queryKey: qk.profiles() }),
+    ]);
   });
-
-  const commitTimeout = () => {
-    if (shouldSkipAutosave()) return;
-    const raw = timeoutSecsText.trim();
-    if (!raw) {
-      saveTimeoutMutation.mutate(null);
-      return;
-    }
-    const n = Number(raw);
-    if (!Number.isFinite(n) || n <= 0 || !Number.isInteger(n)) {
-      setTimeoutError("Timeout must be a positive integer");
-      return;
-    }
-    saveTimeoutMutation.mutate(n);
-  };
-
-  const saveTransformsMutation = useMutation({
-    mutationFn: async (nextTransforms: unknown) => {
-      if (!profile) throw new Error("Profile not loaded");
-      await tenantApi.putProfile(
-        profile.id,
-        buildPutProfileBody(profile, { transforms: nextTransforms }),
-      );
-      return nextTransforms;
-    },
-    onSuccess: async (nextTransforms) => {
-      if (!profile) return;
-      await queryClient.invalidateQueries({ queryKey: qk.profile(profile.id) });
-      await queryClient.invalidateQueries({ queryKey: qk.profiles() });
-      queryClient.setQueryData(qk.profile(profile.id), (old: Profile | undefined) => {
-        if (!old) return old;
-        return { ...old, transforms: nextTransforms };
-      });
-    },
-    onError: (e) => {
-      const msg = e instanceof Error ? e.message : "Failed to save transforms";
-      applyAutosaveCooldownFromError(msg);
-    },
-  });
-
-  const pipelineKey = useCallback((p: TransformPipeline) => stableStringifyPipeline(p), []);
-  const pipelineAutosave = useQueuedAutosave<TransformPipeline>({
-    isPending: saveTransformsMutation.isPending,
-    mutate: (p) => saveTransformsMutation.mutate(p),
-    computeKey: pipelineKey,
-  });
-
-  useEffect(() => {
-    // Keep the server fingerprint updated; avoid setState-in-effect.
-    pipelineAutosave.setLastSavedKey(stableStringifyPipeline(pipelineFromProfile));
-  }, [pipelineAutosave, pipelineFromProfile]);
-
-  const commitPipeline = useCallback(
-    (next: TransformPipeline) => {
-      if (!profile) return;
-      if (shouldSkipAutosave()) return;
-      pipelineAutosave.commit(next);
-    },
-    [pipelineAutosave, profile],
-  );
 
   // ---------------------------
   // Tool policies (local) + autosave
@@ -306,11 +193,6 @@ export function ToolsNewTab({
     return stablePolicies(policies).filter((p) => !knownToolRefs.has(p.tool));
   }, [knownToolRefs, policies]);
 
-  useEffect(() => {
-    // Mirror server updates into the local state without using setState-in-effect lint.
-    // This component is keyed by profile id in the parent, so this is mostly a safety net.
-  }, [policiesFromProfile]);
-
   const savePoliciesMutation = useMutation({
     mutationFn: async (nextPolicies: ToolPolicy[]) => {
       const stable = stablePolicies(nextPolicies);
@@ -320,10 +202,7 @@ export function ToolsNewTab({
         seen.add(p.tool);
       }
       if (!profile) throw new Error("Profile not loaded");
-      await tenantApi.putProfile(
-        profile.id,
-        buildPutProfileBody(profile, { transforms: pipeline, toolPolicies: stable }),
-      );
+      await tenantApi.updateProfile(profile.id, { toolPolicies: stable });
       return stable;
     },
     onSuccess: async (toolPolicies) => {
@@ -343,7 +222,6 @@ export function ToolsNewTab({
           ? "Gateway is temporarily unavailable (502). Try again in a moment."
           : msg,
       );
-      applyAutosaveCooldownFromError(msg);
     },
   });
 
@@ -367,48 +245,18 @@ export function ToolsNewTab({
 
   return (
     <div className="space-y-6">
-      <SectionCard
-        title="Default tool call timeout"
-        subtitle={
-          <>
-            Applies to <span className="font-mono">tools/call</span> when a tool policy does not
-            override timeout. Leave empty to use the Gateway default.
-          </>
-        }
-      >
-        <div className="max-w-md">
-          <Input
-            label="Timeout (seconds)"
-            inputMode="numeric"
-            placeholder={initialTimeout != null ? String(initialTimeout) : "e.g. 30"}
-            value={timeoutSecsText}
-            onChange={(e) => {
-              setTimeoutError(null);
-              setTimeoutSecsText(e.target.value);
-            }}
-            onBlur={commitTimeout}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-            }}
-            error={timeoutError ?? undefined}
-            hint={
-              timeoutError
-                ? undefined
-                : "Clearing this field removes the override (reverting to the Gateway default)."
-            }
-          />
-        </div>
-      </SectionCard>
+      {profile ? <ToolTimeoutCard key={profile.id} profile={profile} /> : null}
+      <SaveStatus {...pipelineAutosave} onRetry={pipelineAutosave.retry} label="Tool transforms" />
 
       <Card className="overflow-hidden">
-        <div className="flex items-start justify-between gap-3 border-b border-edge px-5 py-3.5">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-edge px-5 py-3.5">
           <div className="min-w-0">
             <div className="eyebrow">Tool list</div>
             <div className="mt-1 text-sm text-muted">
               Probe once, then configure transforms and call policies per tool.
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <Toggle
               checked={showDisabledTools}
               onChange={setShowDisabledTools}
@@ -435,7 +283,7 @@ export function ToolsNewTab({
         ) : allTools.length === 0 ? (
           <div className="p-5 text-sm text-muted">No tools discovered.</div>
         ) : (
-          <div className="grid md:grid-cols-[340px_1fr]">
+          <div className="grid xl:grid-cols-[300px_minmax(0,1fr)]">
             <div className="border-r border-edge">
               <div className="border-b border-edge px-4 py-3 text-xs text-faint">
                 Tools: <span className="font-mono text-fg">{surface.tools.length}</span>
@@ -528,8 +376,9 @@ export function ToolsNewTab({
                   pipeline={pipeline}
                   onCommitPipeline={(next) => {
                     setPipeline(next);
-                    commitPipeline(next);
+                    pipelineAutosave.commit(next);
                   }}
+                  onDirty={pipelineAutosave.edit}
                   toolsPending={toolsPending}
                   enabled={selected.enabled}
                 />

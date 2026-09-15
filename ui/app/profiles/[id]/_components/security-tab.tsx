@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Callout, Input, SectionCard, Select, Spinner, Toggle } from "@/components/ui";
+import { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Button, Input, SectionCard, Select, Toggle } from "@/components/ui";
 import { qk } from "@/src/lib/queryKeys";
 import * as tenantApi from "@/src/lib/tenantApi";
 import type {
@@ -11,8 +11,8 @@ import type {
   TransportLimitsSettings,
   UpstreamSecurityPolicy,
 } from "@/src/lib/types";
-import { buildPutProfileBody } from "@/src/lib/profilePut";
-import { useQueuedAutosave } from "@/src/lib/useQueuedAutosave";
+import { useAutosave } from "@/src/lib/useAutosave";
+import { SaveStatus } from "@/components/ui/save-status";
 import {
   INTERACTIVE_REQUEST_METHODS,
   allowsServerRequest,
@@ -115,12 +115,12 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
     return asMcpSettings(profile?.mcp ?? defaultMcpSettings());
   }, [profile?.mcp]);
 
-  const security = initialMcp.security;
+  const [draft, setDraft] = useState<McpProfileSettings["security"] | null>(null);
+  const security = draft ?? initialMcp.security;
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [showDefaultAdvanced, setShowDefaultAdvanced] = useState<boolean>(() => {
     return presetForPolicy(normalizePolicy(initialMcp.security.upstreamDefault)) === "custom";
   });
-  const [saveError, setSaveError] = useState<string | null>(null);
 
   const tenantTransportLimitsQuery = useQuery({
     queryKey: qk.tenantTransportLimits(),
@@ -129,53 +129,21 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
     },
   });
 
-  const saveMutation = useMutation({
-    mutationFn: async (nextMcp: McpProfileSettings) => {
-      if (!profile) throw new Error("Profile not loaded");
-      await tenantApi.putProfile(profile.id, buildPutProfileBody(profile, { mcp: nextMcp }));
-      return nextMcp;
-    },
-    onSuccess: async (nextMcp) => {
-      if (!profile) return;
-      await queryClient.invalidateQueries({ queryKey: qk.profile(profile.id) });
-      await queryClient.invalidateQueries({ queryKey: qk.profiles() });
-      queryClient.setQueryData(qk.profile(profile.id), (old: Profile | undefined) => {
-        if (!old) return old;
-        return { ...old, mcp: nextMcp };
-      });
-      setSaveError(null);
-    },
-    onError: (e) => {
-      setSaveError(e instanceof Error ? e.message : "Failed to save security settings");
-    },
+  const autosave = useAutosave<McpProfileSettings["security"]>(async (nextSecurity) => {
+    if (!profile) throw new Error("Profile not loaded");
+    await tenantApi.updateProfile(profile.id, (current) => ({
+      mcp: normalizeMcpSettings({ ...asMcpSettings(current.mcp), security: nextSecurity }),
+    }));
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: qk.profile(profile.id) }),
+      queryClient.invalidateQueries({ queryKey: qk.profiles() }),
+    ]);
   });
 
-  const computeKey = useCallback((m: McpProfileSettings) => JSON.stringify(m), []);
-  const autosave = useQueuedAutosave<McpProfileSettings>({
-    isPending: saveMutation.isPending,
-    mutate: (m) => saveMutation.mutate(m),
-    computeKey,
-  });
-
-  useEffect(() => {
-    autosave.setLastSavedKey(JSON.stringify(initialMcp));
-  }, [autosave, initialMcp]);
-
-  const commit = useCallback(
-    (nextSecurity: McpProfileSettings["security"]) => {
-      if (!profile) return;
-      const base = asMcpSettings(profile.mcp);
-      const next = normalizeMcpSettings({ ...base, security: nextSecurity });
-      // Optimistic UI update: keep the tab responsive while saving.
-      queryClient.setQueryData(qk.profile(profile.id), (old: Profile | undefined) => {
-        if (!old) return old;
-        return { ...old, mcp: next };
-      });
-      setSaveError(null);
-      autosave.commit(next);
-    },
-    [autosave, profile, queryClient],
-  );
+  const commit = (nextSecurity: McpProfileSettings["security"]) => {
+    setDraft(nextSecurity);
+    autosave.commit(nextSecurity);
+  };
 
   const upstreams = profile?.upstreams ?? [];
   const defaultPreset = presetForPolicy(normalizePolicy(security.upstreamDefault));
@@ -241,17 +209,9 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
       <SectionCard
         title="Security"
         subtitle="Control what the Gateway advertises upstream and what upstream interactive requests are allowed through."
-        right={
-          saveMutation.isPending ? (
-            <span className="inline-flex items-center gap-1.5 px-2 text-xs text-faint">
-              <Spinner size="sm" />
-              Saving…
-            </span>
-          ) : null
-        }
         bodyClassName="space-y-6"
       >
-        {saveError ? <Callout tone="danger">{saveError}</Callout> : null}
+        <SaveStatus {...autosave} onRetry={autosave.retry} label="Security settings" />
 
         <div className="flex items-start justify-between gap-6">
           <div className="min-w-0">
@@ -263,7 +223,7 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
           </div>
           <Toggle
             checked={!!security.signedProxiedRequestIds}
-            disabled={!profile || saveMutation.isPending}
+            disabled={!profile || autosave.status === "saving"}
             onChange={(checked) => commit({ ...security, signedProxiedRequestIds: checked })}
           />
         </div>
@@ -280,7 +240,7 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
               <Select
                 aria-label="Default upstream policy preset"
                 value={defaultSelectValue}
-                disabled={!profile || saveMutation.isPending}
+                disabled={!profile || autosave.status === "saving"}
                 onChange={(e) => setDefaultPreset(e.target.value as Preset)}
               >
                 <option value="trusted">Trusted</option>
@@ -294,7 +254,7 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
             <PolicyEditor
               policy={security.upstreamDefault}
               onChange={updateDefaultPolicy}
-              disabled={!profile || saveMutation.isPending}
+              disabled={!profile || autosave.status === "saving"}
             />
           ) : null}
         </div>
@@ -314,7 +274,7 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
           </div>
           <Toggle
             checked={usesTenantDefaults}
-            disabled={!profile || saveMutation.isPending}
+            disabled={!profile || autosave.status === "saving"}
             onChange={(checked) => {
               if (checked) {
                 commit({ ...security, transportLimits: {} });
@@ -345,7 +305,7 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
                 <button
                   key={mib}
                   type="button"
-                  disabled={usesTenantDefaults || !profile || saveMutation.isPending}
+                  disabled={usesTenantDefaults || !profile || autosave.status === "saving"}
                   onClick={() =>
                     commit({
                       ...security,
@@ -368,7 +328,7 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
                 min={1}
                 step={1}
                 aria-label="Custom max POST body bytes"
-                disabled={usesTenantDefaults || !profile || saveMutation.isPending}
+                disabled={usesTenantDefaults || !profile || autosave.status === "saving"}
                 value={
                   usesTenantDefaults
                     ? effectiveMaxPostBodyBytes
@@ -399,7 +359,7 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
                 <button
                   key={mib}
                   type="button"
-                  disabled={usesTenantDefaults || !profile || saveMutation.isPending}
+                  disabled={usesTenantDefaults || !profile || autosave.status === "saving"}
                   onClick={() =>
                     commit({
                       ...security,
@@ -422,7 +382,7 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
                 min={1}
                 step={1}
                 aria-label="Custom max SSE event bytes"
-                disabled={usesTenantDefaults || !profile || saveMutation.isPending}
+                disabled={usesTenantDefaults || !profile || autosave.status === "saving"}
                 value={
                   usesTenantDefaults
                     ? effectiveMaxSseEventBytes
@@ -453,7 +413,7 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
               step={1}
               label="Max depth"
               placeholder="Inherit"
-              disabled={usesTenantDefaults || !profile || saveMutation.isPending}
+              disabled={usesTenantDefaults || !profile || autosave.status === "saving"}
               value={profileTransportLimits.maxJsonDepth ?? ""}
               onChange={(e) => {
                 const v = parsePositiveIntegerInput(e.target.value);
@@ -469,7 +429,7 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
               step={1}
               label="Max array length"
               placeholder="Inherit"
-              disabled={usesTenantDefaults || !profile || saveMutation.isPending}
+              disabled={usesTenantDefaults || !profile || autosave.status === "saving"}
               value={profileTransportLimits.maxJsonArrayLen ?? ""}
               onChange={(e) => {
                 const v = parsePositiveIntegerInput(e.target.value);
@@ -485,7 +445,7 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
               step={1}
               label="Max object keys"
               placeholder="Inherit"
-              disabled={usesTenantDefaults || !profile || saveMutation.isPending}
+              disabled={usesTenantDefaults || !profile || autosave.status === "saving"}
               value={profileTransportLimits.maxJsonObjectKeys ?? ""}
               onChange={(e) => {
                 const v = parsePositiveIntegerInput(e.target.value);
@@ -501,7 +461,7 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
               step={1}
               label="Max string bytes"
               placeholder="Inherit"
-              disabled={usesTenantDefaults || !profile || saveMutation.isPending}
+              disabled={usesTenantDefaults || !profile || autosave.status === "saving"}
               value={profileTransportLimits.maxJsonStringBytes ?? ""}
               onChange={(e) => {
                 const v = parsePositiveIntegerInput(e.target.value);
@@ -562,7 +522,7 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
                       <Select
                         aria-label={`Policy preset for ${upstreamId}`}
                         value={preset}
-                        disabled={!profile || saveMutation.isPending}
+                        disabled={!profile || autosave.status === "saving"}
                         onChange={(e) =>
                           setOverridePreset(upstreamId, e.target.value as UpstreamPreset)
                         }
@@ -591,7 +551,7 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
                   <PolicyEditor
                     policy={effective}
                     onChange={(p) => updateOverride(upstreamId, p)}
-                    disabled={!profile || saveMutation.isPending}
+                    disabled={!profile || autosave.status === "saving"}
                   />
                 ) : null}
               </div>

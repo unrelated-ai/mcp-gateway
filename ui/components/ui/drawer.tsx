@@ -16,6 +16,7 @@ interface DrawerProps {
   description?: ReactNode;
   /** Panel width; defaults to a detail-inspector width. */
   widthClassName?: string;
+  side?: "left" | "right";
 }
 
 /** Right-side inspector panel for record details (audit events, etc.). */
@@ -26,6 +27,7 @@ export function Drawer({
   title,
   description,
   widthClassName = "max-w-xl",
+  side = "right",
 }: DrawerProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -91,8 +93,8 @@ export function Drawer({
         aria-labelledby={title ? titleId : undefined}
         tabIndex={-1}
         className={`
-          absolute inset-y-0 right-0 w-full ${widthClassName}
-          flex flex-col border-l border-edge-strong bg-surface shadow-2xl shadow-black/50
+          absolute inset-y-0 ${side === "left" ? "left-0 border-r" : "right-0 border-l"} w-full ${widthClassName}
+          flex flex-col border-edge-strong bg-surface shadow-2xl shadow-black/50
           animate-rise focus:outline-none
         `}
       >

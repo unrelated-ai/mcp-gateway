@@ -1,11 +1,11 @@
 use crate::store::Profile;
-use parking_lot::RwLock;
+use crate::ttl_cache::{DEFAULT_CAPACITY, TtlCache};
 use rmcp::model::Tool;
 use serde_json::json;
 use sha2::Digest as _;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolRouteKind {
@@ -33,22 +33,19 @@ pub struct CachedToolsSurface {
 struct CacheEntry {
     profile_id: String,
     profile_fingerprint: String,
-    expires_at: Instant,
     surface: CachedToolsSurface,
 }
 
 #[derive(Clone)]
 pub struct ToolSurfaceCache {
-    ttl: Duration,
-    inner: Arc<RwLock<HashMap<String, CacheEntry>>>,
+    inner: Arc<TtlCache<CacheEntry>>,
 }
 
 impl ToolSurfaceCache {
     #[must_use]
     pub fn new(ttl: Duration) -> Self {
         Self {
-            ttl,
-            inner: Arc::new(RwLock::new(HashMap::new())),
+            inner: Arc::new(TtlCache::new(ttl, DEFAULT_CAPACITY)),
         }
     }
 
@@ -58,19 +55,8 @@ impl ToolSurfaceCache {
         session_token: &str,
         profile_fingerprint: &str,
     ) -> Option<CachedToolsSurface> {
-        let now = Instant::now();
-        let mut map = self.inner.write();
-        let expires_at = map.get(session_token)?.expires_at;
-        if expires_at <= now {
-            map.remove(session_token);
-            return None;
-        }
-        if map.get(session_token)?.profile_fingerprint != profile_fingerprint {
-            // Profile changed: invalidate.
-            map.remove(session_token);
-            return None;
-        }
-        Some(map.get(session_token)?.surface.clone())
+        let entry = self.inner.get(session_token)?;
+        (entry.profile_fingerprint == profile_fingerprint).then_some(entry.surface)
     }
 
     pub fn put(
@@ -80,28 +66,27 @@ impl ToolSurfaceCache {
         profile_fingerprint: String,
         surface: CachedToolsSurface,
     ) {
-        let expires_at = Instant::now() + self.ttl;
-        self.inner.write().insert(
+        self.inner.put(
             session_token,
             CacheEntry {
-                profile_id: profile_id.to_string(),
+                profile_id: profile_id.to_owned(),
                 profile_fingerprint,
-                expires_at,
                 surface,
             },
         );
     }
 
     pub fn invalidate(&self, session_token: &str) {
-        self.inner.write().remove(session_token);
+        self.inner.remove(session_token);
     }
 
     /// Best-effort cache invalidation for HA deployments.
-    ///
-    /// Removes all cached entries for sessions belonging to a given profile.
     pub fn invalidate_profile(&self, profile_id: &str) {
-        let mut map = self.inner.write();
-        map.retain(|_, v| v.profile_id != profile_id);
+        self.inner.retain(|entry| entry.profile_id != profile_id);
+    }
+
+    pub fn prune_expired(&self) -> usize {
+        self.inner.prune_expired()
     }
 }
 

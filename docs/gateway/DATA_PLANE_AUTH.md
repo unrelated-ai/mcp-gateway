@@ -43,72 +43,45 @@ Supported header formats depend on the selected `dataPlaneAuth.mode`:
 
 ## Mode 3: per-profile policy (`dataPlaneAuth`)
 
-Profiles control data-plane auth via:
+The v1 profile policy has three modes:
 
-- `mode`:
-  - `disabled`
-  - `apiKeyInitializeOnly` (default)
-  - `apiKeyEveryRequest`
-  - `jwtEveryRequest`
-- `acceptXApiKey` (default: `false`): whether the `x-api-key` alias is accepted
+| Mode               | Configuration                                           | Client behavior                                            |
+| ------------------ | ------------------------------------------------------- | ---------------------------------------------------------- |
+| `disabled`         | `{ "mode": "disabled" }`                                | No caller authentication for this profile.                 |
+| `apiKey` (default) | `{ "mode": "apiKey", "acceptXApiKey": false }`          | Send the API key on every POST, GET, and DELETE.           |
+| `oauth`            | `{ "mode": "oauth", "requiredScopes": ["mcp:access"] }` | Send an OAuth access token on every POST, GET, and DELETE. |
 
-Recommended for production / internet-exposed profiles:
+API-key sessions remain bound to the key used for initialization. `x-api-key` is
+an optional alias; do not send both credential headers on the same request.
+OAuth sessions remain bound to the issuer and subject used for initialization.
 
-- **`apiKeyEveryRequest`** or **`jwtEveryRequest`** (per-request authentication)
+### OAuth resource-server configuration
 
-The `apiKeyInitializeOnly` mode exists for compatibility with some MCP clients, but it is less secure.
+The Gateway delegates login and token issuance to an external authorization server.
+It publishes protected-resource metadata at
+`/.well-known/oauth-protected-resource/{profile_id}/mcp` and supplies discovery
+information through `WWW-Authenticate` challenges.
 
-UI note:
+Configure these process-wide values before creating OAuth profiles:
 
-- The Gateway UI creates new profiles with **`apiKeyEveryRequest`** by default and keeps `acceptXApiKey` **off** by default.
+- `UNRELATED_GATEWAY_PUBLIC_DATA_BASE_URL`: externally reachable Gateway base URL,
+  including any reverse-proxy path prefix.
+- `UNRELATED_GATEWAY_OAUTH_ISSUER`: the authorization server issuer.
+- `UNRELATED_GATEWAY_OAUTH_JWKS_URI`: optional explicit JWKS endpoint; otherwise
+  use authorization-server/OIDC discovery.
+- `UNRELATED_GATEWAY_OAUTH_LEEWAY_SECS`: optional, default `60`.
+- `UNRELATED_GATEWAY_OAUTH_JWKS_REFRESH_SECS`: optional, default `600`.
 
-### `apiKeyInitializeOnly` (compatibility; not recommended)
+The runtime currently supports one data-plane issuer and RS256 access tokens.
+The token audience must contain the exact profile resource URL:
+`<PUBLIC_DATA_BASE_URL>/<profile_id>/mcp`. Required scopes default to `mcp:access`.
+A matching tenant-wide or profile-specific issuer/subject binding is also required.
 
-- The client must provide an API key **only for `initialize`**.
-- The resulting Gateway session token (`Mcp-Session-Id`) embeds `{tenant_id, api_key_id}`.
-- Subsequent requests only need `Mcp-Session-Id`, but the Gateway still:
-  - checks the key is not revoked, and
-  - meters usage counters per key.
+Control-plane OIDC continues to use the separate
+`UNRELATED_GATEWAY_CONTROL_PLANE_OIDC_*` configuration. Tenant Web UI login still
+uses tenant tokens; enabling data-plane OAuth does not change that login flow.
 
-This mode is the most compatible with MCP clients that may not easily attach extra headers on the SSE `GET` stream, but it increases the impact of a leaked session token (session replay until expiry).
-
-### `apiKeyEveryRequest`
-
-- The client must provide an API key header on **every** data-plane request (`POST`/`GET`/`DELETE`), in addition to `Mcp-Session-Id`.
-- The Gateway verifies that the API key matches the key used during `initialize`.
-
-### `disabled`
-
-- The data plane is public for that profile.
-- Use only for local/dev or explicitly public endpoints.
-
-### `jwtEveryRequest` (Mode 3 only; no other JWT modes)
-
-- The client must send `Authorization: Bearer <jwt>` on **every** data-plane request (`POST`/`GET`/`DELETE`).
-- The Gateway validates JWT signature via OIDC discovery + JWKS.
-- There is no “JWT on initialize only” mode.
-- The Gateway session token (`Mcp-Session-Id`) is **bound to the OIDC principal** (`issuer` + `subject`) from `initialize`; subsequent requests are rejected if the JWT principal does not match the session.
-
-Authorization model (current):
-
-- We do **not** use JWT claims for RBAC.
-- After validating the token, the Gateway extracts a principal id (`sub`, or `oid` for Entra) and checks a DB-backed binding:
-  - tenant-wide: principal can access **any** profile owned by the tenant
-  - profile-scoped: principal can access **only** the bound profile
-
-Configuration is global (gateway process):
-
-- `UNRELATED_GATEWAY_OIDC_ISSUER` (enables OIDC when set)
-- `UNRELATED_GATEWAY_OIDC_AUDIENCE` (comma-separated, optional)
-- `UNRELATED_GATEWAY_OIDC_JWKS_URI` (optional override; otherwise uses `/.well-known/openid-configuration`)
-- `UNRELATED_GATEWAY_OIDC_LEEWAY_SECS` (optional, default `60`)
-- `UNRELATED_GATEWAY_OIDC_JWKS_REFRESH_SECS` (optional, default `600`)
-
-Security notes:
-
-- Discovery + JWKS fetches do **not** follow redirects (SSRF hardening).
-- Discovered `jwks_uri` must be **HTTPS**. If you need HTTP for local development, set `UNRELATED_GATEWAY_OIDC_JWKS_URI` explicitly (the gateway will warn).
-- JWTs with a JOSE `crit` header are rejected (we do not support critical JOSE extensions).
+For migration from the old modes and environment variables, see [Upgrading to v1](V1_UPGRADE.md).
 
 #### Managing OIDC principal bindings (Mode 3)
 
@@ -157,7 +130,8 @@ Secrets are not stored; the Gateway stores only:
 
 ## Mode 1 (config file): optional static API keys
 
-Mode 1 is intended for local/dev simplicity.
+Mode 1 uses file-driven configuration. Static API keys are required on every request.
+The old `requireEveryRequest` setting is removed and must be deleted from configuration.
 
 - If `dataPlaneAuth.mode: none`, the gateway starts unauthenticated and logs a **loud warning**.
 - If `dataPlaneAuth.mode: static-api-keys`, the data plane requires one of the configured secrets.
@@ -170,7 +144,6 @@ dataPlaneAuth:
   apiKeys:
     - "ugw_sk_..."
   acceptXApiKey: false
-  requireEveryRequest: false
 ```
 
 > Mode 3 compatibility: when `--database-url` is provided, Mode 1 `dataPlaneAuth` config is rejected at startup to avoid ambiguity (Mode 3 uses DB-managed keys).

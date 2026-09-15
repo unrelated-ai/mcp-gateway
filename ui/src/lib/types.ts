@@ -1,13 +1,9 @@
-export type DataPlaneAuthMode =
-  | "disabled"
-  | "apiKeyInitializeOnly"
-  | "apiKeyEveryRequest"
-  | "jwtEveryRequest";
+export type DataPlaneAuthMode = "disabled" | "apiKey" | "oauth";
 
-export type DataPlaneAuthSettings = {
-  mode: DataPlaneAuthMode;
-  acceptXApiKey: boolean;
-};
+export type DataPlaneAuthSettings =
+  | { mode: "disabled" }
+  | { mode: "apiKey"; acceptXApiKey: boolean }
+  | { mode: "oauth"; requiredScopes: string[] };
 
 export type DataPlaneLimitsSettings = {
   rateLimitEnabled: boolean;
