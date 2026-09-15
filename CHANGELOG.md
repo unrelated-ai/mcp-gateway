@@ -12,6 +12,7 @@
   fallback to an HTTP client without safety protections.
 - Restricted outbound clients now ignore system proxy environment variables because a
   proxy can resolve destinations independently. Fully permissive policies retain proxy support.
+- Updated Rustls to `0.23.45` for [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285.html).
 - Added an isolated DNS regression suite that checks for internal requests, including
   when proxy environment variables are configured. No database migration is required.
 
