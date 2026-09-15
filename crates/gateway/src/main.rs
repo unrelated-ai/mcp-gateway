@@ -198,7 +198,8 @@ async fn run(args: CliArgs) -> anyhow::Result<()> {
 
     audit_retention::spawn_audit_retention_task(pg_pool.clone(), ct.clone());
 
-    let http = build_no_redirect_http_client("upstream HTTP client")?;
+    let http =
+        outbound_safety::UpstreamHttpClients::new().context("build upstream HTTP clients")?;
     let oidc_http = build_no_redirect_http_client("OAuth/OIDC HTTP client")?;
     let oauth = oauth::OAuthRuntime::from_env(oidc_http.clone()).await?;
     if oauth.is_some() && args.database_url.is_none() {

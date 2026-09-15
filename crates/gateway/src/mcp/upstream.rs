@@ -24,7 +24,7 @@ pub(super) struct UpstreamHandshake {
 }
 
 pub(super) async fn upstream_initialize(
-    http: &reqwest::Client,
+    http: &crate::outbound_safety::UpstreamHttpClients,
     mcp_url: &str,
     init_message: &ClientJsonRpcMessage,
     headers: &reqwest::header::HeaderMap,
@@ -42,6 +42,7 @@ pub(super) async fn upstream_initialize(
         anyhow::bail!("upstream endpoint blocked by outbound safety policy: {err}");
     }
 
+    let http = http.for_class(network_class);
     let resp = streamable_http::post_message(
         http,
         mcp_url.to_string().into(),
@@ -258,7 +259,7 @@ pub(super) async fn proxy_to_single_upstream(
     let headers = build_bound_upstream_headers(binding, endpoint.auth.as_ref(), hop + 1);
 
     let resp = streamable_http::post_message(
-        &state.http,
+        state.http.for_class(endpoint.network_class),
         endpoint_url.into(),
         message,
         binding.session.clone().map(Into::into),
@@ -340,6 +341,7 @@ pub(super) async fn resolve_endpoint(
             crate::endpoint_cache::UpstreamEndpoint {
                 url: e.url,
                 auth: e.auth,
+                network_class: upstream.network_class,
             },
         );
     }
@@ -386,7 +388,7 @@ where
             let endpoint_url = apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
             let headers = build_bound_upstream_headers(binding, endpoint.auth.as_ref(), ctx.hop + 1);
             let response = streamable_http::post_message(
-                &ctx.state.http, endpoint_url.into(), build_request(),
+                ctx.state.http.for_class(endpoint.network_class), endpoint_url.into(), build_request(),
                 binding.session.clone().map(Into::into), &headers,
             ).await;
             match response {

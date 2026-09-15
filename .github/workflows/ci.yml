@@ -43,6 +43,10 @@ jobs:
       - name: Test
         run: cargo test --workspace --all-targets
 
+      - name: Outbound DNS rebinding regression (isolated network)
+        timeout-minutes: 5
+        run: cargo test -p unrelated-mcp-gateway --bin unrelated-mcp-gateway outbound_dns_rebinding -- --ignored --nocapture
+
       - name: OpenAPI inspection regression (PostgreSQL)
         timeout-minutes: 5
         run: cargo test -p unrelated-mcp-gateway --test integration_openapi_inspect -- --ignored --nocapture

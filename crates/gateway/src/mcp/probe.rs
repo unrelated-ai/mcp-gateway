@@ -13,6 +13,7 @@ const PROBE_HEADERS_HOP: u32 = 1;
 #[derive(Debug, Clone)]
 struct UpstreamCtx {
     upstream_id: String,
+    network_class: crate::store::UpstreamNetworkClass,
     endpoint_url: String,
     headers: reqwest::header::HeaderMap,
     session_id: Option<String>,
@@ -88,6 +89,7 @@ async fn initialize_upstream_probe_session(
                 }
                 return Ok(UpstreamCtx {
                     upstream_id: upstream_id.to_string(),
+                    network_class: upstream.network_class,
                     endpoint_url,
                     headers,
                     session_id: handshake.session_id,
@@ -323,7 +325,7 @@ async fn post_and_read_first(
 ) -> Result<ServerResult, String> {
     tokio::time::timeout(PROBE_TIMEOUT, async {
         let response = streamable_http::post_message(
-            &state.http,
+            state.http.for_class(u.network_class),
             u.endpoint_url.clone().into(),
             request,
             u.session_id.clone().map(Into::into),
@@ -430,7 +432,7 @@ async fn cleanup_upstream_sessions(state: &McpState, upstreams: &[UpstreamCtx]) 
         .filter_map(|u| {
             u.session_id.as_ref().map(|session_id| {
                 streamable_http::delete_session(
-                    &state.http,
+                    state.http.for_class(u.network_class),
                     u.endpoint_url.clone().into(),
                     session_id.clone().into(),
                     &u.headers,

@@ -757,12 +757,13 @@ async fn resolve_upstream_endpoint_url(
 async fn post_upstream_with_retry(
     call: &UpstreamToolCall<'_>,
     binding: &crate::session_token::UpstreamSessionBinding,
-    endpoint_url: &str,
+    endpoint: &crate::endpoint_cache::UpstreamEndpoint,
     headers: &reqwest::header::HeaderMap,
     retry: Option<&RetryPolicy>,
     max_attempts: u32,
     deadline: std::time::Instant,
 ) -> Result<StreamableHttpPostResponse, Response> {
+    let endpoint_url = super::upstream::apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
     let mut attempt: u32 = 1;
     loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
@@ -777,8 +778,8 @@ async fn post_upstream_with_retry(
         inject_timeout_budget_meta(&mut msg, remaining);
 
         let fut = streamable_http::post_message(
-            &call.state.http,
-            endpoint_url.to_owned().into(),
+            call.state.http.for_class(endpoint.network_class),
+            endpoint_url.clone().into(),
             msg,
             binding.session.clone().map(Into::into),
             headers,
@@ -856,7 +857,6 @@ async fn proxy_upstream_tool_call_with_retry(
             "proxy loop detected (max hops exceeded)".to_string(),
         ));
     }
-    let endpoint_url = super::upstream::apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
     let headers = super::upstream::build_bound_upstream_headers(
         binding,
         endpoint.auth.as_ref(),
@@ -867,7 +867,7 @@ async fn proxy_upstream_tool_call_with_retry(
     let resp = post_upstream_with_retry(
         &call,
         binding,
-        &endpoint_url,
+        &endpoint,
         &headers,
         retry.as_ref(),
         max_attempts,

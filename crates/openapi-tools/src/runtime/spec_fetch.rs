@@ -1,6 +1,4 @@
-use super::{
-    AuthConfig, Client, OpenApiToolSource, OpenApiToolsError, RedirectPolicy, Result, Url,
-};
+use super::{AuthConfig, OpenApiToolSource, OpenApiToolsError, RedirectPolicy, Result, Url};
 use unrelated_http_tools::safety::{redact_url, sanitize_reqwest_error};
 
 impl OpenApiToolSource {
@@ -17,7 +15,9 @@ impl OpenApiToolSource {
             || !url.username().is_empty()
             || url.password().is_some();
         let origin = url.origin();
-        let client = Client::builder()
+        let client = self
+            .safety
+            .client_builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| fetch_error(sanitize_reqwest_error(&e)))?;

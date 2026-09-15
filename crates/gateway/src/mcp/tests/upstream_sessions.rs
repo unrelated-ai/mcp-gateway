@@ -130,7 +130,7 @@ async fn gateway_state(upstream_base: &str, profile_id: &str) -> anyhow::Result<
             upstreams,
         }),
         signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))?,
-        http: reqwest::Client::default(),
+        http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
         oauth: None,
         shutdown: CancellationToken::new(),
         audit: Arc::new(crate::audit::NoopAuditSink),

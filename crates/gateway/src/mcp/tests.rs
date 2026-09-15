@@ -723,7 +723,7 @@ async fn post_returns_jsonrpc_invalid_request_for_valid_json_invalid_shape_when_
     let state = Arc::new(McpState {
         store,
         signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60)).expect("signer"),
-        http: reqwest::Client::default(),
+        http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
         oauth: None,
         shutdown: CancellationToken::new(),
         audit: Arc::new(crate::audit::NoopAuditSink),
@@ -813,7 +813,7 @@ async fn post_rejects_when_post_body_limit_exceeded() {
     let state = Arc::new(McpState {
         store,
         signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60)).expect("signer"),
-        http: reqwest::Client::default(),
+        http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
         oauth: None,
         shutdown: CancellationToken::new(),
         audit: Arc::new(crate::audit::NoopAuditSink),
@@ -889,7 +889,7 @@ async fn post_returns_jsonrpc_error_when_json_complexity_limit_exceeded() {
     let state = Arc::new(McpState {
         store,
         signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60)).expect("signer"),
-        http: reqwest::Client::default(),
+        http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
         oauth: None,
         shutdown: CancellationToken::new(),
         audit: Arc::new(crate::audit::NoopAuditSink),
@@ -1012,7 +1012,7 @@ async fn initialize_profile_sources_fails_over_endpoints() {
     let state = McpState {
         store,
         signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60)).expect("signer"),
-        http: reqwest::Client::default(),
+        http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
         oauth: None,
         shutdown: CancellationToken::new(),
         audit: Arc::new(crate::audit::NoopAuditSink),
@@ -1127,7 +1127,7 @@ async fn upstream_server_to_client_request_blocking_drops_event_and_errors_upstr
     let state = McpState {
         store,
         signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60)).expect("signer"),
-        http: reqwest::Client::default(),
+        http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
         oauth: None,
         shutdown: CancellationToken::new(),
         audit: Arc::new(crate::audit::NoopAuditSink),
@@ -1385,7 +1385,7 @@ sharedSources:
     let state = McpState {
         store,
         signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60)).expect("signer"),
-        http: reqwest::Client::default(),
+        http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
         oauth: None,
         shutdown: CancellationToken::new(),
         audit: Arc::new(crate::audit::NoopAuditSink),
@@ -1484,7 +1484,7 @@ sharedSources:
     let state = McpState {
         store,
         signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60)).expect("signer"),
-        http: reqwest::Client::default(),
+        http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
         oauth: None,
         shutdown: CancellationToken::new(),
         audit: Arc::new(crate::audit::NoopAuditSink),
@@ -1573,7 +1573,7 @@ sharedSources:
     let state = McpState {
         store,
         signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60)).expect("signer"),
-        http: reqwest::Client::default(),
+        http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
         oauth: None,
         shutdown: CancellationToken::new(),
         audit: Arc::new(crate::audit::NoopAuditSink),
@@ -1696,7 +1696,7 @@ async fn tool_call_propagates_timeout_budget_meta_and_retries_when_configured() 
     let state = McpState {
         store,
         signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60)).expect("signer"),
-        http: reqwest::Client::default(),
+        http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
         oauth: None,
         shutdown: CancellationToken::new(),
         audit: Arc::new(crate::audit::NoopAuditSink),

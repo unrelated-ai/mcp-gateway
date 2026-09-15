@@ -47,7 +47,7 @@ pub struct OpenApiToolSource {
     /// Generated tools
     tools: Arc<RwLock<Vec<GeneratedTool>>>,
     /// HTTP client
-    client: Client,
+    client: std::result::Result<Client, String>,
     /// Base URL for API calls
     base_url: Arc<RwLock<Option<String>>>,
     /// Fallback call timeout (used when API config doesn't specify one)
@@ -226,13 +226,12 @@ impl OpenApiToolSource {
         probe_timeout: Duration,
         safety: OutboundHttpSafety,
     ) -> Self {
-        let client = match safety.redirects {
-            RedirectPolicy::None => reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .unwrap_or_else(|_| Client::new()),
-            RedirectPolicy::Checked => Client::new(),
-        };
+        // Preserve the infallible constructor API, but surface build failures during use.
+        // Never fall back to a client without outbound safety protections.
+        let client = safety
+            .client_builder()
+            .build()
+            .map_err(|e| sanitize_reqwest_error(&e));
 
         Self {
             name,
@@ -301,6 +300,12 @@ impl OpenApiToolSource {
         Ok(src)
     }
 
+    fn client(&self) -> Result<&Client> {
+        self.client.as_ref().map_err(|error| {
+            OpenApiToolsError::Startup(format!("Failed to build safe HTTP client: {error}"))
+        })
+    }
+
     async fn probe_base_url(&self, base_url: &str) -> Result<()> {
         if !self.probe_enabled {
             return Ok(());
@@ -318,7 +323,7 @@ impl OpenApiToolSource {
         // We consider *any* HTTP response as "reachable" (401/403/404 are fine).
         // Only transport errors / timeouts fail the probe.
         let res = self
-            .client
+            .client()?
             .head(url)
             .timeout(self.probe_timeout)
             .send()
@@ -400,7 +405,7 @@ impl OpenApiToolSource {
     /// Discover tools from the `OpenAPI` spec.
     async fn discover_tools(&self, spec: &OpenAPI) -> Result<Vec<GeneratedTool>> {
         let root_doc = DocId::parse(&self.config.spec)?;
-        let resolver = OpenApiResolver::new(root_doc, spec, &self.client, &self.safety)?;
+        let resolver = OpenApiResolver::new(root_doc, spec, self.client()?, &self.safety)?;
         let mut tools = Vec::new();
         let mut tool_names: HashSet<String> = HashSet::new();
         let mut ops: Vec<OperationInfo> = Vec::new();
@@ -1122,7 +1127,7 @@ impl OpenApiToolSource {
             .map_err(|e| OpenApiToolsError::Http(e.to_string()))?;
 
         // Build request
-        let mut request = self.client.request(tool.method.clone(), url);
+        let mut request = self.client()?.request(tool.method.clone(), url);
         request = self.apply_auth(request);
         request = self.apply_headers(request, parts.headers);
         request = Self::apply_body(request, parts.body_payload.as_ref(), &parts.body_fields);
@@ -2017,6 +2022,7 @@ impl OpenApiToolSource {
     ///
     /// Returns an error if spec loading/parsing, tool discovery, or reachability probing fails.
     pub async fn start(&self) -> Result<()> {
+        self.client()?;
         let startup_timeout = self.startup_timeout;
 
         let startup = async {

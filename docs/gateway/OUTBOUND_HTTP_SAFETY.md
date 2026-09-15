@@ -23,6 +23,11 @@ So the default Gateway policy blocks destinations that resolve to:
 
 This is implemented by `OutboundHttpSafety::gateway_default()` in `crates/http-tools/src/safety.rs`.
 
+When private networks are blocked or a host allowlist is set, outbound requests ignore
+system proxy environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and
+lowercase forms). These requests require direct egress so the Gateway can validate
+the destination IP. Fully permissive policies retain proxy support.
+
 ## Opt-in override (explicit operator choice)
 
 You can opt into allowing private network destinations by setting:
@@ -106,4 +111,3 @@ This policy applies to:
 - **upstream MCP endpoint URLs** (when the Gateway connects to upstream MCP servers over Streamable HTTP).
 
 It does not change the Gateway’s “no Authorization passthrough” stance.
-

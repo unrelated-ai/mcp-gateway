@@ -8,7 +8,7 @@ use crate::config::{
     AuthConfig, HttpParamLocation, HttpResponseMode, HttpServerConfig, QueryStyleConfig,
 };
 use crate::response_shaping::CompiledResponsePipeline;
-use crate::safety::{OutboundHttpSafety, RedirectPolicy, sanitize_reqwest_error};
+use crate::safety::{OutboundHttpSafety, sanitize_reqwest_error};
 use base64::Engine as _;
 use mime::Mime;
 use openapiv3::QueryStyle;
@@ -151,13 +151,10 @@ impl HttpToolSource {
         let name = name.into();
         let tools = generate_tools(&name, &config)?;
 
-        let client = match safety.redirects {
-            RedirectPolicy::None => reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .map_err(HttpToolsError::from)?,
-            RedirectPolicy::Checked => Client::new(),
-        };
+        let client = safety
+            .client_builder()
+            .build()
+            .map_err(HttpToolsError::from)?;
 
         Ok(Self {
             inner: Arc::new(HttpToolSourceInner {

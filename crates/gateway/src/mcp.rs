@@ -180,7 +180,7 @@ async fn record_payload_limit_exceeded(audit: &dyn AuditSink, a: PayloadLimitExc
 pub struct McpState {
     pub store: Arc<dyn Store>,
     pub signer: SessionSigner,
-    pub http: reqwest::Client,
+    pub http: crate::outbound_safety::UpstreamHttpClients,
     pub oauth: Option<OAuthRuntime>,
     pub shutdown: CancellationToken,
     pub audit: Arc<dyn AuditSink>,
@@ -343,7 +343,7 @@ async fn forward_proxied_response_if_any(
     let endpoint_url = upstream::apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
     let headers = upstream::build_bound_upstream_headers(binding, endpoint.auth.as_ref(), hop + 1);
     let _ = streamable_http::post_message(
-        &state.http,
+        state.http.for_class(endpoint.network_class),
         endpoint_url.into(),
         message.clone(),
         binding.session.clone().map(Into::into),
@@ -369,7 +369,7 @@ async fn broadcast_notification_best_effort(
             let headers =
                 upstream::build_bound_upstream_headers(binding, endpoint.auth.as_ref(), hop + 1);
             let _ = streamable_http::post_message(
-                &state.http,
+                state.http.for_class(endpoint.network_class),
                 endpoint_url.into(),
                 msg.clone(),
                 binding.session.clone().map(Into::into),
@@ -432,7 +432,7 @@ async fn forward_notification_if_any(
             let headers =
                 upstream::build_bound_upstream_headers(binding, endpoint.auth.as_ref(), hop + 1);
             let _ = streamable_http::post_message(
-                &state.http,
+                state.http.for_class(endpoint.network_class),
                 endpoint_url.into(),
                 message.clone(),
                 binding.session.clone().map(Into::into),
@@ -579,7 +579,7 @@ async fn handle_logging_set_level_in_session(
             let headers =
                 upstream::build_bound_upstream_headers(binding, endpoint.auth.as_ref(), hop + 1);
             let _ = streamable_http::post_message(
-                &state.http,
+                state.http.for_class(endpoint.network_class),
                 endpoint_url.into(),
                 message.clone(),
                 binding.session.clone().map(Into::into),
@@ -841,7 +841,7 @@ async fn handle_delete(
             let headers =
                 upstream::build_bound_upstream_headers(binding, endpoint.auth.as_ref(), hop + 1);
             let _ = streamable_http::delete_session(
-                &state.http,
+                state.http.for_class(endpoint.network_class),
                 endpoint_url.into(),
                 session_id.to_owned().into(),
                 &headers,

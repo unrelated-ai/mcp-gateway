@@ -622,7 +622,7 @@ async fn open_upstream_stream(
     };
 
     let upstream = streamable_http::get_stream(
-        &state.http,
+        state.http.for_class(endpoint.network_class),
         endpoint_url.clone(),
         binding.session.clone().map(Into::into),
         upstream_last,
@@ -655,7 +655,7 @@ async fn open_upstream_stream(
         ns_evt: profile.mcp.namespacing.sse_event_id,
         counts: resource_collision_counts.clone(),
         proxy_key: proxy_key.clone(),
-        http: state.http.clone(),
+        http: state.http.for_class(endpoint.network_class).clone(),
         limits,
         limits_shutdown: limits_shutdown.clone(),
         audit: state.audit.clone(),

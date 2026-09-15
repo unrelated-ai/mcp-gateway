@@ -139,3 +139,48 @@ pub(crate) async fn delete_session(
     req.send().await.map_err(StreamableHttpError::Client)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod dns_rebinding;
+
+#[cfg(test)]
+mod safety_tests {
+    use crate::outbound_safety::UpstreamHttpClients;
+    use crate::store::UpstreamNetworkClass;
+    use unrelated_http_tools::safety::OutboundHttpSafety;
+
+    #[tokio::test]
+    async fn managed_pool_cannot_authorize_external_dns_connections() {
+        use axum::{Router, routing::get};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let task = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route("/", get(|| async { "managed" })),
+            )
+            .await
+            .unwrap();
+        });
+        let clients =
+            UpstreamHttpClients::with_safety(OutboundHttpSafety::gateway_default()).unwrap();
+        let url = format!("http://localhost:{port}/");
+        let managed = clients.for_class(UpstreamNetworkClass::ClusterInternalManaged);
+        assert_eq!(
+            managed
+                .get(&url)
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            "managed"
+        );
+        // Even after a successful managed request to the same origin, the external
+        // client's pool/resolver cannot reuse that permitted private connection.
+        let external = clients.for_class(UpstreamNetworkClass::External);
+        assert!(external.get(&url).send().await.unwrap_err().is_connect());
+        task.abort();
+    }
+}

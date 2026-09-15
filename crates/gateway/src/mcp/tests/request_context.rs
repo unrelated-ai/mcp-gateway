@@ -26,7 +26,7 @@ async fn post_loads_configuration_once_and_refreshes_it_for_the_next_request() -
     let state = Arc::new(McpState {
         store: store.clone(),
         signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))?,
-        http: reqwest::Client::default(),
+        http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
         oauth: None,
         shutdown: CancellationToken::new(),
         audit: Arc::new(crate::audit::NoopAuditSink),
