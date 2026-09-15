@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 2026-09-15
 
-### Outbound HTTP security (Gateway `0.13.4`, pending release)
+### Outbound HTTP security (Gateway `0.13.4`)
 
 - Fixed DNS rebinding bypasses in HTTP/OpenAPI tool execution, OpenAPI spec and reference
   downloads, reachability probes, and upstream MCP requests by validating the actual
@@ -13,11 +13,12 @@
 - Restricted outbound clients now ignore system proxy environment variables because a
   proxy can resolve destinations independently. Fully permissive policies retain proxy support.
 - Updated Rustls to `0.23.45` for [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285.html).
+- Updated the migrator's gRPC dependency to `1.83.2` for CVE-2026-84445.
 - Added an isolated DNS regression suite that checks for internal requests, including
   when proxy environment variables are configured. No database migration is required.
 
-Gateway, admin CLI, Operator, and migrator versions are prepared as `0.13.4`; Gateway,
-Operator, and stack charts are `0.2.8`. These artifacts have not been published yet.
+Gateway, admin CLI, Operator, and migrator versions are `0.13.4`; Gateway,
+Operator, and stack charts are `0.2.8`.
 
 ## 2026-09-08
 
