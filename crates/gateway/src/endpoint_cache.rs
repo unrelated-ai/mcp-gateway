@@ -14,6 +14,7 @@ struct Entry {
 pub struct UpstreamEndpoint {
     pub url: String,
     pub auth: Option<AuthConfig>,
+    pub network_class: crate::store::UpstreamNetworkClass,
 }
 
 #[derive(Clone)]

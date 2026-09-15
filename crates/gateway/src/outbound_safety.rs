@@ -1,6 +1,42 @@
 use crate::store::UpstreamNetworkClass;
 use unrelated_http_tools::safety::OutboundHttpSafety;
 
+/// Separate connection pools keep the managed-network exception out of external requests.
+#[derive(Clone)]
+pub struct UpstreamHttpClients {
+    external: reqwest::Client,
+    managed: reqwest::Client,
+}
+
+impl UpstreamHttpClients {
+    pub fn new() -> Result<Self, reqwest::Error> {
+        Self::with_safety(gateway_outbound_http_safety())
+    }
+
+    pub(crate) fn with_safety(safety: OutboundHttpSafety) -> Result<Self, reqwest::Error> {
+        let build = |safety: &OutboundHttpSafety| {
+            safety
+                .client_builder()
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .build()
+        };
+        let external = build(&safety)?;
+        let mut managed_safety = safety;
+        managed_safety.allow_private_networks = true;
+        Ok(Self {
+            external,
+            managed: build(&managed_safety)?,
+        })
+    }
+
+    pub fn for_class(&self, network_class: UpstreamNetworkClass) -> &reqwest::Client {
+        match network_class {
+            UpstreamNetworkClass::External => &self.external,
+            UpstreamNetworkClass::ClusterInternalManaged => &self.managed,
+        }
+    }
+}
+
 /// Outbound HTTP safety policy for the Gateway.
 ///
 /// Default is restrictive (SSRF hardening). For local development/testing you can opt into

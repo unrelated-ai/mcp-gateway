@@ -166,7 +166,7 @@ async fn record_payload_limit_exceeded(audit: &dyn AuditSink, a: PayloadLimitExc
 pub struct McpState {
     pub store: Arc<dyn Store>,
     pub signer: SessionSigner,
-    pub http: reqwest::Client,
+    pub http: crate::outbound_safety::UpstreamHttpClients,
     pub oidc: Option<OidcValidator>,
     pub shutdown: CancellationToken,
     pub audit: Arc<dyn AuditSink>,
@@ -990,7 +990,7 @@ async fn forward_proxied_response_if_any(
     let endpoint_url = upstream::apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
     let headers = upstream::build_upstream_headers(endpoint.auth.as_ref(), hop + 1);
     let _ = streamable_http::post_message(
-        &state.http,
+        state.http.for_class(endpoint.network_class),
         endpoint_url.into(),
         message.clone(),
         Some(binding.session.clone().into()),
@@ -1015,7 +1015,7 @@ async fn broadcast_notification_best_effort(
             let endpoint_url = upstream::apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
             let headers = upstream::build_upstream_headers(endpoint.auth.as_ref(), hop + 1);
             let _ = streamable_http::post_message(
-                &state.http,
+                state.http.for_class(endpoint.network_class),
                 endpoint_url.into(),
                 msg.clone(),
                 Some(binding.session.clone().into()),
@@ -1073,7 +1073,7 @@ async fn forward_notification_if_any(
             let endpoint_url = upstream::apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
             let headers = upstream::build_upstream_headers(endpoint.auth.as_ref(), hop + 1);
             let _ = streamable_http::post_message(
-                &state.http,
+                state.http.for_class(endpoint.network_class),
                 endpoint_url.into(),
                 message.clone(),
                 Some(binding.session.clone().into()),
@@ -1219,7 +1219,7 @@ async fn handle_logging_set_level_in_session(
             let endpoint_url = upstream::apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
             let headers = upstream::build_upstream_headers(endpoint.auth.as_ref(), hop + 1);
             let _ = streamable_http::post_message(
-                &state.http,
+                state.http.for_class(endpoint.network_class),
                 endpoint_url.into(),
                 message.clone(),
                 Some(binding.session.clone().into()),
@@ -2023,7 +2023,7 @@ async fn open_upstream_streams(
         };
 
         let upstream = streamable_http::get_stream(
-            &state.http,
+            state.http.for_class(endpoint.network_class),
             endpoint_url.clone(),
             binding.session.clone().into(),
             upstream_last,
@@ -2052,7 +2052,7 @@ async fn open_upstream_streams(
             ns_evt: profile.mcp.namespacing.sse_event_id,
             counts: resource_collision_counts.clone(),
             proxy_key: proxy_key.clone(),
-            http: state.http.clone(),
+            http: state.http.for_class(endpoint.network_class).clone(),
             limits,
             limits_shutdown: limits_shutdown.clone(),
             audit: state.audit.clone(),
@@ -2219,7 +2219,7 @@ async fn handle_delete(
             let endpoint_url = upstream::apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
             let headers = upstream::build_upstream_headers(endpoint.auth.as_ref(), hop + 1);
             let _ = streamable_http::delete_session(
-                &state.http,
+                state.http.for_class(endpoint.network_class),
                 endpoint_url.into(),
                 binding.session.clone().into(),
                 &headers,
@@ -3313,7 +3313,7 @@ mod tests {
             store,
             signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
                 .expect("signer"),
-            http: reqwest::Client::default(),
+            http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
             oidc: None,
             shutdown: CancellationToken::new(),
             audit: Arc::new(crate::audit::NoopAuditSink),
@@ -3403,7 +3403,7 @@ mod tests {
             store,
             signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
                 .expect("signer"),
-            http: reqwest::Client::default(),
+            http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
             oidc: None,
             shutdown: CancellationToken::new(),
             audit: Arc::new(crate::audit::NoopAuditSink),
@@ -3479,7 +3479,7 @@ mod tests {
             store,
             signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
                 .expect("signer"),
-            http: reqwest::Client::default(),
+            http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
             oidc: None,
             shutdown: CancellationToken::new(),
             audit: Arc::new(crate::audit::NoopAuditSink),
@@ -3603,7 +3603,7 @@ mod tests {
             store,
             signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
                 .expect("signer"),
-            http: reqwest::Client::default(),
+            http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
             oidc: None,
             shutdown: CancellationToken::new(),
             audit: Arc::new(crate::audit::NoopAuditSink),
@@ -3716,7 +3716,7 @@ mod tests {
             store,
             signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
                 .expect("signer"),
-            http: reqwest::Client::default(),
+            http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
             oidc: None,
             shutdown: CancellationToken::new(),
             audit: Arc::new(crate::audit::NoopAuditSink),
@@ -3975,7 +3975,7 @@ sharedSources:
             store,
             signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
                 .expect("signer"),
-            http: reqwest::Client::default(),
+            http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
             oidc: None,
             shutdown: CancellationToken::new(),
             audit: Arc::new(crate::audit::NoopAuditSink),
@@ -4073,7 +4073,7 @@ sharedSources:
             store,
             signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
                 .expect("signer"),
-            http: reqwest::Client::default(),
+            http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
             oidc: None,
             shutdown: CancellationToken::new(),
             audit: Arc::new(crate::audit::NoopAuditSink),
@@ -4163,7 +4163,7 @@ sharedSources:
             store,
             signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
                 .expect("signer"),
-            http: reqwest::Client::default(),
+            http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
             oidc: None,
             shutdown: CancellationToken::new(),
             audit: Arc::new(crate::audit::NoopAuditSink),
@@ -4287,7 +4287,7 @@ sharedSources:
             store,
             signer: SessionSigner::new(vec![vec![0u8; 32]], Duration::from_secs(60))
                 .expect("signer"),
-            http: reqwest::Client::default(),
+            http: crate::outbound_safety::UpstreamHttpClients::new().unwrap(),
             oidc: None,
             shutdown: CancellationToken::new(),
             audit: Arc::new(crate::audit::NoopAuditSink),

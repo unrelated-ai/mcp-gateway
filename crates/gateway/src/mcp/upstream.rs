@@ -17,7 +17,7 @@ pub(super) const HOP_HEADER: &str = "x-unrelated-gateway-hop";
 pub(super) const MAX_HOPS: u32 = 8;
 
 pub(super) async fn upstream_initialize(
-    http: &reqwest::Client,
+    http: &crate::outbound_safety::UpstreamHttpClients,
     mcp_url: &str,
     init_message: &ClientJsonRpcMessage,
     headers: &reqwest::header::HeaderMap,
@@ -35,6 +35,7 @@ pub(super) async fn upstream_initialize(
         anyhow::bail!("upstream endpoint blocked by outbound safety policy: {err}");
     }
 
+    let http = http.for_class(network_class);
     let resp = streamable_http::post_message(
         http,
         mcp_url.to_string().into(),
@@ -221,7 +222,7 @@ pub(super) async fn proxy_to_single_upstream(
     let headers = build_upstream_headers(endpoint.auth.as_ref(), hop + 1);
 
     let resp = streamable_http::post_message(
-        &state.http,
+        state.http.for_class(endpoint.network_class),
         endpoint_url.into(),
         message,
         Some(binding.session.clone().into()),
@@ -303,6 +304,7 @@ pub(super) async fn resolve_endpoint_url(
             crate::endpoint_cache::UpstreamEndpoint {
                 url: e.url,
                 auth: e.auth,
+                network_class: upstream.network_class,
             },
         );
     }
@@ -365,7 +367,7 @@ where
         let headers = build_upstream_headers(endpoint.auth.as_ref(), ctx.hop + 1);
         let request = build_request();
         match streamable_http::post_message(
-            &ctx.state.http,
+            ctx.state.http.for_class(endpoint.network_class),
             endpoint_url.into(),
             request,
             Some(binding.session.clone().into()),

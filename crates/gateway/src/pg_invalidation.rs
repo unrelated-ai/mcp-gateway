@@ -326,6 +326,7 @@ mod tests {
             UpstreamEndpoint {
                 url: "https://example.com".to_string(),
                 auth: None,
+                network_class: crate::store::UpstreamNetworkClass::External,
             },
         );
         endpoint_cache.put("upstream-1".to_string(), endpoints);
