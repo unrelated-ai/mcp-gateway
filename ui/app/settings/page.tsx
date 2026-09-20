@@ -7,7 +7,7 @@ import {
   TRANSPORT_LIMIT_PRESETS_MIB,
 } from "@/src/lib/transportLimits";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
 import { useQuery } from "@tanstack/react-query";
 import { Button, ConfirmModal, CopyButton, Input, Select } from "@/components/ui";
@@ -54,12 +54,21 @@ function parsePositiveIntegerInput(raw: string): number | null {
   return normalized;
 }
 
+// Unlocking or locking the session navigates to a new page. Read the cookie only
+// after hydration so the initial browser render matches the server snapshot.
+const subscribeToSession = () => () => {};
+const serverSessionExpiry = () => null;
+
 export default function SettingsPage() {
   const [showConfirmLock, setShowConfirmLock] = useState(false);
   const toast = useToastStore((s) => s.push);
   const { gatewayDataBase: dataBase } = useRuntimeConfig();
   const uiVersion = UI_VERSION;
-  const exp = getTenantExpFromCookies();
+  const exp = useSyncExternalStore(
+    subscribeToSession,
+    getTenantExpFromCookies,
+    serverSessionExpiry,
+  );
   const expHuman = exp ? new Date(exp * 1000).toLocaleString() : "unknown";
   const gatewayStatusQuery = useQuery({
     queryKey: qk.gatewayStatus(),

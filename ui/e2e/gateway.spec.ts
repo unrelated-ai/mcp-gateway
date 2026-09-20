@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { Stack } from "./setup";
@@ -411,6 +411,23 @@ test("phone navigation and profile controls fit, with keyboard dismissal and foc
     main.scrollTop = 0;
   });
   await page.screenshot({ path: testInfo.outputPath("profile-mobile.png") });
+});
+
+test("settings hydrate without browser errors and show tenant audit controls", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${stack.uiBase}/settings`);
+  const audit = page.locator("section").filter({ has: page.getByText("Audit", { exact: true }) });
+  await expect(audit.getByRole("combobox", { name: "Default detail level" })).toHaveValue(
+    "metadata",
+  );
+  const tenant = page
+    .locator("section")
+    .filter({ has: page.getByText("Current tenant", { exact: true }) });
+  await expect(tenant).not.toContainText("unknown");
+  await mkdir(path.join(process.cwd(), "../output/playwright"), { recursive: true });
+  await audit.screenshot({ path: "../output/playwright/tenant-audit-settings.png" });
+  expect(errors).toEqual([]);
 });
 
 test("managed deployment writes enforce tenant sessions and cross-site protection", async ({
