@@ -147,7 +147,7 @@ Gateway-native execution and upstream MCP proxying use a restrictive outbound po
   - Generate a key (example):
 
 ```bash
-export UNRELATED_GATEWAY_SECRET_KEYS="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export UNRELATED_GATEWAY_SECRET_KEYS="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
 ```
 
 - If `openssl` is available, this also works:

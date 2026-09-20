@@ -1,137 +1,115 @@
 # Upgrading to v1
 
-This guide covers the upcoming v1 release on `feat/version_one_zero`.
-v1 images and tags are not yet published. Build all components from the same
-revision when rehearsing an upgrade.
+v1 adds OAuth login, the `unrelated` client CLI, optional native MCP support, and
+profile edit conflict detection. It also changes authentication settings and
+requires database migrations. **Schedule a maintenance window:** old and v1
+Gateway replicas cannot run together during this upgrade.
 
-## What changes
+v1 release images are not yet published. For source builds, use the same revision
+for the Gateway, migrator, UI, Adapter, operator, and CLIs.
 
-- MCP OAuth resource-server support: external login, protected-resource discovery,
-  profile URL audiences, required scopes, and principal bindings.
-- The `unrelated` client CLI: named contexts, login, tool discovery/execution, and an
-  optional compact stdio MCP proxy. The admin CLI remains a separate tool.
-- A simpler authentication configuration and a database migration that requires a
-  maintenance window.
-- Stateful and sessionless upstream interoperability, bounded parallel initialization
-  and discovery, and bounded routing caches.
+## Deployment options
 
-## Choose a deployment
+| Deployment | Components | State to preserve |
+| --- | --- | --- |
+| File configuration (Mode 1) | Gateway and a configuration file | Configuration, credentials, and session keys |
+| Shared configuration (Mode 3) | Gateway and PostgreSQL; optional UI | Database, secret-encryption keys, and session keys |
+| Managed MCP servers | Mode 3 plus the Docker or Kubernetes operator | Shared configuration plus operator and workload settings |
 
-| Recipe                       | Configuration and components                               | State to preserve                                                      |
-| ---------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------- |
-| File-driven Gateway (Mode 1) | Gateway plus config file; optional Adapter for stdio tools | Config, configured credentials, and Gateway session keys.              |
-| Shared Gateway (Mode 3)      | Gateway, PostgreSQL, optional UI and Adapters              | Database, secret-encryption keys, session keys, and upstream services. |
-| Managed workloads            | Mode 3 plus the Docker or Kubernetes operator              | Shared deployment state plus operator/runtime configuration.           |
+Adapters are optional for remote MCP and Gateway-native HTTP/OpenAPI sources.
+They are required to publish stdio MCP servers. Mode 3 works with Docker or
+Kubernetes; see the [Docker quickstart](../../README.md#try-it-locally) or
+[Helm guide](../deploy/HELM.md).
 
-Runtime mode and deployment topology are separate. Mode 3 can run outside Kubernetes.
-Adapters remain optional for remote MCP and Gateway-native HTTP/OpenAPI sources.
-Use the existing [Docker quickstart](../../README.md#try-it-locally) or
-[Helm deployment guide](../deploy/HELM.md) for the corresponding infrastructure.
+## Configuration changes
 
-## Breaking configuration changes
+| Previous setting | v1 setting or action |
+| --- | --- |
+| `apiKeyInitializeOnly` / `apiKeyEveryRequest` | Use `apiKey`. Send credentials on every request. |
+| `jwtEveryRequest` | Use `oauth` and configure an OAuth issuer and the public Gateway base URL. |
+| Mode 1 `requireEveryRequest` | Remove this field, even if its value is `true`. |
+| Data-plane `UNRELATED_GATEWAY_OIDC_*` variables | Use `UNRELATED_GATEWAY_OAUTH_*` and `UNRELATED_GATEWAY_PUBLIC_DATA_BASE_URL`. |
+| Generic JWT audiences | Issue tokens for the exact profile MCP URL. |
 
-| Previous value                                 | v1 value or action                                                                  |
-| ---------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `apiKeyInitializeOnly` / `apiKeyEveryRequest`  | `apiKey`; credentials are required on every request.                                |
-| `jwtEveryRequest`                              | `oauth`; configure the OAuth issuer and public Gateway base URL.                    |
-| Mode 1 `requireEveryRequest`                   | Remove the field, including an explicit `true`. Unknown fields are rejected.        |
-| `UNRELATED_GATEWAY_OIDC_*` for data-plane auth | Configure `UNRELATED_GATEWAY_OAUTH_*` and `UNRELATED_GATEWAY_PUBLIC_DATA_BASE_URL`. |
-| Generic configured JWT audiences               | Issue tokens for the exact profile MCP URL.                                         |
+The migration preserves existing `acceptXApiKey` values. New API-key profiles
+default to `false`, so clients should send `Authorization: Bearer <API_KEY_SECRET>`.
+Migrated JWT profiles require the `mcp:access` scope; configure the issuer or
+update the profile policy accordingly. Control-plane OIDC settings are unchanged.
 
-Existing `acceptXApiKey` database values are preserved. Newly created API-key profiles
-default to `false`. Old JWT profiles acquire a required `mcp:access` scope during the
-migration; configure your issuer accordingly or deliberately update the profile policy.
-Control-plane OIDC variables remain separate and unchanged.
+Update saved API request bodies and automation as well as deployment settings.
+See [authentication](DATA_PLANE_AUTH.md) for configuration examples.
 
-See [data-plane authentication](DATA_PLANE_AUTH.md) for the current API shapes and
-OAuth environment variables. Update scripts and saved profile request bodies too.
+YAML files must not contain duplicate mapping keys. Remove duplicates from
+configuration and OpenAPI files before upgrading.
 
-## Rehearse and perform the upgrade
+## Upgrade procedure
 
-1. Back up the database, configuration, and the encryption/session keys needed to use it.
-   Rehearse against a disposable copy of the current release database.
-2. Update client headers, profile request bodies, issuer configuration, and deployment
-   environment variables. Build matching Gateway, migrator, UI, and CLI artifacts.
-3. Stop old Gateway replicas and pause control-plane writes before applying the v1
-   migration. The migration changes stored authentication mode names; old replicas
-   cannot interpret them. A normal mixed-version rolling upgrade is unsuitable.
-4. Run the matching migrator (the Helm chart uses a migration Job), then start the v1
-   Gateway replicas with shared configuration and keys.
-5. Initialize profiles, list and call representative tools, check direct and compact
-   clients, and verify OAuth login where enabled. Test both stateful and sessionless
-   upstreams. Exercise a request through a different Gateway replica.
-6. Resume normal traffic and control-plane operations after those checks pass.
+1. Back up the database, configuration, secret-encryption keys, and session keys.
+   Test the upgrade and restore procedure against a disposable database copy.
+2. Prepare matching v1 components and apply the configuration changes above.
+3. Stop old Gateway replicas and pause operator and control-plane writes.
+4. Run **all pending migrations** from the matching migrator, then start the v1
+   components. Helm runs migrations through a Job.
+5. Verify existing tenant tokens, API keys, encrypted secrets, profiles, and
+   representative tool calls. Check OAuth login with the configured issuer and
+   verify routing through more than one replica where applicable.
+6. Resume traffic and configuration writes after verification succeeds.
 
-Rollback must restore compatible application configuration and database state together.
-The down migration maps API-key profiles to every-request authentication; it cannot
-reconstruct which profiles previously used initialize-only authentication.
+Rollback must restore compatible application configuration and database state
+together. The authentication down migration restores every-request API-key
+authentication; it cannot recover which profiles previously used initialize-only
+authentication. Preserve the backup until the upgrade is accepted.
 
-## What survives a restart
+## Client compatibility
 
-With shared session keys and configuration, another Gateway replica can read a routing
-token. This does not preserve a stateful upstream's in-memory session if that upstream
-restarts. Clients may need to initialize again. Cache loss is recoverable by rebuilding
-catalogs and endpoint data. Database or key loss is not equivalent to cache loss.
+- **Profile edits:** responses include `revision`. Tenant profile updates can
+  send `expectedRevision`; a stale value returns HTTP 409. The UI handles this
+  automatically and retains unsaved edits until the profile is reloaded.
+  API clients that omit the value continue to use unconditional updates.
+- **Native MCP:** `mcp.modernProtocol` is off by default. Enable it only for
+  profiles whose remote sources support MCP `2026-07-28`. Adapter and compact
+  stdio proxy connections continue to use the legacy lifecycle. See
+  [MCP settings](MCP_SETTINGS.md#native-protocol).
+- **Browser clients:** configure `UNRELATED_GATEWAY_ALLOWED_ORIGINS` for browser
+  origins beyond loopback. This does not configure reverse-proxy CORS.
+- **UI URLs:** set `GATEWAY_DATA_BASE` at startup to the public MCP base URL.
+  `NEXT_PUBLIC_GATEWAY_DATA_BASE` remains a runtime alias.
 
-Sessionless upstreams do not require an upstream session ID. Gateway routing tokens
-still retain the chosen endpoint. Automatic endpoint reselection and replay of failed
-tool calls are not part of this change. Update every Gateway replica before introducing
-sessionless upstreams; older code cannot read their new routing-token bindings.
+## Sessions and restarts
 
-## Validation
+Share the same session keys and configuration across Gateway replicas. This
+allows a different replica to read existing routing tokens. Stateful upstreams
+still own their sessions; an upstream restart may require client initialization
+again. Sessionless upstreams do not have this requirement, but routing tokens
+remain bound to the selected endpoint. Failed calls are not automatically
+replayed on a different endpoint.
 
-```bash
-cargo test --workspace --all-targets
-make test-gateway-contracts
-make test-v1-journey
-```
+Update every Gateway replica before adding sessionless upstreams. Older Gateway
+versions cannot read their routing-token bindings. Cache loss is recoverable;
+database and encryption-key loss require restoration from backups.
 
-The second command requires Docker and runs PostgreSQL migration, profile isolation,
-aggregation, cache invalidation, cross-replica notifications, and replay contracts.
-The normal Rust test command skips tests marked `ignore`; CI runs these contracts
-explicitly as an additional step.
+## PostgreSQL 16 to 18
 
-For concurrency limits, deadlines, cache lifetime, and module responsibilities, see
-[architecture](ARCHITECTURE.md#request-configuration-concurrency-and-cache-lifetime).
+A PostgreSQL major upgrade is optional and separate from the Gateway upgrade.
+Deployment defaults remain on PostgreSQL 16 to preserve existing volumes.
 
-## Repeat the public-release rehearsal
+The recipes explicitly set `PGDATA=/var/lib/postgresql/data`, while the official
+[PostgreSQL 18 image uses a different default layout](https://github.com/docker-library/docs/blob/master/postgres/content.md#pgdata).
+Changing an image tag does not upgrade a database. Use a **new volume or PVC**:
 
-`make test-v1-upgrade` starts a disposable PostgreSQL database, runs the public
-0.13.1 executable against its original schema, creates a tenant/profile/API key,
-and calls an Adapter-backed stdio tool. It then stops that Gateway, applies the v1
-migration, and verifies the existing profile, tenant token, API key, and signed
-routing token. It also adds a sessionless upstream and calls both tools through
-`unrelated`. No existing database is used.
+1. Preserve the existing volume and back up configuration and encryption keys.
+2. Stop Gateway and operator writers. Use PostgreSQL 18 `pg_dump -Fc` against
+   the PostgreSQL 16 server; preserve custom roles separately.
+3. Start an empty PostgreSQL 18 database on the new volume and restore with
+   PostgreSQL 18 `pg_restore --exit-on-error`. Apply the matching app migrations.
+4. Point all components at the restored database using the original keys. Check
+   authentication, encrypted secrets, profile edits, and tool calls before
+   resuming writes.
 
-On Linux, extract the historical executable from the pinned public release image:
+Select the image with Compose's `POSTGRES_IMAGE` or Helm's `postgres.image.tag`
+(`image.tag` for the standalone PostgreSQL chart). The preserved old database
+can support rollback before new writes are accepted. After writes resume,
+rollback requires a data recovery plan.
 
-```bash
-mkdir -p /tmp/mcp-v1-rehearsal
-old_container=$(docker create ghcr.io/unrelated-ai/mcp-gateway@sha256:dc4f2750df6526e65bb83b7b83e37f8aa47e8ff6d5f33562d67e5f5ffb157ea9)
-docker cp "$old_container:/app/unrelated-mcp-gateway" /tmp/mcp-v1-rehearsal/gateway-0.13.1
-docker rm "$old_container"
-MCP_GATEWAY_0131_BIN=/tmp/mcp-v1-rehearsal/gateway-0.13.1 make test-v1-upgrade
-```
-
-This image identifies release commit `173f44e9a37bf16d78014dfbb63bfcce9c6a788e`.
-The test checks the executable version. Its default candidate is the current Cargo
-build; use the same revision for the Gateway, UI, Adapter and CLI when packaging.
-
-For an optional browser check, also set `MCP_V1_UPGRADE_UI_STATE` to a fresh absolute
-JSON path. After the automatic assertions pass, the test writes temporary Gateway
-URLs and a disposable tenant token there and keeps the stack running for up to
-30 minutes. Start the UI with `GATEWAY_ADMIN_BASE` and
-`NEXT_PUBLIC_GATEWAY_DATA_BASE` taken from that file. Unlock with the token, inspect
-the migrated profile and key, probe both tools, and save/reload profile edits.
-Create a file at the same path with its extension changed to `.done` to finish.
-The test removes both handoff files and destroys its services/database.
-
-For a local production UI build, use `npm run build` and serve the standalone
-output as the UI Dockerfile does, including `public` and `.next/static`.
-Set `GATEWAY_DATA_BASE` when starting the UI. The existing
-`NEXT_PUBLIC_GATEWAY_DATA_BASE` variable remains a runtime alias; the public URL
-is no longer frozen into the build. `make test-ui-e2e` exercises the standalone
-artifact and its real Gateway/Adapter/CLI journey against disposable services.
-
-See [the recorded rehearsal and release checklist](V1_RC.md) and
-[the repeatable performance baseline](V1_BENCHMARK.md).
+See the [PostgreSQL upgrade guide](https://www.postgresql.org/docs/18/upgrading.html)
+for database upgrade options.

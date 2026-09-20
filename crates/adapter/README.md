@@ -10,13 +10,13 @@ Supports:
 
 > **IMPORTANT**
 >
-> The adapter intentionally does **not** implement tenancy or dynamic, identity-based authorization. Those controls are expected to be provided by the **Gateway** (or your reverse proxy). It does support an optional static bearer-token guard for its HTTP endpoints.
+> The adapter intentionally does **not** implement tenancy or dynamic, identity-based authorization. Those controls are expected to be provided by the **Gateway** (or a reverse proxy). It does support an optional static bearer-token guard for its HTTP endpoints.
 >
-> **Assumption**: the adapter runs only inside a **private network** (or behind your internal edge) and is **not** exposed directly to the public internet.
+> **Assumption**: the adapter runs only inside a **private network** (or behind an internal edge) and is **not** exposed directly to the public internet.
 
 Guardrails:
 
-- Default bind is loopback (`127.0.0.1:3000`). If you run it exposed (instead of behind the
+- Default bind is loopback (`127.0.0.1:3000`). If exposed (instead of behind the
   Gateway/reverse proxy), enable bearer-token protection below.
 - Optional bearer-token protection for HTTP endpoints (including `/mcp`):
   - set `adapter.mcpBearerToken` or `UNRELATED_MCP_BEARER_TOKEN`

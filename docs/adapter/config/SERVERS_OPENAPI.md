@@ -14,7 +14,7 @@ Source of truth:
 - When an output schema is available, tool calls also include **`structured_content`** shaped as:
   - `{ "body": <response> }`
 - If the spec does not provide a JSON response schema for an operation, the output schema may be omitted (and `structured_content` will not be emitted).
-  - You can still force structured outputs by providing an explicit schema:
+  - To enable structured outputs, provide an explicit schema:
     - via `responseOverrides[].outputSchema` (spec-derived tools), or
     - via `overrides.tools.*.request.response.outputSchema` (manual override tools).
 
@@ -126,7 +126,7 @@ Meaning:
 
 - Keys are **paths** from the spec.
 - Method keys are lowercase (`get`, `post`, `put`, `delete`, `patch`).
-- Lets you rename tools and tweak parameter names/required/default/description.
+- Supports tool renaming and changes to parameter names, requirements, defaults, and descriptions.
 
 ### `defaults`
 
@@ -168,7 +168,7 @@ responseOverrides:
 
 ### `overrides` (manual tool overrides)
 
-Overrides let you replace a spec-derived tool with a manual definition (HTTP tool DSL).
+Overrides replace a spec-derived tool with a manual definition (HTTP tool DSL).
 
 Shape:
 
@@ -191,7 +191,7 @@ overrides:
 Notes:
 
 - The override `request` supports the same HTTP DSL response settings as `type: http`.
-  - For example, you can set `request.response.outputSchema` to enable structured outputs (see [`SERVERS_HTTP.md`](SERVERS_HTTP.md)).
+  - For example, set `request.response.outputSchema` to enable structured outputs (see [`SERVERS_HTTP.md`](SERVERS_HTTP.md)).
 
 Matching:
 

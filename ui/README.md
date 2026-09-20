@@ -15,7 +15,7 @@ Docs live under `docs/ui/` (start at `docs/ui/INDEX.md`).
 
 ### Local development
 
-Use Node.js 24 LTS; the tested version is pinned in the root `.node-version`.
+Use the Node.js version pinned in the root `.node-version`.
 
 ```bash
 cd ui
@@ -23,6 +23,17 @@ npm ci
 cp env.example .env.local
 npm run dev
 ```
+
+### TypeScript tooling
+
+`npm run typecheck` uses TypeScript 7. The `typescript` package name is an alias
+for Microsoft's TypeScript 6 compatibility package because the current
+`typescript-eslint` parser still requires that compiler API. The native TypeScript 7
+compiler is installed as `@typescript/native`. `npm run build` runs the native
+check before the Next.js build; Next.js also retains its own type check.
+
+ESLint remains on 9.39.5 until the React, accessibility, and import plugins used
+by `eslint-config-next` support ESLint 10 in their peer dependencies.
 
 ### Environment variables
 
@@ -32,7 +43,7 @@ npm run dev
 
 ### Browser acceptance tests
 
-From the repository root, with Docker and Node.js 24.20.0+ available:
+From the repository root, with Docker and the pinned Node.js version available:
 
 ```bash
 cd ui && npm ci && npx playwright install chromium && cd ..

@@ -62,6 +62,8 @@ kubectl -n mcp-gateway create secret generic unrelated-mcp-gateway-secrets \
 1. Build chart dependencies and install stack:
 
 ```bash
+helm dependency build deploy/helm/unrelated-mcp-postgres
+helm dependency build deploy/helm/unrelated-mcp-gateway-managed-fixtures
 helm dependency build deploy/helm/unrelated-mcp-gateway
 helm dependency build deploy/helm/unrelated-mcp-gateway-stack
 helm upgrade --install unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway-stack \
@@ -82,6 +84,8 @@ helm upgrade --install unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway-s
 
 ```bash
 kubectl create namespace mcp-gateway
+helm dependency build deploy/helm/unrelated-mcp-postgres
+helm dependency build deploy/helm/unrelated-mcp-gateway-managed-fixtures
 helm dependency build deploy/helm/unrelated-mcp-gateway
 helm dependency build deploy/helm/unrelated-mcp-gateway-stack
 helm upgrade --install unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway-stack \

@@ -13,7 +13,7 @@ unrelated auth login
 unrelated tools search "list projects"
 ```
 
-Replace the profile URL with your own. For API keys, use `--auth api-key` when adding
+Replace the example URL with the target profile URL. For API keys, use `--auth api-key` when adding
 the context. `auth login` stores credentials in the native credential store. Headless
 execution can supply a token with `UNRELATED_TOKEN`. OAuth providers that require a
 registered client can use `context add --client-id CLIENT_ID`; authorization-server
@@ -46,3 +46,12 @@ ranking. It reduces tool definitions sent to the model; it does not eliminate th
 initial Gateway catalog request. A generic execution tool also gives the host less
 per-tool schema/annotation detail than direct access. Both connection styles remain
 supported; no switch to the compact proxy is required.
+
+## Native MCP discovery
+
+The default connection uses legacy initialization. For a Gateway profile with
+`mcp.modernProtocol: true`, set `UNRELATED_MCP_PROTOCOL=2026-07-28` to select
+RMCP discovery and native stateless HTTP. Authentication settings are unchanged.
+Unset the variable (or set `legacy`) for Adapter-backed profiles. Automatic
+protocol response caching remains disabled. The compact stdio proxy's downstream
+interface continues to negotiate legacy versions through 2025-11-25.

@@ -4,9 +4,10 @@
 
 The Gateway is the **public-facing** MCP endpoint for clients.
 
-Today it provides **profile-based MCP proxying + upstream aggregation** and **HA-ready session routing** (stateless session tokens), plus a bearer-token-protected **admin/control plane** (Mode 3 / Postgres).
+It provides **profile-based MCP proxying + upstream aggregation** and **HA-ready session routing** (stateless session tokens), plus a bearer-token-protected **admin/control plane** (Mode 3 / Postgres).
 
-Tenant-facing **data-plane authn/z** is implemented (API keys + OIDC/JWT, configured per profile). Broader policy (audit detail levels, resources/prompts allow/deny) is still evolving.
+Profiles support API-key and OAuth authentication. Audit settings apply at tenant level;
+separate resource and prompt allowlists are not available.
 
 ## Key concepts
 
@@ -44,9 +45,9 @@ Gateway
   - Route/proxy MCP requests to upstream MCP servers, including Adapters
   - Provide cross-profile/session routing and aggregation behaviors
 
-## Authorization forwarding stance (important)
+## Authorization forwarding
 
-We follow MCP security guidance to avoid “confused deputy” risks:
+The Gateway keeps client credentials separate from upstream credentials:
 
 - **Data plane**: the caller’s `Authorization` header (used to authenticate the caller to the Gateway) is **never forwarded** to:
   - upstream MCP servers (Adapters or other MCP servers), or
@@ -79,12 +80,12 @@ These are intentionally separate; topology is not a new runtime mode.
 
 ### Managed deployment enforcement
 
-- `UNRELATED_GATEWAY_TOPOLOGY` tells you **what deployment shape you are running** (`none`, `operator-oss`, `controller-enterprise`). It is informational and shows up in `/status` and UI checks.
+- `UNRELATED_GATEWAY_TOPOLOGY` describes the deployment topology (`none`, `operator-oss`, `controller-enterprise`). It is informational and shows up in `/status` and UI checks.
 - `UNRELATED_MANAGED_MCP_BACKEND_MODE` tells Gateway **whether it should accept managed deployment requests at all**, and for which backend (`none`, `k8s`, `docker`).
 
-Why this split matters: in older behavior, requests could be accepted even when no reconciler was running, then stay `pending` forever. The backend-mode + heartbeat checks prevent that.
+Backend configuration and heartbeat checks prevent requests from remaining pending when no reconciler is available.
 
-Managed deployment request acceptance now uses these settings:
+Managed deployment request acceptance uses these settings:
 
 - `UNRELATED_MANAGED_MCP_BACKEND_MODE`: `none` | `k8s` | `docker`
   - `none`: tenant create/update requests are rejected with `409` (disabled by config)
@@ -96,7 +97,7 @@ Managed deployment request acceptance now uses these settings:
 Reconcilers report liveness via `POST /admin/v1/managed-mcp/reconciler-heartbeat`.
 Gateway exposes current state in `/status` under `managedMcp` (`backendMode`, `reconcilerHealthy`, `acceptingRequests`, etc.) so operators and UI can explain why requests are accepted or rejected.
 
-## Configuration and control plane (current)
+## Configuration and control plane
 
 The Gateway supports two storage/config modes:
 
@@ -110,7 +111,7 @@ Notes:
 - Claim-based RBAC is not implemented (current model is API key + OIDC principal bindings).
 - Audit logging (Mode 3 / Postgres): [`docs/gateway/AUDIT.md`](AUDIT.md).
 
-### Ports (from the start)
+### Listeners
 
 Run the Gateway with two listeners:
 
@@ -119,7 +120,7 @@ Run the Gateway with two listeners:
 
 This makes it easy to expose the data plane publicly while keeping admin/ops private.
 
-### Control plane auth (current)
+### Control plane authentication
 
 - Admin API auth supports two machine-auth paths:
   - Static compatibility token: `Authorization: Bearer <token>` with `UNRELATED_GATEWAY_ADMIN_TOKEN`.
@@ -146,23 +147,23 @@ This makes it easy to expose the data plane publicly while keeping admin/ops pri
     - fixed-window per-minute `tools/call` rate limit (per API key)
     - `tools/call` quota (per API key; decremented on attempt)
 
-## HA and session routing (Model B)
+## HA and session routing
 
-### Why this exists at all
+### Session affinity
 
-With MCP-over-streamable-HTTP, the client and server communicate using a **session id** (`Mcp-Session-Id`). This session id is not just a “nice to have”:
+Session-based MCP clients and servers use `Mcp-Session-Id` to identify an upstream session:
 
 - It’s how the **streamable HTTP transport** correlates requests with the right server-side session (similar to how a WebSocket connection implicitly carries “session affinity”).
 - Many MCP servers are **stateful per session** (examples: headless browser control, in-memory caches, conversational context, resource subscriptions, long-running operations).
 
-So, in any Gateway that can run multiple nodes, we must ensure:
+Across multiple Gateway replicas:
 
 - **All requests for a given MCP session** are routed to the same upstream MCP session (and usually the same upstream _node_ that owns that session).
 - This must still work even if the load balancer sends requests to different Gateway nodes.
 
-### Model B: stateless “Gateway session token”
+### Gateway session tokens
 
-Model B makes the **Gateway session id** a self-contained, cryptographically protected token that encodes where the upstream session(s) live.
+The **Gateway session id** is a self-contained, cryptographically protected token that encodes where the upstream session(s) live.
 
 At a minimum, the token needs:
 
@@ -177,7 +178,7 @@ At a minimum, the token needs:
 
 This is similar in spirit to a JWT, but it is **not** an auth token: it is a **routing token** owned by the Gateway.
 
-Current implementation notes (Gateway session token):
+Token configuration:
 
 - **Token format**: **PASETO `v4.local`** (encrypted + authenticated).
   - Footer carries a short `kid` for key rotation (footer is authenticated but not encrypted).
@@ -334,4 +335,4 @@ For `tools/call` only, the Gateway enforces a **timeout budget** (and optional r
 
 ## Observability
 
-The Gateway emits structured logs and is intended to be deployed behind your normal observability stack.
+The Gateway emits structured logs and is intended to be deployed behind an observability stack.

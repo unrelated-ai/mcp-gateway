@@ -84,7 +84,7 @@ adapter:
 - **Type**: boolean (can be a string if using env expansion)
 - **Default**: `true`
 - **Meaning**: on startup, probe configured OpenAPI base URLs for reachability.
-- **Notes**: if an OpenAPI spec (especially a local file) contains an unreachable placeholder server URL and you don't set `servers.<name>.baseUrl`, the probe can fail startup. Mitigate by setting `servers.<name>.baseUrl` to a reachable host or setting `adapter.openapiProbe: false`.
+- **Notes**: if an OpenAPI spec (especially a local file) contains an unreachable placeholder server URL and `servers.<name>.baseUrl` is unset, the probe can fail startup. Mitigate by setting `servers.<name>.baseUrl` to a reachable host or setting `adapter.openapiProbe: false`.
 
 ### `openapiProbeTimeout`
 

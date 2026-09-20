@@ -102,7 +102,7 @@ Run CI checks locally before tagging:
 make ci
 ```
 
-If you have Docker available and want the full integration coverage:
+Full integration coverage requires Docker:
 
 ```bash
 make test-integration

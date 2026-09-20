@@ -19,3 +19,7 @@ go mod tidy
 
 Then build and scan the `gateway-migrator` Docker target and verify that it can
 apply the Gateway migrations to a disposable PostgreSQL database.
+
+The migrator retains gRPC-Go 1.83.2: the published
+[CVE-2026-84445 range](https://pkg.go.dev/vuln/GO-2026-6443) includes 1.84.0.
+Check that advisory and rescan the built image before raising this dependency.

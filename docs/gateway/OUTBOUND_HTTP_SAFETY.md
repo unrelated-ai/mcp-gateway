@@ -21,8 +21,6 @@ So the default Gateway policy blocks destinations that resolve to:
 
 - loopback, private (RFC1918), link-local, CGNAT, reserved ranges, etc.
 
-This is implemented by `OutboundHttpSafety::gateway_default()` in `crates/http-tools/src/safety.rs`.
-
 When private networks are blocked or a host allowlist is set, outbound requests ignore
 system proxy environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and
 lowercase forms). These requests require direct egress so the Gateway can validate
@@ -30,11 +28,12 @@ the destination IP. Fully permissive policies retain proxy support.
 
 ## Opt-in override (explicit operator choice)
 
-You can opt into allowing private network destinations by setting:
+To allow private network destinations, set:
 
 - `UNRELATED_GATEWAY_OUTBOUND_ALLOW_PRIVATE_NETWORKS=1`
 
-This is intentionally an **explicit operator choice**. Turning it on means “I understand this increases SSRF blast radius”.
+Enabling this setting allows tenant-configured sources to reach internal services.
+Use it only where tenant access and outbound destinations are controlled.
 
 ### When it makes sense
 
@@ -48,7 +47,7 @@ In a true multi-tenant environment where tenants can create/edit tool sources fr
 
 ## Optional host allowlist
 
-You can also restrict outbound destinations by hostname:
+To restrict outbound destinations by hostname:
 
 - `UNRELATED_GATEWAY_OUTBOUND_ALLOWED_HOSTS=host1,host2`
 
@@ -59,7 +58,7 @@ Notes:
 
 ## Class-aware policy for upstream MCP endpoints
 
-Upstream endpoints now carry a network class:
+Upstream endpoints carry a network class:
 
 - `external` (default)
 - `cluster-internal-managed`

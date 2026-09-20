@@ -2,7 +2,7 @@
 
 This repository is a Cargo workspace.
 
-Optional (local only): you can enable repo githooks to run CI checks before `git push`:
+Optional local Git hooks run CI checks before `git push`:
 
 ```bash
 make hooks-install
