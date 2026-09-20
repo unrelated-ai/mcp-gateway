@@ -4,8 +4,9 @@ nameOverride: ""
 fullnameOverride: ""
 
 image:
-  repository: curlimages/curl
-  tag: "8.12.1"
+  # Empty values inherit deploy/images.env from the bundled images library chart.
+  repository: ""
+  tag: ""
   pullPolicy: IfNotPresent
 
 gateway:

@@ -1,11 +1,13 @@
+# Load shared image defaults with --env-file deploy/images.env (see README).
 services:
   gateway_db:
-    image: postgres:16.14-alpine3.24
+    image: ${POSTGRES_IMAGE:?Load the shared image defaults with --env-file}
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: gateway
+      PGDATA: /var/lib/postgresql/data
     ports:
       - "5433:5432"
     healthcheck:

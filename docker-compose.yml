@@ -1,11 +1,15 @@
+# Load shared image defaults with --env-file deploy/images.env (see README).
+x-postgres-image: &postgres-image ${POSTGRES_IMAGE:?Load the shared image defaults with --env-file}
+
 services:
   gateway_db:
-    image: postgres:16.14-alpine3.24
+    image: *postgres-image
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: gateway
+      PGDATA: /var/lib/postgresql/data
     ports:
       - "5433:5432"
     healthcheck:
@@ -20,10 +24,10 @@ services:
   # Optional helper: wipe the DB so the Gateway has zero tenants (for onboarding testing).
   #
   # Usage:
-  # - docker compose run --rm gateway_db_reset
-  # - docker compose up -d
+  # - make up-reset
+  # - make up
   gateway_db_reset:
-    image: postgres:16.14-alpine3.24
+    image: *postgres-image
     # Never start during `docker compose up` / `make up`.
     # This is a manual maintenance helper only.
     profiles: ["manual"]
@@ -139,7 +143,7 @@ services:
       NEXT_PUBLIC_GATEWAY_DATA_BASE: http://localhost:27100
 
   httpbin:
-    image: kennethreitz/httpbin
+    image: ${HTTPBIN_IMAGE:?Load the shared image defaults with --env-file}
     restart: unless-stopped
     ports:
       - "8081:80"
@@ -156,7 +160,7 @@ services:
       - "-"
 
   petstore:
-    image: swaggerapi/petstore3
+    image: ${PETSTORE_IMAGE:?Load the shared image defaults with --env-file}
     restart: unless-stopped
     ports:
       - "8082:8080"
@@ -227,7 +231,7 @@ services:
 
   # Seed one managed deployable so the UI "Deployment" screen is usable out-of-the-box.
   managed_mcp_seed:
-    image: curlimages/curl:8.12.1
+    image: ${CURL_IMAGE:?Load the shared image defaults with --env-file}
     depends_on:
       gateway:
         condition: service_healthy

@@ -2,8 +2,9 @@ nameOverride: ""
 fullnameOverride: ""
 
 image:
-  repository: postgres
-  tag: "16.14-alpine3.24"
+  # Empty values inherit deploy/images.env from the bundled images library chart.
+  repository: ""
+  tag: ""
   pullPolicy: IfNotPresent
 
 auth:

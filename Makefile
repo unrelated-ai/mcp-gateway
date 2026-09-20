@@ -359,6 +359,8 @@ kind-local-load-images: kind-local-load-managed-mcp-images
 ## Deploy Helm stack to kind with local images (dev profile)
 kind-local-deploy:
 	kubectl create namespace $(KIND_NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
+	helm dependency build deploy/helm/unrelated-mcp-postgres
+	helm dependency build deploy/helm/unrelated-mcp-gateway-managed-fixtures
 	helm dependency build deploy/helm/unrelated-mcp-gateway
 	helm dependency build deploy/helm/unrelated-mcp-gateway-stack
 	helm upgrade --install $(KIND_RELEASE_NAME) deploy/helm/unrelated-mcp-gateway-stack \
@@ -400,23 +402,23 @@ kind-local-reset:
 
 ## Start services with docker-compose
 up:
-	docker compose up -d --build
+	docker compose --env-file deploy/images.env up -d --build
 
 ## Reset the docker-compose Postgres DB (deletes all tenants/config; for onboarding testing)
 up-reset:
-	docker compose --profile manual run --rm gateway_db_reset
+	docker compose --env-file deploy/images.env --profile manual run --rm gateway_db_reset
 
 ## Stop services with docker-compose
 down:
-	docker compose down
+	docker compose --env-file deploy/images.env down
 
 ## View docker-compose logs
 logs:
-	docker compose logs -f
+	docker compose --env-file deploy/images.env logs -f
 
 ## Show docker-compose status
 status:
-	docker compose ps
+	docker compose --env-file deploy/images.env ps
 
 # =============================================================================
 # MCP Inspector
@@ -488,6 +490,8 @@ crd-sync-check:
 ## Validate Helm charts (deps + lint + render smoke)
 helm-validate:
 	@command -v helm >/dev/null 2>&1 || { echo "ERROR: helm is not installed"; exit 1; }
+	helm dependency build deploy/helm/unrelated-mcp-postgres
+	helm dependency build deploy/helm/unrelated-mcp-gateway-managed-fixtures
 	helm dependency build deploy/helm/unrelated-mcp-gateway
 	helm dependency build deploy/helm/unrelated-mcp-gateway-stack
 	helm lint deploy/helm/unrelated-mcp-postgres

@@ -58,10 +58,7 @@ postgres:
     username: postgres
     password: postgres
     database: gateway
-  image:
-    repository: postgres
-    tag: "16.14-alpine3.24"
-    pullPolicy: IfNotPresent
+  # Image defaults come from the PostgreSQL subchart; override postgres.image as needed.
   service:
     port: 5432
   persistence:

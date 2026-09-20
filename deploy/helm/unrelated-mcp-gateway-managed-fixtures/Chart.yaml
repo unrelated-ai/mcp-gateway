@@ -4,3 +4,8 @@ description: Optional helper chart to seed Managed MCP deployables for local tes
 type: application
 version: 0.2.4
 appVersion: "0.13.0"
+dependencies:
+  - name: unrelated-mcp-images
+    version: 0.1.0
+    repository: file://../unrelated-mcp-images
+    alias: images
