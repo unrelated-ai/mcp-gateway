@@ -314,6 +314,18 @@ export async function probeProfileSurface(id: string): Promise<ProfileSurface> {
   });
 }
 
+export type ConnectionCheck = {
+  sourceId: string;
+  endpointId?: string;
+  status: "passed" | "failed" | "notChecked";
+  message: string;
+  protocolVersion?: string;
+};
+
+export async function checkProfileConnections(id: string): Promise<{ checks: ConnectionCheck[] }> {
+  return tenantFetchJson(bffRoute(tenantRoutes.PROFILE_CONNECTIONS(id)), { method: "POST" });
+}
+
 export async function listToolSources(): Promise<{ sources: ToolSourceSummary[] }> {
   return await tenantFetchJson<{ sources: ToolSourceSummary[] }>(
     bffRoute(tenantRoutes.TOOL_SOURCES),

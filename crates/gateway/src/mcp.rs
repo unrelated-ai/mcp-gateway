@@ -44,6 +44,7 @@ use uuid::Uuid;
 
 mod aggregation;
 mod auth;
+mod connection_check;
 mod ids;
 mod initialize;
 mod modern;
@@ -74,6 +75,7 @@ use surface::{
 use tool_call::route_and_proxy_tools_call;
 use upstream::proxy_to_single_upstream;
 
+pub(crate) use connection_check::check_profile_connections;
 #[cfg(test)]
 use initialize::initialize_profile_sources;
 pub(crate) use probe::probe_profile_surface;

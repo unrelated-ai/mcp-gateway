@@ -35,6 +35,8 @@ export const tenantRoutes = {
   PROFILES: "/tenant/v1/profiles",
   PROFILE: (profile_id: string) => `/tenant/v1/profiles/${segment(profile_id)}`,
   PROFILE_SURFACE: (profile_id: string) => `/tenant/v1/profiles/${segment(profile_id)}/surface`,
+  PROFILE_CONNECTIONS: (profile_id: string) =>
+    `/tenant/v1/profiles/${segment(profile_id)}/connections`,
   DEPLOYABLES: "/tenant/v1/managed-mcp/deployables",
   DEPLOYMENTS: "/tenant/v1/managed-mcp/deployments",
   DEPLOYMENT: (request_id: string) => `/tenant/v1/managed-mcp/deployments/${segment(request_id)}`,

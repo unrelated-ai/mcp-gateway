@@ -18,6 +18,17 @@ The **Web UI** is a Next.js application used to manage Gateway tenants:
 - **Gateway admin** provisioning and global configuration are intentionally out of scope for the UI today (use the Gateway admin CLI and deployment automation like `docker compose` / Helm).
 - **Fresh install onboarding**: when the Gateway bootstrap endpoint is enabled and there are no tenants yet, the UI guides the user through creating the first tenant (via `/bootstrap/v1/tenant`) at `/onboarding`.
 
+## Connection checks
+
+**Profile → MCP endpoint URL → Check connections** tests each active MCP upstream
+using its saved credentials and the profile's protocol mode. Results show the
+negotiated MCP version or a connection failure. Checks run only on request and do
+not call tools.
+
+The check covers upstream connections, not client API keys or OAuth login.
+HTTP/OpenAPI sources are marked **Not checked** because checking those credentials
+would require making an API request.
+
 ## Audit
 
 - Audit settings live under **Settings → Audit** (enable/disable + retention + default detail level).

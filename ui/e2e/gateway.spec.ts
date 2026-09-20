@@ -413,6 +413,33 @@ test("phone navigation and profile controls fit, with keyboard dismissal and foc
   await page.screenshot({ path: testInfo.outputPath("profile-mobile.png") });
 });
 
+test("connection checks run on demand and allow retry after failure", async ({ page }) => {
+  let requests = 0;
+  await page.route(`**${apiPath()}/connections`, async (route) => {
+    requests++;
+    if (requests === 1) {
+      await route.fulfill({ status: 503, json: { error: "Temporary connection check outage" } });
+    } else await route.continue();
+  });
+  await openProfile(page);
+  expect(requests).toBe(0);
+  const button = page.getByRole("button", { name: "Check connections", exact: true });
+  await button.click();
+  await expect(page.getByText("Temporary connection check outage", { exact: true })).toBeVisible();
+  const response = page.waitForResponse((r) => r.url().endsWith(`${apiPath()}/connections`));
+  await button.click();
+  const results = await (await response).json();
+  expect(results.checks.map((c: { sourceId: string }) => c.sourceId).sort()).toEqual([
+    "adapter",
+    "remote",
+  ]);
+  await expect(page.getByText("Connected", { exact: true })).toHaveCount(2);
+  expect(requests).toBe(2);
+  const card = page.locator("section").filter({ has: button });
+  await mkdir(path.join(process.cwd(), "../output/playwright"), { recursive: true });
+  await card.screenshot({ path: "../output/playwright/profile-connection-check.png" });
+});
+
 test("settings hydrate without browser errors and show tenant audit controls", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -430,17 +457,17 @@ test("settings hydrate without browser errors and show tenant audit controls", a
   expect(errors).toEqual([]);
 });
 
-test("managed deployment writes enforce tenant sessions and cross-site protection", async ({
-  page,
-  browser,
-}) => {
+test("tenant writes keep session and cross-site protection", async ({ page, browser }) => {
   const unauthenticated = await browser.newContext();
   try {
     // Explicitly authenticate this raw HTTP request before testing the CSRF layer.
     const cookie = (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join("; ");
-    for (const method of ["POST", "PATCH"]) {
-      const suffix = method === "PATCH" ? "/test-request" : "";
-      const url = `${stack.uiBase}/api/tenant/managed-mcp/deployments${suffix}`;
+    for (const [method, endpoint] of [
+      ["POST", "/api/tenant/managed-mcp/deployments"],
+      ["PATCH", "/api/tenant/managed-mcp/deployments/test-request"],
+      ["POST", `${apiPath()}/connections`],
+    ]) {
+      const url = `${stack.uiBase}${endpoint}`;
       const anonymous = await unauthenticated.request.fetch(url, { method, data: {} });
       expect(anonymous.status()).toBe(401);
       const crossSite = await page.request.fetch(url, {

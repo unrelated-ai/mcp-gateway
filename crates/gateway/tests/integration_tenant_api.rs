@@ -362,6 +362,29 @@ async fn tenant_profiles_are_scoped_and_cross_tenant_access_is_404() -> anyhow::
     assert_profile_nullable_updates(&client, &admin_base, &profile_id, &t1_token).await?;
     assert_profile_revision_conflicts(&client, &admin_base, &profile_id, &t1_token).await?;
 
+    // Connection checks use the same tenant ownership and authentication boundary.
+    let connections_url = format!("{admin_base}/tenant/v1/profiles/{profile_id}/connections");
+    for (token, expected_status) in [
+        (Some(t1_token.as_str()), reqwest::StatusCode::OK),
+        (Some(t2_token.as_str()), reqwest::StatusCode::NOT_FOUND),
+        (None, reqwest::StatusCode::UNAUTHORIZED),
+    ] {
+        let request = client.post(&connections_url);
+        let response = match token {
+            Some(token) => request.bearer_auth(token),
+            None => request,
+        }
+        .send()
+        .await?;
+        assert_eq!(response.status(), expected_status);
+        if expected_status.is_success() {
+            assert_eq!(
+                response.json::<serde_json::Value>().await?,
+                json!({"checks":[]})
+            );
+        }
+    }
+
     // Cross-tenant access is 404 (not 403).
     let resp = client
         .get(format!("{admin_base}/tenant/v1/profiles/{profile_id}"))
@@ -1184,6 +1207,21 @@ async fn tenant_profile_surface_probe_returns_tools_and_source_status() -> anyho
         tools2.iter().any(|t| t.get("name") == Some(&json!("ping"))),
         "expected discovered tool 'ping' for disabled profile, got: {tools2:?}"
     );
+
+    // Disabled profiles can be inspected; HTTP tool sources must not execute API calls.
+    let checks: serde_json::Value = client
+        .post(format!(
+            "{admin_base}/tenant/v1/profiles/{profile_id}/connections"
+        ))
+        .bearer_auth(&t1_token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(checks["checks"].as_array().unwrap().len(), 1);
+    assert_eq!(checks["checks"][0]["sourceId"], "s1");
+    assert_eq!(checks["checks"][0]["status"], "notChecked");
 
     Ok(())
 }

@@ -13,7 +13,7 @@ use crate::tenant_token::TenantSigner;
 use axum::extract::{Path, Query};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, patch};
+use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rmcp::model::Tool;
@@ -73,6 +73,10 @@ pub fn router(state: Arc<TenantState>) -> Router {
         .route(
             routes::tenant::PROFILE_SURFACE.template(),
             get(get_profile_surface),
+        )
+        .route(
+            routes::tenant::PROFILE_CONNECTIONS.template(),
+            post(check_profile_connections),
         )
         .route(
             routes::tenant::TOOL_SOURCES.template(),
@@ -701,48 +705,35 @@ async fn get_upstream_surface(
     .into_response()
 }
 
-async fn get_profile_surface(
-    axum::Extension(state): axum::Extension<Arc<TenantState>>,
-    headers: HeaderMap,
-    Path(profile_id): Path<String>,
-) -> impl IntoResponse {
-    let tenant_id = match authn(&headers, &state.signer) {
-        Ok(t) => t,
-        Err(resp) => return resp.into_response(),
-    };
-
-    // UUIDv4 only, otherwise 404 (avoid enumeration patterns).
-    if Uuid::parse_str(&profile_id)
-        .ok()
-        .and_then(|u| (u.get_version() == Some(Version::Random)).then_some(u))
-        .is_none()
-    {
-        return ApiError::not_found(Resource::Profile).into_response();
+async fn load_profile_for_probe(
+    state: &TenantState,
+    headers: &HeaderMap,
+    profile_id: &str,
+) -> Result<crate::store::Profile, Response> {
+    let tenant_id = authn(headers, &state.signer).map_err(IntoResponse::into_response)?;
+    if !Uuid::parse_str(profile_id).is_ok_and(|id| id.get_version() == Some(Version::Random)) {
+        return Err(ApiError::not_found(Resource::Profile).into_response());
     }
-
-    // Ensure tenant exists + enabled (consistent with other tenant endpoints).
-    let Some(admin_store) = &state.store else {
-        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
-    };
+    let admin_store = state
+        .store
+        .as_ref()
+        .ok_or_else(|| ApiError::store_unavailable(StoreKind::Tenant).into_response())?;
     match admin_store.get_tenant(&tenant_id).await {
-        Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return ApiError::invalid_tenant().into_response(),
-        Err(e) => return ApiError::internal(e).into_response(),
+        Ok(Some(tenant)) if tenant.enabled => {}
+        Ok(_) => return Err(ApiError::invalid_tenant().into_response()),
+        Err(error) => return Err(ApiError::internal(error).into_response()),
     }
-
-    // IMPORTANT: allow probing surfaces for disabled profiles.
-    // Disabled profiles are hidden from the data-plane store (and from /{profile_id}/mcp),
-    // but operators still need to inspect their surface to configure/fix them.
-    let admin_profile = match admin_store.get_profile(&profile_id).await {
-        Ok(Some(p)) if p.tenant_id == tenant_id => p,
-        Ok(_) => return ApiError::not_found(Resource::Profile).into_response(),
-        Err(e) => return ApiError::internal(e).into_response(),
+    // Tenant ownership is required; disabled profiles remain inspectable.
+    let admin_profile = match admin_store.get_profile(profile_id).await {
+        Ok(Some(profile)) if profile.tenant_id == tenant_id => profile,
+        Ok(_) => return Err(ApiError::not_found(Resource::Profile).into_response()),
+        Err(error) => return Err(ApiError::internal(error).into_response()),
     };
-
     let mut source_ids = admin_profile.upstream_ids.clone();
     source_ids.extend(admin_profile.source_ids.clone());
-
-    let profile = crate::store::Profile {
+    let mut seen = std::collections::HashSet::new();
+    source_ids.retain(|source| seen.insert(source.clone()));
+    Ok(crate::store::Profile {
         id: admin_profile.id,
         tenant_id: admin_profile.tenant_id,
         allow_partial_upstreams: admin_profile.allow_partial_upstreams,
@@ -759,6 +750,37 @@ async fn get_profile_surface(
         tool_call_timeout_secs: admin_profile.tool_call_timeout_secs,
         tool_policies: admin_profile.tool_policies,
         mcp: admin_profile.mcp,
+    })
+}
+
+async fn check_profile_connections(
+    axum::Extension(state): axum::Extension<Arc<TenantState>>,
+    headers: HeaderMap,
+    Path(profile_id): Path<String>,
+) -> Response {
+    let profile = match load_profile_for_probe(&state, &headers, &profile_id).await {
+        Ok(profile) => profile,
+        Err(response) => return response,
+    };
+    let mut checks = crate::mcp::check_profile_connections(&state.mcp_state, &profile).await;
+    for check in &mut checks {
+        if let Some((tenant, local_id)) = parse_tenant_upstream_internal_id(&check.source_id)
+            && tenant == profile.tenant_id
+        {
+            check.source_id = local_id;
+        }
+    }
+    Json(serde_json::json!({"checks":checks})).into_response()
+}
+
+async fn get_profile_surface(
+    axum::Extension(state): axum::Extension<Arc<TenantState>>,
+    headers: HeaderMap,
+    Path(profile_id): Path<String>,
+) -> impl IntoResponse {
+    let profile = match load_profile_for_probe(&state, &headers, &profile_id).await {
+        Ok(profile) => profile,
+        Err(response) => return response,
     };
 
     let (sources, tools, all_tools, resources, prompts) =

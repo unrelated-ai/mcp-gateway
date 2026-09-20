@@ -67,6 +67,8 @@ pub mod tenant {
     pub const PROFILES: Route<0> = Route::new("/tenant/v1/profiles");
     pub const PROFILE: Route<1> = Route::new("/tenant/v1/profiles/{profile_id}");
     pub const PROFILE_SURFACE: Route<1> = Route::new("/tenant/v1/profiles/{profile_id}/surface");
+    pub const PROFILE_CONNECTIONS: Route<1> =
+        Route::new("/tenant/v1/profiles/{profile_id}/connections");
     pub const DEPLOYABLES: Route<0> = Route::new("/tenant/v1/managed-mcp/deployables");
     pub const DEPLOYMENTS: Route<0> = Route::new("/tenant/v1/managed-mcp/deployments");
     pub const DEPLOYMENT: Route<1> = Route::new("/tenant/v1/managed-mcp/deployments/{request_id}");

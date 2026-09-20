@@ -27,7 +27,7 @@ fn format_anyhow_chain(e: &anyhow::Error) -> String {
         .join(": ")
 }
 
-fn minimal_initialize_message() -> ClientJsonRpcMessage {
+pub(super) fn minimal_initialize_message() -> ClientJsonRpcMessage {
     use rmcp::model::{
         ClientCapabilities, Implementation, InitializeRequest, InitializeRequestParams,
     };

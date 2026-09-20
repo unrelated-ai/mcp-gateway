@@ -17,6 +17,7 @@ import {
   buildMcpClientConfig,
   type AuthDraft,
 } from "@/src/lib/data-plane-auth";
+import { ConnectionCheck } from "./connection-check";
 
 function getMcpJsonText(
   clientKey: string,
@@ -120,6 +121,13 @@ export function ConnectionInfoCard({
         </div>
         <CopyBlock value={jsonText} language="json" />
       </div>
+      {profile ? (
+        <ConnectionCheck
+          key={`${profile.id}:${profile.revision}`}
+          profileId={profile.id}
+          modernProtocol={profile.mcp?.modernProtocol ?? false}
+        />
+      ) : null}
     </SectionCard>
   );
 }

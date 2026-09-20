@@ -1822,3 +1822,5 @@ mod sdk_compatibility;
 mod upstream_sessions;
 
 mod modern_protocol;
+
+mod connection_check;
