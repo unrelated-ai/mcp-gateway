@@ -1,0 +1,29 @@
+name: Repository Rust toolchain
+description: Use rust-toolchain.toml unless a release explicitly overrides the compiler.
+inputs:
+  toolchain:
+    description: Optional compiler override
+    default: ""
+  targets:
+    description: Optional additional compilation targets
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Install Rust toolchain and components
+      shell: bash
+      env:
+        REQUESTED_TOOLCHAIN: ${{ inputs.toolchain }}
+        REQUESTED_TARGETS: ${{ inputs.targets }}
+      run: |
+        if [[ -n "$REQUESTED_TOOLCHAIN" ]]; then
+          rustup toolchain install "$REQUESTED_TOOLCHAIN" --profile minimal
+          rustup override set "$REQUESTED_TOOLCHAIN"
+        fi
+        # rustup reads and installs rust-toolchain.toml without a custom parser.
+        rustup show active-toolchain
+        rustup component add rustfmt clippy
+        if [[ -n "$REQUESTED_TARGETS" ]]; then
+          read -r -a targets <<< "${REQUESTED_TARGETS//,/ }"
+          rustup target add "${targets[@]}"
+        fi

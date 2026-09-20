@@ -23,7 +23,7 @@ on:
       rust_toolchain:
         description: "Rust toolchain version"
         required: false
-        default: "1.98.1"
+        default: ""
         type: string
       runner:
         description: "GitHub-hosted runner label"
@@ -51,7 +51,7 @@ jobs:
         uses: actions/checkout@v7.0.1
 
       - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: ./.github/actions/setup-rust
         with:
           toolchain: ${{ inputs.rust_toolchain }}
           targets: ${{ inputs.target }}
