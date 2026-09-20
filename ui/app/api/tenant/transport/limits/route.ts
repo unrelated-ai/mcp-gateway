@@ -1,11 +1,12 @@
+import { tenantRoutes } from "@/src/lib/gatewayRoutes";
 import { proxyTenantRequest } from "@/src/lib/server/gateway-proxy";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  return proxyTenantRequest(req, { path: "/tenant/v1/transport/limits" });
+  return proxyTenantRequest(req, { path: tenantRoutes.TRANSPORT_LIMITS });
 }
 
 export async function PUT(req: Request) {
-  return proxyTenantRequest(req, { path: "/tenant/v1/transport/limits", method: "PUT" });
+  return proxyTenantRequest(req, { path: tenantRoutes.TRANSPORT_LIMITS, method: "PUT" });
 }

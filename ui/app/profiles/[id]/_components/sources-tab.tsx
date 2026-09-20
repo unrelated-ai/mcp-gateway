@@ -64,7 +64,7 @@ export function SourcesTab({
       sources: string[];
     }) => {
       if (!profile) throw new Error("Profile not loaded");
-      await tenantApi.updateProfile(profile.id, {
+      await tenantApi.updateProfile(profile, {
         allowPartialUpstreams: next.allowPartialUpstreams,
         upstreams: next.upstreams,
         sources: next.sources,

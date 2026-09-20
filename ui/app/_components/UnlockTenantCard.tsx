@@ -216,7 +216,7 @@ function ResetDbHelpModal({ open, onClose }: { open: boolean; onClose: () => voi
         <CopyBlock
           label="Docker Compose (equivalent)"
           language="bash"
-          value={`docker compose --profile manual run --rm gateway_db_reset\ndocker compose up -d --build`}
+          value={`docker compose --env-file deploy/images.env --profile manual run --rm gateway_db_reset\ndocker compose --env-file deploy/images.env up -d --build`}
         />
 
         <p className="text-xs text-faint">

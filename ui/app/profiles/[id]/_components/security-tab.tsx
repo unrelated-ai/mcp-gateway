@@ -1,5 +1,12 @@
 "use client";
 
+import {
+  BYTES_PER_MIB,
+  DEFAULT_MAX_POST_BODY_BYTES,
+  DEFAULT_MAX_SSE_EVENT_BYTES,
+  TRANSPORT_LIMIT_PRESETS_MIB,
+} from "@/src/lib/transportLimits";
+
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Input, SectionCard, Select, Toggle } from "@/components/ui";
@@ -131,7 +138,7 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
 
   const autosave = useAutosave<McpProfileSettings["security"]>(async (nextSecurity) => {
     if (!profile) throw new Error("Profile not loaded");
-    await tenantApi.updateProfile(profile.id, (current) => ({
+    await tenantApi.updateProfile(profile, (current) => ({
       mcp: normalizeMcpSettings({ ...asMcpSettings(current.mcp), security: nextSecurity }),
     }));
     await Promise.all([
@@ -149,8 +156,6 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
   const defaultPreset = presetForPolicy(normalizePolicy(security.upstreamDefault));
   const defaultSelectValue: Preset = showDefaultAdvanced ? "custom" : defaultPreset;
 
-  const DEFAULT_MAX_POST_BODY_BYTES = 4 * 1024 * 1024;
-  const DEFAULT_MAX_SSE_EVENT_BYTES = 8 * 1024 * 1024;
   const tenantTransportLimits = tenantTransportLimitsQuery.data ?? null;
 
   const profileTransportLimits: TransportLimitsSettings = security.transportLimits ?? {};
@@ -296,11 +301,11 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
           <div className="eyebrow">Max POST body bytes</div>
           <div className="text-xs text-faint">
             Effective: <code className="font-mono text-muted">{effectiveMaxPostBodyBytes}</code> (~
-            {Math.round((effectiveMaxPostBodyBytes / 1024 / 1024) * 10) / 10} MiB)
+            {Math.round((effectiveMaxPostBodyBytes / BYTES_PER_MIB) * 10) / 10} MiB)
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {[1, 4, 8, 16, 32].map((mib) => {
-              const bytes = mib * 1024 * 1024;
+            {TRANSPORT_LIMIT_PRESETS_MIB.map((mib) => {
+              const bytes = mib * BYTES_PER_MIB;
               return (
                 <button
                   key={mib}
@@ -350,11 +355,11 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
           <div className="eyebrow">Max SSE event bytes</div>
           <div className="text-xs text-faint">
             Effective: <code className="font-mono text-muted">{effectiveMaxSseEventBytes}</code> (~
-            {Math.round((effectiveMaxSseEventBytes / 1024 / 1024) * 10) / 10} MiB)
+            {Math.round((effectiveMaxSseEventBytes / BYTES_PER_MIB) * 10) / 10} MiB)
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {[1, 4, 8, 16, 32].map((mib) => {
-              const bytes = mib * 1024 * 1024;
+            {TRANSPORT_LIMIT_PRESETS_MIB.map((mib) => {
+              const bytes = mib * BYTES_PER_MIB;
               return (
                 <button
                   key={mib}

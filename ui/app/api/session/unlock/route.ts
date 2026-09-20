@@ -1,3 +1,5 @@
+import { tenantRoutes } from "@/src/lib/gatewayRoutes";
+import { GATEWAY_TIMEOUT_MS, gatewayAdminBase } from "@/src/lib/server/gateway-proxy";
 import { NextResponse } from "next/server";
 import { TENANT_EXP_COOKIE, TENANT_ID_COOKIE, TENANT_TOKEN_COOKIE } from "@/src/lib/tenant-session";
 
@@ -13,12 +15,6 @@ type TenantTokenPayload = {
   tenant_id: string;
   exp_unix_secs: number;
 };
-
-function gatewayAdminBase(): string | null {
-  const base = process.env.GATEWAY_ADMIN_BASE;
-  if (!base) return null;
-  return base.replace(/\/+$/, "");
-}
 
 function decodeTenantTokenPayload(rawToken: string): TenantTokenPayload {
   const token = rawToken.trim().startsWith("Bearer ")
@@ -60,11 +56,11 @@ function decodeTenantTokenPayload(rawToken: string): TenantTokenPayload {
 }
 
 async function validateTenantToken(base: string, token: string): Promise<void> {
-  const res = await fetch(`${base}/tenant/v1/profiles`, {
+  const res = await fetch(`${base}${tenantRoutes.PROFILES}`, {
     method: "GET",
     cache: "no-store",
     headers: { Authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(GATEWAY_TIMEOUT_MS),
   });
   if (res.ok) return;
   const body = await res.text();

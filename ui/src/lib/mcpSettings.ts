@@ -79,6 +79,7 @@ export function defaultSecuritySettings(): McpSecuritySettings {
 
 export function defaultMcpSettings(): McpProfileSettings {
   return {
+    modernProtocol: false,
     capabilities: { allow: [], deny: [] },
     notifications: { allow: [], deny: [] },
     namespacing: { requestId: "opaque", sseEventId: "upstream-slash" },
@@ -172,6 +173,7 @@ export function normalizeMcpSettings(s: McpProfileSettings): McpProfileSettings 
   }
 
   return {
+    modernProtocol: s.modernProtocol === true,
     capabilities: {
       allow: uniqSortedCaps(s.capabilities.allow),
       deny: uniqSortedCaps(s.capabilities.deny),
@@ -233,6 +235,7 @@ export function asMcpSettings(input: unknown): McpProfileSettings {
   }
 
   return normalizeMcpSettings({
+    modernProtocol: obj.modernProtocol === true,
     capabilities: {
       allow: allowCaps.filter(pickCap),
       deny: denyCaps.filter(pickCap),

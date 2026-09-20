@@ -1,6 +1,7 @@
 import type { Profile } from "@/src/lib/types";
 
 export type PutProfileBody = {
+  expectedRevision: number;
   name: string;
   description: string | null;
   enabled: boolean;
@@ -24,7 +25,7 @@ export type PutProfileBody = {
  */
 export function buildPutProfileBody(
   profile: Profile,
-  overrides: Partial<PutProfileBody> = {},
+  overrides: Partial<Omit<PutProfileBody, "expectedRevision">> = {},
 ): PutProfileBody {
   return {
     name: profile.name,
@@ -41,5 +42,6 @@ export function buildPutProfileBody(
     toolPolicies: profile.toolPolicies ?? [],
     mcp: profile.mcp,
     ...overrides,
+    expectedRevision: profile.revision,
   };
 }

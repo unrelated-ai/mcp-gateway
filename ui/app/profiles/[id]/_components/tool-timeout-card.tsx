@@ -15,7 +15,7 @@ export function ToolTimeoutCard({ profile }: { profile: Profile }) {
   const text = draft ?? String(profile.toolCallTimeoutSecs ?? "");
   const [validationError, setValidationError] = useState<string | null>(null);
   const autosave = useAutosave<number | null>(async (toolCallTimeoutSecs) => {
-    await updateProfile(profile.id, { toolCallTimeoutSecs });
+    await updateProfile(profile, { toolCallTimeoutSecs });
     await Promise.all([invalidateProfile(client, profile.id), invalidateProfiles(client)]);
   });
 

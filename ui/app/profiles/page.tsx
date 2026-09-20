@@ -96,7 +96,7 @@ function ProfileCard({ profile, mcpUrl }: { profile: Profile; mcpUrl: string }) 
 
   const toggleEnabledMutation = useMutation({
     mutationFn: async (enabled: boolean) => {
-      await tenantApi.updateProfile(profile.id, { enabled });
+      await tenantApi.updateProfile(profile, { enabled });
       return enabled;
     },
     onMutate: async (enabled) => {

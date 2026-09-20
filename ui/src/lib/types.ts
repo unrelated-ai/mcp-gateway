@@ -103,6 +103,7 @@ export type McpSecuritySettings = {
 };
 
 export type McpProfileSettings = {
+  modernProtocol: boolean;
   capabilities: McpCapabilitiesPolicy;
   notifications: McpNotificationFilter;
   namespacing: McpNamespacing;
@@ -111,6 +112,7 @@ export type McpProfileSettings = {
 
 // NOTE: For v0 design work, we intentionally keep advanced fields loosely typed.
 export type Profile = {
+  revision: number;
   id: string;
   name: string;
   description?: string | null;

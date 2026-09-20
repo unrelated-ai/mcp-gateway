@@ -169,7 +169,7 @@ export function ToolsNewTab({
 
   const pipelineAutosave = useAutosave<TransformPipeline>(async (nextTransforms) => {
     if (!profile) throw new Error("Profile not loaded");
-    await tenantApi.updateProfile(profile.id, { transforms: nextTransforms });
+    await tenantApi.updateProfile(profile, { transforms: nextTransforms });
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: qk.profile(profile.id) }),
       queryClient.invalidateQueries({ queryKey: qk.profiles() }),
@@ -202,7 +202,7 @@ export function ToolsNewTab({
         seen.add(p.tool);
       }
       if (!profile) throw new Error("Profile not loaded");
-      await tenantApi.updateProfile(profile.id, { toolPolicies: stable });
+      await tenantApi.updateProfile(profile, { toolPolicies: stable });
       return stable;
     },
     onSuccess: async (toolPolicies) => {

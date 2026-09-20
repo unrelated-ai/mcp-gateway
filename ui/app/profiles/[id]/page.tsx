@@ -97,7 +97,24 @@ export default function ProfileDetailPage() {
     enabled: !!profileId,
     queryFn: () => tenantApi.getProfile(profileId),
   });
-  const profile: Profile | null = profileQuery.data ?? null;
+  const [editBase, setEditBase] = useState<{ id: string; revision: number } | null>(null);
+  const latestProfile = profileQuery.data;
+  // Keep the loaded revision across background refreshes. Successful writes from
+  // this browser are rebased by the updater; another browser requires a reload.
+  if (latestProfile && editBase?.id !== latestProfile.id) {
+    setEditBase({ id: latestProfile.id, revision: latestProfile.revision });
+  }
+  const profile = useMemo<Profile | null>(
+    () =>
+      latestProfile
+        ? {
+            ...latestProfile,
+            revision:
+              editBase?.id === latestProfile.id ? editBase.revision : latestProfile.revision,
+          }
+        : null,
+    [latestProfile, editBase],
+  );
   const loading = profileQuery.isPending;
   const error =
     profileQuery.error instanceof Error
@@ -142,7 +159,7 @@ export default function ProfileDetailPage() {
   const updateAuthMutation = useMutation({
     mutationFn: async (next: AuthDraft) => {
       if (!profile) throw new Error("Profile not loaded");
-      await tenantApi.updateProfile(profile.id, { dataPlaneAuth: authSettingsFromDraft(next) });
+      await tenantApi.updateProfile(profile, { dataPlaneAuth: authSettingsFromDraft(next) });
       return next;
     },
     onSuccess: async (next) => {
@@ -169,7 +186,7 @@ export default function ProfileDetailPage() {
   const toggleEnabledMutation = useMutation({
     mutationFn: async (enabled: boolean) => {
       if (!profile) throw new Error("Profile not loaded");
-      await tenantApi.updateProfile(profile.id, { enabled });
+      await tenantApi.updateProfile(profile, { enabled });
       return enabled;
     },
     onMutate: async (enabled) => {
@@ -211,7 +228,7 @@ export default function ProfileDetailPage() {
   const updateMetaMutation = useMutation({
     mutationFn: async (next: { name: string; description: string }) => {
       if (!profile) throw new Error("Profile not loaded");
-      await tenantApi.updateProfile(profile.id, {
+      await tenantApi.updateProfile(profile, {
         name: next.name.trim(),
         description: next.description.trim() ? next.description : null,
       });
@@ -260,7 +277,7 @@ export default function ProfileDetailPage() {
   const updateEnabledToolsMutation = useMutation({
     mutationFn: async (nextTools: string[]) => {
       if (!profile) throw new Error("Profile not loaded");
-      await tenantApi.updateProfile(profile.id, { tools: nextTools });
+      await tenantApi.updateProfile(profile, { tools: nextTools });
       return nextTools;
     },
     onMutate: async (nextTools) => {

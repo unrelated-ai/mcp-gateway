@@ -317,6 +317,43 @@ test("transform retries and MCP edits preserve each other", async ({ page }) => 
   await expect(rename).toHaveValue("whoami_browser");
 });
 
+test("another browser edit requires reload even after a background refresh", async ({
+  page,
+  browser,
+}) => {
+  await openProfile(page);
+  const otherContext = await browser.newContext();
+  try {
+    const other = await otherContext.newPage();
+    await other.request.post(`${stack.uiBase}/api/session/unlock`, {
+      data: { token: tenantToken },
+    });
+    await openProfile(other);
+    await timeout(other, "55");
+    await expect(other.getByRole("status", { name: "Timeout save status" })).toHaveText("Saved");
+    const refresh = page.waitForResponse(
+      (response) => response.url().endsWith(apiPath()) && response.request().method() === "GET",
+    );
+    await page.evaluate(async () => {
+      window.dispatchEvent(new Event("offline"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      window.dispatchEvent(new Event("online"));
+    });
+    expect((await refresh).ok()).toBeTruthy();
+    await timeout(page, "56");
+    const status = page.getByRole("status", { name: "Timeout save status" });
+    await expect(status).toContainText("Profile changed in another window");
+    expect((await stored(page)).toolCallTimeoutSecs).toBe(55);
+    await expect(page.getByRole("textbox", { name: "Timeout (seconds)" })).toHaveValue("56");
+    await status.getByRole("button", { name: "Reload profile" }).click();
+    await expect(page.getByRole("textbox", { name: "Timeout (seconds)" })).toHaveValue("55");
+    await timeout(page, "42");
+    await expect(status).toHaveText("Saved");
+  } finally {
+    await otherContext.close();
+  }
+});
+
 test("one standalone build serves two runtime Gateway URLs, including copied configs", async ({
   page,
   context,
@@ -374,4 +411,30 @@ test("phone navigation and profile controls fit, with keyboard dismissal and foc
     main.scrollTop = 0;
   });
   await page.screenshot({ path: testInfo.outputPath("profile-mobile.png") });
+});
+
+test("managed deployment writes enforce tenant sessions and cross-site protection", async ({
+  page,
+  browser,
+}) => {
+  const unauthenticated = await browser.newContext();
+  try {
+    // Explicitly authenticate this raw HTTP request before testing the CSRF layer.
+    const cookie = (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join("; ");
+    for (const method of ["POST", "PATCH"]) {
+      const suffix = method === "PATCH" ? "/test-request" : "";
+      const url = `${stack.uiBase}/api/tenant/managed-mcp/deployments${suffix}`;
+      const anonymous = await unauthenticated.request.fetch(url, { method, data: {} });
+      expect(anonymous.status()).toBe(401);
+      const crossSite = await page.request.fetch(url, {
+        method,
+        data: {},
+        headers: { cookie, "sec-fetch-site": "cross-site" },
+      });
+      expect(crossSite.status()).toBe(403);
+      expect(await crossSite.json()).toEqual({ ok: false, error: "cross-site request blocked" });
+    }
+  } finally {
+    await unauthenticated.close();
+  }
 });

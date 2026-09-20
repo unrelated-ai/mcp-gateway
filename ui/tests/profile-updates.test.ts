@@ -15,6 +15,7 @@ function deferred() {
 function profile(): Profile {
   return {
     id: "one",
+    revision: 1,
     tenantId: "tenant",
     dataPlanePath: "/one/mcp",
     name: "Original",
@@ -46,13 +47,13 @@ test("overlapping panel edits serialize and preserve the latest saved fields", a
         entered.resolve();
         await blocked.promise;
       }
-      stored = { ...stored, ...body };
+      stored = { ...stored, ...body, revision: stored.revision + 1 };
     },
   });
-  const first = update("one", { toolCallTimeoutSecs: 31 });
+  const first = update(profile(), { toolCallTimeoutSecs: 31 });
   await entered.promise;
-  const second = update("one", { toolCallTimeoutSecs: 32 });
-  const meta = update("one", { name: "Renamed" });
+  const second = update(profile(), { toolCallTimeoutSecs: 32 });
+  const meta = update(profile(), { name: "Renamed" });
   assert.deepEqual(writes, [31]);
   blocked.resolve();
   await Promise.all([first, second, meta]);
@@ -71,13 +72,13 @@ test("a failed save can be retried, null clears fields, and submitted drafts are
         fail = false;
         throw new Error("Gateway unavailable");
       }
-      stored = { ...stored, ...body };
+      stored = { ...stored, ...body, revision: stored.revision + 1 };
     },
   });
-  await assert.rejects(update("one", { toolCallTimeoutSecs: null }), /Gateway unavailable/);
+  await assert.rejects(update(profile(), { toolCallTimeoutSecs: null }), /Gateway unavailable/);
   assert.equal(stored.toolCallTimeoutSecs, 15);
   const patch = { toolCallTimeoutSecs: null, description: null, tools: ["echo"] };
-  const retry = update("one", patch);
+  const retry = update(profile(), patch);
   patch.tools.push("later edit");
   await retry;
   assert.equal(stored.toolCallTimeoutSecs, null);
@@ -97,9 +98,41 @@ test("a slow profile does not block another profile", async () => {
       writes.push(id);
     },
   });
-  const slow = update("slow", { name: "Slow" });
-  await update("fast", { name: "Fast" });
+  const slow = update({ ...profile(), id: "slow" }, { name: "Slow" });
+  await update({ ...profile(), id: "fast" }, { name: "Fast" });
   assert.deepEqual(writes, ["fast"]);
   blocked.resolve();
   await slow;
+});
+
+test("an external edit requires reload and never overwrites the other browser", async () => {
+  const draft = profile();
+  let stored = { ...profile(), revision: 2, name: "Other browser" };
+  let writes = 0;
+  const update = createProfileUpdater({
+    read: async () => structuredClone(stored),
+    write: async (_id, body) => {
+      writes += 1;
+      stored = { ...stored, ...body, revision: stored.revision + 1 };
+    },
+  });
+  await assert.rejects(update(draft, { name: "Stale draft" }), /Reload the profile/);
+  assert.equal(writes, 0);
+  assert.equal(stored.name, "Other browser");
+  await update(stored, { name: "Reviewed edit" });
+  assert.equal(stored.name, "Reviewed edit");
+});
+
+test("a race after reading is rejected without an automatic retry", async () => {
+  let writes = 0;
+  const update = createProfileUpdater({
+    read: async () => profile(),
+    write: async (_id, body) => {
+      assert.equal(body.expectedRevision, 1);
+      writes += 1;
+      throw new Error("Profile changed in another window. Reload the profile before saving again.");
+    },
+  });
+  await assert.rejects(update(profile(), { name: "Draft" }), /Reload the profile/);
+  assert.equal(writes, 1);
 });

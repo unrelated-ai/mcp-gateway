@@ -1,5 +1,12 @@
 "use client";
 
+import {
+  BYTES_PER_MIB,
+  DEFAULT_MAX_POST_BODY_BYTES,
+  DEFAULT_MAX_SSE_EVENT_BYTES,
+  TRANSPORT_LIMIT_PRESETS_MIB,
+} from "@/src/lib/transportLimits";
+
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
 import { useQuery } from "@tanstack/react-query";
@@ -95,9 +102,6 @@ export default function SettingsPage() {
   const [auditEnabledDraft, setAuditEnabledDraft] = useState<boolean | null>(null);
   const [auditRetentionDaysDraft, setAuditRetentionDaysDraft] = useState<number | null>(null);
   const [auditDefaultLevelDraft, setAuditDefaultLevelDraft] = useState<string | null>(null);
-
-  const DEFAULT_MAX_POST_BODY_BYTES = 4 * 1024 * 1024;
-  const DEFAULT_MAX_SSE_EVENT_BYTES = 8 * 1024 * 1024;
 
   const [maxPostBodyBytesDraft, setMaxPostBodyBytesDraft] = useState<number | null>(null);
   const [maxSseEventBytesDraft, setMaxSseEventBytesDraft] = useState<number | null>(null);
@@ -204,7 +208,7 @@ export default function SettingsPage() {
       maxJsonObjectKeys: effectiveTransportLimits.maxJsonObjectKeys ?? null,
       maxJsonStringBytes: effectiveTransportLimits.maxJsonStringBytes ?? null,
     };
-  }, [DEFAULT_MAX_POST_BODY_BYTES, DEFAULT_MAX_SSE_EVENT_BYTES, effectiveTransportLimits]);
+  }, [effectiveTransportLimits]);
 
   // Autosave: debounce changes and only send when settings differ from the last known server value.
   const debounceRef = useRef<number | null>(null);
@@ -370,15 +374,15 @@ export default function SettingsPage() {
                     Limits downstream JSON-RPC request bodies on{" "}
                     <code>POST /&#123;profile_id&#125;/mcp</code>. Default is{" "}
                     <code>{DEFAULT_MAX_POST_BODY_BYTES}</code> (~
-                    {Math.round((DEFAULT_MAX_POST_BODY_BYTES / 1024 / 1024) * 10) / 10} MiB) unless
-                    overridden.
+                    {Math.round((DEFAULT_MAX_POST_BODY_BYTES / BYTES_PER_MIB) * 10) / 10} MiB)
+                    unless overridden.
                   </>
                 }
                 right={
                   <div className="flex flex-col items-end gap-2">
                     <div className="flex flex-wrap justify-end gap-2">
-                      {[1, 4, 8, 16, 32].map((mib) => {
-                        const bytes = mib * 1024 * 1024;
+                      {TRANSPORT_LIMIT_PRESETS_MIB.map((mib) => {
+                        const bytes = mib * BYTES_PER_MIB;
                         const active = draftMaxPostBodyBytes === bytes;
                         return (
                           <Button
@@ -420,15 +424,15 @@ export default function SettingsPage() {
                   <>
                     Limits a single SSE <code>data:</code> payload from upstream servers. Default is{" "}
                     <code>{DEFAULT_MAX_SSE_EVENT_BYTES}</code> (~
-                    {Math.round((DEFAULT_MAX_SSE_EVENT_BYTES / 1024 / 1024) * 10) / 10} MiB) unless
-                    overridden.
+                    {Math.round((DEFAULT_MAX_SSE_EVENT_BYTES / BYTES_PER_MIB) * 10) / 10} MiB)
+                    unless overridden.
                   </>
                 }
                 right={
                   <div className="flex flex-col items-end gap-2">
                     <div className="flex flex-wrap justify-end gap-2">
-                      {[1, 4, 8, 16, 32].map((mib) => {
-                        const bytes = mib * 1024 * 1024;
+                      {TRANSPORT_LIMIT_PRESETS_MIB.map((mib) => {
+                        const bytes = mib * BYTES_PER_MIB;
                         const active = draftMaxSseEventBytes === bytes;
                         return (
                           <Button

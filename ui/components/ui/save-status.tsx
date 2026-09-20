@@ -22,8 +22,14 @@ export function SaveStatus({
       {status === "error" ? (
         <div className="flex flex-wrap items-center gap-2 text-danger">
           <span>Not saved. {error}</span>
-          <Button variant="secondary" size="sm" onClick={onRetry}>
-            Retry save
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={
+              error?.includes("Reload the profile") ? () => window.location.reload() : onRetry
+            }
+          >
+            {error?.includes("Reload the profile") ? "Reload profile" : "Retry save"}
           </Button>
         </div>
       ) : null}

@@ -76,6 +76,7 @@ export function McpSettingsCard({ profile }: { profile: Profile | null }) {
   }, [profile?.mcp]);
 
   const initialEnabled = useMemo(() => enabledCapsFrom(initial), [initial]);
+  const [modernProtocol, setModernProtocol] = useState(initial.modernProtocol);
   const [enabledCaps, setEnabledCaps] = useState<Set<McpCapability>>(initialEnabled);
   const [showCapsHelp, setShowCapsHelp] = useState(false);
 
@@ -84,6 +85,7 @@ export function McpSettingsCard({ profile }: { profile: Profile | null }) {
       // Keep other (currently-hidden) MCP settings intact for now.
       return normalizeMcpSettings({
         ...initial,
+        modernProtocol,
         capabilities: {
           allow: [],
           deny: uniqSortedCaps(
@@ -92,15 +94,16 @@ export function McpSettingsCard({ profile }: { profile: Profile | null }) {
         },
       });
     },
-    [initial],
+    [initial, modernProtocol],
   );
 
   const autosave = useAutosave<McpProfileSettings>(async (nextMcp) => {
     if (!profile) throw new Error("Profile not loaded");
-    await tenantApi.updateProfile(profile.id, (current) => ({
+    await tenantApi.updateProfile(profile, (current) => ({
       mcp: normalizeMcpSettings({
         ...asMcpSettings(current.mcp),
         capabilities: nextMcp.capabilities,
+        modernProtocol: nextMcp.modernProtocol,
       }),
     }));
     await Promise.all([
@@ -124,6 +127,16 @@ export function McpSettingsCard({ profile }: { profile: Profile | null }) {
       bodyClassName="space-y-6"
     >
       <SaveStatus {...autosave} onRetry={autosave.retry} label="MCP capabilities" />
+
+      <Toggle
+        checked={modernProtocol}
+        onChange={(checked) => {
+          setModernProtocol(checked);
+          autosave.commit({ ...buildNext(enabledCaps), modernProtocol: checked });
+        }}
+        label="MCP 2026-07-28"
+        description="Enable discovery, stateless requests, subscriptions and task routing. Every attached MCP upstream must support this version. Older clients can still initialize normally."
+      />
 
       {/* Capabilities */}
       <div className="space-y-3">

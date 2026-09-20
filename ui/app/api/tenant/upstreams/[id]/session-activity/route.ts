@@ -1,3 +1,4 @@
+import { tenantRoutes } from "@/src/lib/gatewayRoutes";
 import { proxyTenantRequest } from "@/src/lib/server/gateway-proxy";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +14,7 @@ export async function GET(req: Request, ctx: Ctx) {
   if (ttlSecs) qs.set("ttlSecs", ttlSecs);
 
   return proxyTenantRequest(req, {
-    path: `/tenant/v1/upstreams/${encodeURIComponent(id)}/session-activity`,
+    path: tenantRoutes.UPSTREAM_ACTIVITY(id),
     search: qs.toString(),
   });
 }
