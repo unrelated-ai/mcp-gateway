@@ -123,14 +123,6 @@ pub(super) fn merge_tools_surface(
     profile: &crate::store::Profile,
     sources: Vec<ToolSourceTools>,
 ) -> ToolSurfaceMerge {
-    #[derive(Debug, Clone)]
-    struct ToolRecord {
-        kind: ToolRouteKind,
-        source_id: String,
-        original_name: String,
-        tool: rmcp::model::Tool,
-    }
-
     let mut records: Vec<ToolRecord> = Vec::new();
     let mut per_source_tool_counts: HashMap<String, usize> = HashMap::new();
 
@@ -138,6 +130,10 @@ pub(super) fn merge_tools_surface(
         let mut seen: HashSet<String> = HashSet::new();
         for mut tool in source.tools {
             let original_name = tool.name.to_string();
+            let original_input_schema = tool.input_schema.clone();
+            if !routing_annotations_valid(profile, &tool, &source.source_id) {
+                continue;
+            }
 
             // Schema transforms (param renames + default surface).
             let mut schema = serde_json::Value::Object(tool.input_schema.as_ref().clone());
@@ -189,6 +185,7 @@ pub(super) fn merge_tools_surface(
                 .entry(source.source_id.clone())
                 .or_default() += 1;
             records.push(ToolRecord {
+                original_input_schema,
                 kind: source.kind,
                 source_id: source.source_id.clone(),
                 original_name,
@@ -228,6 +225,7 @@ pub(super) fn merge_tools_surface(
         merged.push(r.tool);
 
         let route = ToolRoute {
+            original_input_schema: r.original_input_schema,
             kind: r.kind,
             source_id: r.source_id.clone(),
             original_name: r.original_name.clone(),
@@ -493,6 +491,39 @@ pub(super) async fn aggregate_list_resources(
     Ok(super::sse_single_message(msg))
 }
 
+pub(super) async fn aggregate_list_resource_templates(
+    state: &McpState,
+    profile_id: &str,
+    payload: &TokenPayloadV1,
+    req_id: rmcp::model::RequestId,
+    hop: u32,
+) -> Result<Response, Response> {
+    let per_upstream =
+        super::upstream::list_resource_templates_all_upstreams(state, profile_id, payload, hop)
+            .await?;
+    let mut merged = Vec::new();
+    for (source, mut templates) in per_upstream {
+        for template in &mut templates {
+            template.uri_template =
+                unrelated_mcp_support::resource_template_uri(&source, &template.uri_template);
+        }
+        merged.extend(templates);
+    }
+    merged.sort_by(|a, b| a.uri_template.cmp(&b.uri_template));
+
+    let result = rmcp::model::ListResourceTemplatesResult {
+        resource_templates: merged,
+        ..Default::default()
+    };
+
+    let msg = ServerJsonRpcMessage::Response(JsonRpcResponse {
+        jsonrpc: JsonRpcVersion2_0,
+        id: req_id,
+        result: ServerResult::ListResourceTemplatesResult(result),
+    });
+    Ok(super::sse_single_message(msg))
+}
+
 pub(super) async fn aggregate_list_prompts(
     state: &McpState,
     profile_id: &str,
@@ -565,6 +596,16 @@ pub(super) async fn resolve_resource_owner(
     uri: &str,
     hop: u32,
 ) -> anyhow::Result<(String, String)> {
+    if let Some((source, original)) = unrelated_mcp_support::parse_resource_template_uri(uri) {
+        anyhow::ensure!(
+            payload
+                .bindings
+                .iter()
+                .any(|binding| binding.upstream == source),
+            "unknown resource source"
+        );
+        return Ok((source, original));
+    }
     // If this is a gateway collision URN, parse the upstream id from it.
     if super::ids::parse_resource_collision_urn(uri).is_some() {
         // We need to map back to original uri; do that by listing resources and matching exposed uri.
@@ -635,10 +676,21 @@ async fn list_tools_tenant_sources(
     state: &McpState,
     profile: &crate::store::Profile,
 ) -> Vec<(String, Vec<rmcp::model::Tool>)> {
+    let local_ids = match state
+        .store
+        .tenant_tool_source_ids(&profile.tenant_id, &profile.source_ids)
+        .await
+    {
+        Ok(ids) => ids,
+        Err(error) => {
+            tracing::warn!(%error, "tenant source classification failed");
+            return Vec::new();
+        }
+    };
     let mut out = Vec::new();
     for source_id in &profile.source_ids {
         // Skip shared local sources (handled separately).
-        if state.catalog.is_local_tool_source(source_id) {
+        if state.catalog.is_local_tool_source(source_id) || !local_ids.contains(source_id) {
             continue;
         }
 
@@ -724,4 +776,30 @@ async fn publish_contract_event(state: &McpState, change: Option<ContractChange>
         event_id: state.contracts.next_local_event_id(),
     };
     state.contracts.broadcast_event(event);
+}
+
+#[derive(Debug, Clone)]
+struct ToolRecord {
+    kind: ToolRouteKind,
+    source_id: String,
+    original_name: String,
+    original_input_schema: Arc<rmcp::model::JsonObject>,
+    tool: rmcp::model::Tool,
+}
+
+fn routing_annotations_valid(
+    profile: &crate::store::Profile,
+    tool: &rmcp::model::Tool,
+    source: &str,
+) -> bool {
+    if !profile.mcp.modern_protocol
+        || unrelated_mcp_support::headers::validate_tool_schema(&serde_json::json!(
+            tool.input_schema
+        ))
+        .is_ok()
+    {
+        return true;
+    }
+    tracing::warn!(source, tool = %tool.name, "excluding invalid MCP routing annotations");
+    false
 }

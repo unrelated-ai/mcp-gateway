@@ -21,17 +21,19 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
+use unrelated_gateway_api::error::{ApiError, Resource, StoreKind};
+use unrelated_gateway_api::routes;
 use unrelated_tool_transforms::TransformPipeline;
 use uuid::{Uuid, Version};
 
 pub(super) fn router() -> Router {
     Router::new()
         .route(
-            "/tenant/v1/profiles",
+            routes::tenant::PROFILES.template(),
             get(list_profiles).post(create_profile),
         )
         .route(
-            "/tenant/v1/profiles/{profile_id}",
+            routes::tenant::PROFILE.template(),
             get(get_profile).put(put_profile).delete(delete_profile),
         )
 }
@@ -53,7 +55,7 @@ async fn validate_no_self_upstream_loop(
         let Some(upstream) = store
             .get_upstream(upstream_id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response())?
+            .map_err(|e| ApiError::internal(e).into_response())?
         else {
             continue;
         };
@@ -84,7 +86,7 @@ async fn resolve_upstream_ids_for_tenant(
         let tenant_owned = store
             .get_upstream(&internal)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response())?
+            .map_err(|e| ApiError::internal(e).into_response())?
             .is_some();
         if tenant_owned {
             out.push(internal);
@@ -94,7 +96,7 @@ async fn resolve_upstream_ids_for_tenant(
         let global = store
             .get_upstream(id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response())?
+            .map_err(|e| ApiError::internal(e).into_response())?
             .is_some();
         if global {
             out.push(id.clone());
@@ -160,6 +162,8 @@ struct CreateProfileRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PutProfileRequest {
+    #[serde(default)]
+    expected_revision: Option<i64>,
     /// Human-friendly profile name (unique per tenant, case-insensitive).
     ///
     /// If omitted, defaults to the existing profile name (PUT semantics).
@@ -213,6 +217,7 @@ struct PutProfileRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProfileResponse {
+    revision: i64,
     id: String,
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -263,6 +268,7 @@ fn profile_to_response(p: AdminProfile) -> ProfileResponse {
         })
         .collect();
     ProfileResponse {
+        revision: p.revision,
         name: p.name,
         description: p.description,
         tenant_id: p.tenant_id,
@@ -300,7 +306,7 @@ async fn list_profiles(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     match store.list_profiles().await {
@@ -312,7 +318,7 @@ async fn list_profiles(
                 .collect();
             Json(ProfilesResponse { profiles }).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -326,7 +332,7 @@ async fn get_profile(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // UUIDv4 only, otherwise 404 (avoid enumeration patterns).
@@ -335,15 +341,15 @@ async fn get_profile(
         .and_then(|u| (u.get_version() == Some(Version::Random)).then_some(u))
         .is_none()
     {
-        return (StatusCode::NOT_FOUND, "profile not found").into_response();
+        return ApiError::not_found(Resource::Profile).into_response();
     }
 
     match store.get_profile(&profile_id).await {
         Ok(Some(profile)) if profile.tenant_id == tenant_id => {
             Json(profile_to_response(profile)).into_response()
         }
-        Ok(_) => (StatusCode::NOT_FOUND, "profile not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => ApiError::not_found(Resource::Profile).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -359,7 +365,7 @@ async fn put_profile_handle_name_conflict(
             )
                 .into_response()
         } else {
-            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+            ApiError::internal(e).into_response()
         }
     })
 }
@@ -374,13 +380,13 @@ async fn create_profile(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     let profile_id = Uuid::new_v4().to_string();
@@ -404,6 +410,7 @@ async fn create_profile(
     if let Err(resp) = put_profile_handle_name_conflict(
         store.as_ref(),
         PutProfileInput {
+            expected_revision: None,
             profile_id: &profile_id,
             tenant_id: &tenant_id,
             name: &req.name,
@@ -461,7 +468,7 @@ async fn put_profile(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     let started = Instant::now();
 
@@ -477,7 +484,7 @@ async fn put_profile(
             },
             action: "tenant.profile_put",
             http_method: "PUT",
-            http_route: "/tenant/v1/profiles/{profile_id}",
+            http_route: routes::tenant::PROFILE.template(),
             status_code: i32::from(outcome.status.as_u16()),
             ok: outcome.status.is_success(),
             elapsed: started.elapsed(),
@@ -612,6 +619,7 @@ async fn tenant_put_profile_inner_impl(
     tenant_put_profile_store_put(
         store,
         TenantPutProfileStorePutInput {
+            expected_revision: req.expected_revision,
             tenant_id,
             profile_id: &profile_id,
             enabled_for_meta,
@@ -735,6 +743,7 @@ async fn tenant_put_profile_resolve_upstreams(
 }
 
 struct TenantPutProfileStorePutInput<'a> {
+    expected_revision: Option<i64>,
     tenant_id: &'a str,
     profile_id: &'a str,
     enabled_for_meta: bool,
@@ -760,6 +769,7 @@ async fn tenant_put_profile_store_put(
 ) -> TenantPutProfileStep<()> {
     if let Err(e) = store
         .put_profile(PutProfileInput {
+            expected_revision: input.expected_revision,
             profile_id: input.profile_id,
             tenant_id: input.tenant_id,
             name: input.name_for_meta,
@@ -791,6 +801,17 @@ async fn tenant_put_profile_store_put(
         })
         .await
     {
+        if e.is::<crate::store::ProfileRevisionConflict>() {
+            return Err(Box::new(TenantPutProfileOutcome::fail(
+                input.profile_id.to_string(),
+                input.enabled_for_meta,
+                Some(input.profile_uuid),
+                StatusCode::CONFLICT,
+                e.to_string(),
+                AuditError::new("revision_conflict", e.to_string()),
+                Some(input.name_for_meta.to_string()),
+            )));
+        }
         if e.to_string().contains("profiles_tenant_name_ci_uq") {
             return Err(Box::new(TenantPutProfileOutcome::fail(
                 input.profile_id.to_string(),
@@ -829,12 +850,12 @@ async fn delete_profile(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     let started = Instant::now();
     let http_action = "tenant.profile_delete";
     let http_method = "DELETE";
-    let http_route = "/tenant/v1/profiles/{profile_id}";
+    let http_route = routes::tenant::PROFILE.template();
 
     let tenant_id_for_audit = tenant_id.clone();
     let profile_id_for_meta = profile_id.clone();

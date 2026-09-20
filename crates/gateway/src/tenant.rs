@@ -22,6 +22,8 @@ use serde_json::Value;
 use sha2::Digest as _;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use unrelated_gateway_api::error::{ApiError, Resource, StoreKind};
+use unrelated_gateway_api::routes;
 use unrelated_http_tools::config::AuthConfig;
 use unrelated_http_tools::config::HttpServerConfig;
 use unrelated_openapi_tools::config::{
@@ -45,74 +47,83 @@ pub struct TenantState {
 
 pub fn router(state: Arc<TenantState>) -> Router {
     Router::new()
-        .route("/tenant/v1/upstreams", get(list_upstreams))
+        .route(routes::tenant::UPSTREAMS.template(), get(list_upstreams))
         .route(
-            "/tenant/v1/upstreams/{upstream_id}",
+            routes::tenant::UPSTREAM.template(),
             get(get_upstream).put(put_upstream).delete(delete_upstream),
         )
         .route(
-            "/tenant/v1/upstreams/{upstream_id}/endpoints/{endpoint_id}",
+            routes::tenant::ENDPOINT.template(),
             patch(patch_upstream_endpoint).delete(delete_upstream_endpoint),
         )
         .route(
-            "/tenant/v1/upstreams/{upstream_id}/surface",
+            routes::tenant::UPSTREAM_SURFACE.template(),
             get(get_upstream_surface),
         )
         .route(
-            "/tenant/v1/upstreams/{upstream_id}/session-activity",
+            routes::tenant::UPSTREAM_ACTIVITY.template(),
             get(get_upstream_session_activity),
         )
         .merge(managed_deployments::router())
         .merge(profiles::router())
         .route(
-            "/tenant/v1/profiles/{profile_id}/audit/settings",
+            routes::tenant::PROFILE_AUDIT.template(),
             get(get_profile_audit_settings).put(put_profile_audit_settings),
         )
         .route(
-            "/tenant/v1/profiles/{profile_id}/surface",
+            routes::tenant::PROFILE_SURFACE.template(),
             get(get_profile_surface),
         )
-        .route("/tenant/v1/tool-sources", get(list_tool_sources))
         .route(
-            "/tenant/v1/tool-sources/{source_id}/tools",
+            routes::tenant::TOOL_SOURCES.template(),
+            get(list_tool_sources),
+        )
+        .route(
+            routes::tenant::TOOL_SOURCE_TOOLS.template(),
             get(get_tool_source_tools),
         )
         .route(
-            "/tenant/v1/tool-sources/{source_id}",
+            routes::tenant::TOOL_SOURCE.template(),
             get(get_tool_source)
                 .put(put_tool_source)
                 .delete(delete_tool_source),
         )
         .route(
-            "/tenant/v1/tool-sources/openapi/inspect",
+            routes::tenant::OPENAPI_INSPECT.template(),
             axum::routing::post(openapi_inspect),
         )
         .route(
-            "/tenant/v1/tool-sources/validate-id",
+            routes::tenant::VALIDATE_SOURCE_ID.template(),
             axum::routing::post(validate_source_id),
         )
-        .route("/tenant/v1/secrets", get(list_secrets).post(put_secret))
-        .route("/tenant/v1/secrets/{name}", delete(delete_secret))
         .route(
-            "/tenant/v1/api-keys",
+            routes::tenant::SECRETS.template(),
+            get(list_secrets).post(put_secret),
+        )
+        .route(routes::tenant::SECRET.template(), delete(delete_secret))
+        .route(
+            routes::tenant::API_KEYS.template(),
             get(list_api_keys).post(create_api_key),
         )
-        .route("/tenant/v1/api-keys/{api_key_id}", delete(revoke_api_key))
+        .route(routes::tenant::API_KEY.template(), delete(revoke_api_key))
         .route(
-            "/tenant/v1/audit/settings",
+            routes::tenant::AUDIT_SETTINGS.template(),
             get(get_audit_settings).put(put_audit_settings),
         )
         .route(
-            "/tenant/v1/transport/limits",
+            routes::tenant::TRANSPORT_LIMITS.template(),
             get(get_transport_limits).put(put_transport_limits),
         )
-        .route("/tenant/v1/audit/events", get(list_audit_events))
         .route(
-            "/tenant/v1/audit/analytics/tool-calls/by-tool",
+            routes::tenant::AUDIT_EVENTS.template(),
+            get(list_audit_events),
+        )
+        .route(
+            routes::tenant::AUDIT_BY_TOOL.template(),
             get(tool_call_stats_by_tool),
         )
         .route(
-            "/tenant/v1/audit/analytics/tool-calls/by-api-key",
+            routes::tenant::AUDIT_BY_API_KEY.template(),
             get(tool_call_stats_by_api_key),
         )
         .layer(axum::Extension(state))
@@ -158,9 +169,7 @@ struct ValidateSourceIdResponse {
 const TENANT_UPSTREAM_ID_PREFIX: &str = "tu1.";
 
 pub(crate) fn tenant_upstream_internal_id(tenant_id: &str, upstream_id: &str) -> String {
-    let t = URL_SAFE_NO_PAD.encode(tenant_id);
-    let u = URL_SAFE_NO_PAD.encode(upstream_id);
-    format!("{TENANT_UPSTREAM_ID_PREFIX}{t}.{u}")
+    unrelated_mcp_support::tenant_upstream_id(tenant_id, upstream_id)
 }
 
 fn parse_tenant_upstream_internal_id(id: &str) -> Option<(String, String)> {
@@ -192,8 +201,8 @@ async fn ensure_enabled_tenant(
 ) -> Result<(), Response> {
     match store.get_tenant(tenant_id).await {
         Ok(Some(t)) if t.enabled => Ok(()),
-        Ok(_) => Err((StatusCode::UNAUTHORIZED, "invalid tenant").into_response()),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()),
+        Ok(_) => Err(ApiError::invalid_tenant().into_response()),
+        Err(e) => Err(ApiError::internal(e).into_response()),
     }
 }
 
@@ -251,13 +260,13 @@ async fn list_upstreams(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     match store.list_upstreams().await {
@@ -268,7 +277,7 @@ async fn list_upstreams(
                 .collect();
             Json(UpstreamsResponse { upstreams }).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -282,7 +291,7 @@ async fn get_upstream(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Prefer tenant-owned upstream if present; otherwise fall back to global.
@@ -292,16 +301,16 @@ async fn get_upstream(
         Ok(None) => match store.get_upstream(&upstream_id).await {
             Ok(Some(u)) => Some(u),
             Ok(None) => None,
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Err(e) => return ApiError::internal(e).into_response(),
         },
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     let Some(u) = u else {
-        return (StatusCode::NOT_FOUND, "upstream not found").into_response();
+        return ApiError::not_found(Resource::Upstream).into_response();
     };
 
     let Some(resp) = upstream_to_response(&tenant_id, u) else {
-        return (StatusCode::NOT_FOUND, "upstream not found").into_response();
+        return ApiError::not_found(Resource::Upstream).into_response();
     };
     Json(resp).into_response()
 }
@@ -317,7 +326,7 @@ async fn get_upstream_session_activity(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Resolve tenant-owned upstream first, then global visible upstream.
@@ -329,13 +338,13 @@ async fn get_upstream_session_activity(
                 if upstream_to_response(&tenant_id, u).is_some() {
                     upstream_id.clone()
                 } else {
-                    return (StatusCode::NOT_FOUND, "upstream not found").into_response();
+                    return ApiError::not_found(Resource::Upstream).into_response();
                 }
             }
-            Ok(None) => return (StatusCode::NOT_FOUND, "upstream not found").into_response(),
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Ok(None) => return ApiError::not_found(Resource::Upstream).into_response(),
+            Err(e) => return ApiError::internal(e).into_response(),
         },
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     let ttl_secs = crate::pg_store::resolve_upstream_session_activity_ttl_secs(q.ttl_secs);
@@ -353,7 +362,7 @@ async fn get_upstream_session_activity(
             })
             .into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -368,13 +377,13 @@ async fn put_upstream(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     if upstream_id.trim().is_empty() {
@@ -415,7 +424,7 @@ async fn put_upstream(
         )
         .await
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return ApiError::internal(e).into_response();
     }
     (StatusCode::CREATED, Json(OkResponse { ok: true })).into_response()
 }
@@ -430,14 +439,14 @@ async fn delete_upstream(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     let internal_id = tenant_upstream_internal_id(&tenant_id, &upstream_id);
     match store.delete_upstream(&internal_id).await {
         Ok(true) => Json(OkResponse { ok: true }).into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, "upstream not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(false) => ApiError::not_found(Resource::Upstream).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -452,7 +461,7 @@ async fn patch_upstream_endpoint(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     if req.enabled.is_none() && req.lifecycle.is_none() {
         return (
@@ -467,8 +476,8 @@ async fn patch_upstream_endpoint(
         .await
     {
         Ok(true) => Json(OkResponse { ok: true }).into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, "upstream endpoint not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(false) => ApiError::not_found(Resource::Endpoint).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -482,7 +491,7 @@ async fn delete_upstream_endpoint(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     let internal_id = tenant_upstream_internal_id(&tenant_id, &upstream_id);
     match store
@@ -490,8 +499,8 @@ async fn delete_upstream_endpoint(
         .await
     {
         Ok(true) => Json(OkResponse { ok: true }).into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, "upstream endpoint not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(false) => ApiError::not_found(Resource::Endpoint).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -629,14 +638,14 @@ async fn get_upstream_surface(
         Err(resp) => return resp.into_response(),
     };
     let Some(admin_store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Ensure tenant exists + enabled.
     match admin_store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     // Resolve upstream id: prefer tenant-owned, else global.
@@ -645,10 +654,10 @@ async fn get_upstream_surface(
         Ok(Some(_)) => internal_id,
         Ok(None) => match admin_store.get_upstream(&upstream_id).await {
             Ok(Some(_)) => upstream_id.clone(),
-            Ok(None) => return (StatusCode::NOT_FOUND, "upstream not found").into_response(),
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Ok(None) => return ApiError::not_found(Resource::Upstream).into_response(),
+            Err(e) => return ApiError::internal(e).into_response(),
         },
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     let profile = crate::store::Profile {
@@ -708,17 +717,17 @@ async fn get_profile_surface(
         .and_then(|u| (u.get_version() == Some(Version::Random)).then_some(u))
         .is_none()
     {
-        return (StatusCode::NOT_FOUND, "profile not found").into_response();
+        return ApiError::not_found(Resource::Profile).into_response();
     }
 
     // Ensure tenant exists + enabled (consistent with other tenant endpoints).
     let Some(admin_store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     match admin_store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     // IMPORTANT: allow probing surfaces for disabled profiles.
@@ -726,8 +735,8 @@ async fn get_profile_surface(
     // but operators still need to inspect their surface to configure/fix them.
     let admin_profile = match admin_store.get_profile(&profile_id).await {
         Ok(Some(p)) if p.tenant_id == tenant_id => p,
-        Ok(_) => return (StatusCode::NOT_FOUND, "profile not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::not_found(Resource::Profile).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     let mut source_ids = admin_profile.upstream_ids.clone();
@@ -1019,14 +1028,14 @@ async fn openapi_inspect(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     let spec_url = req.spec_url.trim();
@@ -1095,14 +1104,14 @@ async fn validate_source_id(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     let id = req.id.trim();
@@ -1138,7 +1147,7 @@ async fn validate_source_id(
             .into_response();
         }
         Ok(None) => {}
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     Json(ValidateSourceIdResponse {
@@ -1157,7 +1166,7 @@ async fn list_tool_sources(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     match store.list_tool_sources(&tenant_id).await {
@@ -1172,7 +1181,7 @@ async fn list_tool_sources(
                 .collect();
             Json(ToolSourcesResponse { sources }).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1186,7 +1195,7 @@ async fn get_tool_source(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     match store.get_tool_source(&tenant_id, &source_id).await {
@@ -1198,7 +1207,7 @@ async fn get_tool_source(
             let spec = match spec {
                 Ok(v) => v,
                 Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                    return ApiError::internal(e).into_response();
                 }
             };
 
@@ -1210,8 +1219,8 @@ async fn get_tool_source(
             })
             .into_response()
         }
-        Ok(None) => (StatusCode::NOT_FOUND, "tool source not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::not_found(Resource::ToolSource).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1225,14 +1234,14 @@ async fn get_tool_source_tools(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     match state
@@ -1242,7 +1251,7 @@ async fn get_tool_source_tools(
         .await
     {
         Ok(Some(tools)) => Json(ToolSourceToolsResponse { tools }).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "tool source not found").into_response(),
+        Ok(None) => ApiError::not_found(Resource::ToolSource).into_response(),
         Err(e) => (StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
@@ -1258,7 +1267,7 @@ async fn put_tool_source(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     let started = Instant::now();
     let outcome =
@@ -1272,7 +1281,7 @@ async fn put_tool_source(
             actor: AuditActor::default(),
             action: "tenant.tool_source_put",
             http_method: "PUT",
-            http_route: "/tenant/v1/tool-sources/{source_id}",
+            http_route: routes::tenant::TOOL_SOURCE.template(),
             status_code: i32::from(outcome.status.as_u16()),
             ok: outcome.status.is_success(),
             elapsed: started.elapsed(),
@@ -1453,7 +1462,7 @@ async fn delete_tool_source(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     let started = Instant::now();
 
@@ -1470,7 +1479,7 @@ async fn delete_tool_source(
             StatusCode::NOT_FOUND,
             false,
             Some(AuditError::new("not_found", "tool source not found")),
-            (StatusCode::NOT_FOUND, "tool source not found").into_response(),
+            ApiError::not_found(Resource::ToolSource).into_response(),
         ),
         Err(e) => {
             let msg = e.to_string();
@@ -1478,7 +1487,7 @@ async fn delete_tool_source(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 false,
                 Some(AuditError::new("internal_error", msg.clone())),
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                ApiError::internal(msg).into_response(),
             )
         }
     };
@@ -1490,7 +1499,7 @@ async fn delete_tool_source(
             actor: AuditActor::default(),
             action: "tenant.tool_source_delete",
             http_method: "DELETE",
-            http_route: "/tenant/v1/tool-sources/{source_id}",
+            http_route: routes::tenant::TOOL_SOURCE.template(),
             status_code: i32::from(status.as_u16()),
             ok,
             elapsed: started.elapsed(),
@@ -1513,12 +1522,12 @@ async fn list_secrets(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     match store.list_secrets(&tenant_id).await {
         Ok(secrets) => Json(SecretsResponse { secrets }).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1532,7 +1541,7 @@ async fn put_secret(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     let started = Instant::now();
     let tenant_id_for_audit = tenant_id.clone();
@@ -1549,7 +1558,7 @@ async fn put_secret(
                 actor: AuditActor::default(),
                 action: "tenant.secret_put",
                 http_method: "PUT",
-                http_route: "/tenant/v1/secrets",
+                http_route: routes::tenant::SECRETS.template(),
                 status_code: i32::from(status.as_u16()),
                 ok: false,
                 elapsed: started.elapsed(),
@@ -1572,7 +1581,7 @@ async fn put_secret(
                 actor: AuditActor::default(),
                 action: "tenant.secret_put",
                 http_method: "PUT",
-                http_route: "/tenant/v1/secrets",
+                http_route: routes::tenant::SECRETS.template(),
                 status_code: i32::from(status.as_u16()),
                 ok: false,
                 elapsed: started.elapsed(),
@@ -1600,7 +1609,7 @@ async fn put_secret(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 false,
                 Some(AuditError::new("internal_error", msg.clone())),
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                ApiError::internal(msg).into_response(),
             )
         }
     };
@@ -1612,7 +1621,7 @@ async fn put_secret(
             actor: AuditActor::default(),
             action: "tenant.secret_put",
             http_method: "PUT",
-            http_route: "/tenant/v1/secrets",
+            http_route: routes::tenant::SECRETS.template(),
             status_code: i32::from(status.as_u16()),
             ok,
             elapsed: started.elapsed(),
@@ -1637,7 +1646,7 @@ async fn delete_secret(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     let started = Instant::now();
 
@@ -1654,7 +1663,7 @@ async fn delete_secret(
             StatusCode::NOT_FOUND,
             false,
             Some(AuditError::new("not_found", "secret not found")),
-            (StatusCode::NOT_FOUND, "secret not found").into_response(),
+            ApiError::not_found(Resource::Secret).into_response(),
         ),
         Err(e) => {
             let msg = e.to_string();
@@ -1662,7 +1671,7 @@ async fn delete_secret(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 false,
                 Some(AuditError::new("internal_error", msg.clone())),
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                ApiError::internal(msg).into_response(),
             )
         }
     };
@@ -1674,7 +1683,7 @@ async fn delete_secret(
             actor: AuditActor::default(),
             action: "tenant.secret_delete",
             http_method: "DELETE",
-            http_route: "/tenant/v1/secrets/{name}",
+            http_route: routes::tenant::SECRET.template(),
             status_code: i32::from(status.as_u16()),
             ok,
             elapsed: started.elapsed(),
@@ -1725,7 +1734,7 @@ async fn list_api_keys(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
         return resp;
@@ -1733,7 +1742,7 @@ async fn list_api_keys(
 
     match store.list_api_keys(&tenant_id).await {
         Ok(api_keys) => Json(ApiKeysResponse { api_keys }).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1747,7 +1756,7 @@ async fn create_api_key(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
         return resp;
@@ -1766,7 +1775,7 @@ async fn create_api_key(
             },
             action: "tenant.api_key_create",
             http_method: "POST",
-            http_route: "/tenant/v1/api-keys",
+            http_route: routes::tenant::API_KEYS.template(),
             status_code: i32::from(outcome.status.as_u16()),
             ok: outcome.status.is_success(),
             elapsed: started.elapsed(),
@@ -1951,7 +1960,7 @@ async fn revoke_api_key(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
         return resp;
@@ -1980,7 +1989,7 @@ async fn revoke_api_key(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 false,
                 Some(AuditError::new("internal_error", msg.clone())),
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                ApiError::internal(msg).into_response(),
             )
         }
     };
@@ -1995,7 +2004,7 @@ async fn revoke_api_key(
             },
             action: "tenant.api_key_revoke",
             http_method: "DELETE",
-            http_route: "/tenant/v1/api-keys/{api_key_id}",
+            http_route: routes::tenant::API_KEY.template(),
             status_code: i32::from(status.as_u16()),
             ok,
             elapsed: started.elapsed(),
@@ -2025,14 +2034,14 @@ async fn get_audit_settings(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     match store.get_tenant_audit_settings(&tenant_id).await {
@@ -2042,8 +2051,8 @@ async fn get_audit_settings(
             default_level: s.default_level,
         })
         .into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "tenant not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::not_found(Resource::Tenant).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -2057,14 +2066,14 @@ async fn put_audit_settings(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     if req.retention_days < 0 {
@@ -2092,7 +2101,7 @@ async fn put_audit_settings(
         }
         Err(e) => {
             let msg = e.to_string();
-            (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+            ApiError::internal(msg).into_response()
         }
     }
 }
@@ -2106,20 +2115,20 @@ async fn get_transport_limits(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     match store.get_tenant_transport_limits(&tenant_id).await {
         Ok(Some(limits)) => Json(limits).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "tenant not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::not_found(Resource::Tenant).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -2133,14 +2142,14 @@ async fn put_transport_limits(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     if let Err(msg) = crate::transport_limits::validate_transport_limits_settings(&req) {
@@ -2151,7 +2160,7 @@ async fn put_transport_limits(
         Ok(()) => Json(OkResponse { ok: true }).into_response(),
         Err(e) => {
             let msg = e.to_string();
-            (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+            ApiError::internal(msg).into_response()
         }
     }
 }
@@ -2166,14 +2175,14 @@ async fn list_audit_events(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     let filter = crate::store::AuditEventFilter {
@@ -2204,13 +2213,13 @@ async fn tool_call_stats_by_tool(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     let filter = crate::store::AuditStatsFilter {
@@ -2238,13 +2247,13 @@ async fn tool_call_stats_by_api_key(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     let filter = crate::store::AuditStatsFilter {
@@ -2272,7 +2281,7 @@ async fn get_profile_audit_settings(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // UUIDv4 only, otherwise 404 (avoid enumeration patterns).
@@ -2281,20 +2290,20 @@ async fn get_profile_audit_settings(
         .and_then(|u| (u.get_version() == Some(Version::Random)).then_some(u))
         .is_none()
     {
-        return (StatusCode::NOT_FOUND, "profile not found").into_response();
+        return ApiError::not_found(Resource::Profile).into_response();
     }
 
     // Cross-tenant guard (404 on mismatch).
     match store.get_profile(&profile_id).await {
         Ok(Some(p)) if p.tenant_id == tenant_id && p.enabled => {}
-        Ok(_) => return (StatusCode::NOT_FOUND, "profile not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::not_found(Resource::Profile).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     match store.get_profile_audit_settings(&profile_id).await {
         Ok(Some(v)) => Json(ProfileAuditSettingsResponse { audit_settings: v }).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "profile not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::not_found(Resource::Profile).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -2309,21 +2318,21 @@ async fn put_profile_audit_settings(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     let started = Instant::now();
 
     // UUIDv4 only, otherwise 404 (avoid enumeration patterns).
     let profile_uuid = match Uuid::parse_str(&profile_id) {
         Ok(u) if u.get_version() == Some(Version::Random) => u,
-        _ => return (StatusCode::NOT_FOUND, "profile not found").into_response(),
+        _ => return ApiError::not_found(Resource::Profile).into_response(),
     };
 
     // Cross-tenant guard (404 on mismatch).
     match store.get_profile(&profile_id).await {
         Ok(Some(p)) if p.tenant_id == tenant_id && p.enabled => {}
-        Ok(_) => return (StatusCode::NOT_FOUND, "profile not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::not_found(Resource::Profile).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     if !req.audit_settings.is_object() {
@@ -2350,7 +2359,7 @@ async fn put_profile_audit_settings(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 false,
                 Some(AuditError::new("internal_error", msg.clone())),
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                ApiError::internal(msg).into_response(),
             )
         }
     };
@@ -2365,7 +2374,7 @@ async fn put_profile_audit_settings(
             },
             action: "tenant.profile_audit_settings_put",
             http_method: "PUT",
-            http_route: "/tenant/v1/profiles/{profile_id}/audit/settings",
+            http_route: routes::tenant::PROFILE_AUDIT.template(),
             status_code: i32::from(status.as_u16()),
             ok,
             elapsed: started.elapsed(),

@@ -39,7 +39,7 @@ pub enum AdapterError {
 
     /// YAML parsing errors
     #[error("YAML error: {0}")]
-    Yaml(#[from] serde_yaml::Error),
+    Yaml(#[from] serde_saphyr::DeserializeError),
 }
 
 /// Result type alias for adapter operations.

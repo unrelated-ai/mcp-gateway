@@ -1,11 +1,17 @@
 use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
+use unrelated_gateway_api::routes;
 use unrelated_tool_transforms::TransformPipeline;
 use url::Url;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct McpProfileSettings {
+    /// Preserve settings this administrative client does not edit itself.
+    #[serde(flatten)]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub modern_protocol: bool,
     /// Control which MCP server capabilities the Gateway advertises (and enforces).
     #[serde(default)]
     pub capabilities: McpCapabilitiesPolicy,
@@ -254,26 +260,26 @@ impl ApiClient {
     }
 
     pub async fn put_tenant(&self, id: &str, enabled: bool) -> anyhow::Result<()> {
-        let url = self.url("/admin/v1/tenants")?;
+        let url = self.url(routes::admin::TENANTS.template())?;
         self.auth(self.http.post(url))
             .json(&PutTenantRequest { id, enabled })
             .send()
             .await
-            .context("POST /admin/v1/tenants")?
+            .with_context(|| format!("POST {}", routes::admin::TENANTS.template()))?
             .error_for_status()
-            .context("POST /admin/v1/tenants status")?;
+            .with_context(|| format!("POST {} status", routes::admin::TENANTS.template()))?;
         Ok(())
     }
 
     pub async fn list_tenants(&self) -> anyhow::Result<Vec<Tenant>> {
-        let url = self.url("/admin/v1/tenants")?;
+        let url = self.url(routes::admin::TENANTS.template())?;
         let resp: TenantsResponse = self
             .auth(self.http.get(url))
             .send()
             .await
-            .context("GET /admin/v1/tenants")?
+            .with_context(|| format!("GET {}", routes::admin::TENANTS.template()))?
             .error_for_status()
-            .context("GET /admin/v1/tenants status")?
+            .with_context(|| format!("GET {} status", routes::admin::TENANTS.template()))?
             .json()
             .await
             .context("parse tenants response")?;
@@ -281,14 +287,14 @@ impl ApiClient {
     }
 
     pub async fn get_tenant(&self, id: &str) -> anyhow::Result<Tenant> {
-        let url = self.url(&format!("/admin/v1/tenants/{id}"))?;
+        let url = self.url(&routes::admin::TENANT.bind([id])?)?;
         let tenant: Tenant = self
             .auth(self.http.get(url))
             .send()
             .await
-            .context("GET /admin/v1/tenants/{id}")?
+            .with_context(|| format!("GET {}", routes::admin::TENANT.template()))?
             .error_for_status()
-            .context("GET /admin/v1/tenants/{id} status")?
+            .with_context(|| format!("GET {} status", routes::admin::TENANT.template()))?
             .json()
             .await
             .context("parse tenant response")?;
@@ -296,13 +302,13 @@ impl ApiClient {
     }
 
     pub async fn delete_tenant(&self, id: &str) -> anyhow::Result<()> {
-        let url = self.url(&format!("/admin/v1/tenants/{id}"))?;
+        let url = self.url(&routes::admin::TENANT.bind([id])?)?;
         self.auth(self.http.delete(url))
             .send()
             .await
-            .context("DELETE /admin/v1/tenants/{id}")?
+            .with_context(|| format!("DELETE {}", routes::admin::TENANT.template()))?
             .error_for_status()
-            .context("DELETE /admin/v1/tenants/{id} status")?;
+            .with_context(|| format!("DELETE {} status", routes::admin::TENANT.template()))?;
         Ok(())
     }
 
@@ -313,7 +319,7 @@ impl ApiClient {
         network_class: UpstreamNetworkClass,
         endpoints: Vec<PutEndpoint>,
     ) -> anyhow::Result<()> {
-        let url = self.url("/admin/v1/upstreams")?;
+        let url = self.url(routes::admin::UPSTREAMS.template())?;
         self.auth(self.http.post(url))
             .json(&PutUpstreamRequest {
                 id,
@@ -323,21 +329,21 @@ impl ApiClient {
             })
             .send()
             .await
-            .context("POST /admin/v1/upstreams")?
+            .with_context(|| format!("POST {}", routes::admin::UPSTREAMS.template()))?
             .error_for_status()
-            .context("POST /admin/v1/upstreams status")?;
+            .with_context(|| format!("POST {} status", routes::admin::UPSTREAMS.template()))?;
         Ok(())
     }
 
     pub async fn list_upstreams(&self) -> anyhow::Result<Vec<Upstream>> {
-        let url = self.url("/admin/v1/upstreams")?;
+        let url = self.url(routes::admin::UPSTREAMS.template())?;
         let resp: UpstreamsResponse = self
             .auth(self.http.get(url))
             .send()
             .await
-            .context("GET /admin/v1/upstreams")?
+            .with_context(|| format!("GET {}", routes::admin::UPSTREAMS.template()))?
             .error_for_status()
-            .context("GET /admin/v1/upstreams status")?
+            .with_context(|| format!("GET {} status", routes::admin::UPSTREAMS.template()))?
             .json()
             .await
             .context("parse upstreams response")?;
@@ -345,14 +351,14 @@ impl ApiClient {
     }
 
     pub async fn get_upstream(&self, id: &str) -> anyhow::Result<Upstream> {
-        let url = self.url(&format!("/admin/v1/upstreams/{id}"))?;
+        let url = self.url(&routes::admin::UPSTREAM.bind([id])?)?;
         let upstream: Upstream = self
             .auth(self.http.get(url))
             .send()
             .await
-            .context("GET /admin/v1/upstreams/{id}")?
+            .with_context(|| format!("GET {}", routes::admin::UPSTREAM.template()))?
             .error_for_status()
-            .context("GET /admin/v1/upstreams/{id} status")?
+            .with_context(|| format!("GET {} status", routes::admin::UPSTREAM.template()))?
             .json()
             .await
             .context("parse upstream response")?;
@@ -360,13 +366,13 @@ impl ApiClient {
     }
 
     pub async fn delete_upstream(&self, id: &str) -> anyhow::Result<()> {
-        let url = self.url(&format!("/admin/v1/upstreams/{id}"))?;
+        let url = self.url(&routes::admin::UPSTREAM.bind([id])?)?;
         self.auth(self.http.delete(url))
             .send()
             .await
-            .context("DELETE /admin/v1/upstreams/{id}")?
+            .with_context(|| format!("DELETE {}", routes::admin::UPSTREAM.template()))?
             .error_for_status()
-            .context("DELETE /admin/v1/upstreams/{id} status")?;
+            .with_context(|| format!("DELETE {} status", routes::admin::UPSTREAM.template()))?;
         Ok(())
     }
 
@@ -374,7 +380,7 @@ impl ApiClient {
         &self,
         profile: ProfileUpsert,
     ) -> anyhow::Result<CreateProfileResponse> {
-        let url = self.url("/admin/v1/profiles")?;
+        let url = self.url(routes::admin::PROFILES.template())?;
         let req = PutProfileRequest {
             id: None,
             tenant_id: &profile.tenant_id,
@@ -397,9 +403,9 @@ impl ApiClient {
             .json(&req)
             .send()
             .await
-            .context("POST /admin/v1/profiles")?
+            .with_context(|| format!("POST {}", routes::admin::PROFILES.template()))?
             .error_for_status()
-            .context("POST /admin/v1/profiles status")?
+            .with_context(|| format!("POST {} status", routes::admin::PROFILES.template()))?
             .json()
             .await
             .context("parse create profile response")?;
@@ -411,7 +417,7 @@ impl ApiClient {
         id: &str,
         profile: ProfileUpsert,
     ) -> anyhow::Result<CreateProfileResponse> {
-        let url = self.url("/admin/v1/profiles")?;
+        let url = self.url(routes::admin::PROFILES.template())?;
         let req = PutProfileRequest {
             id: Some(id),
             tenant_id: &profile.tenant_id,
@@ -434,9 +440,9 @@ impl ApiClient {
             .json(&req)
             .send()
             .await
-            .context("POST /admin/v1/profiles (put)")?
+            .with_context(|| format!("POST {} (put)", routes::admin::PROFILES.template()))?
             .error_for_status()
-            .context("POST /admin/v1/profiles (put) status")?
+            .with_context(|| format!("POST {} (put) status", routes::admin::PROFILES.template()))?
             .json()
             .await
             .context("parse put profile response")?;
@@ -444,14 +450,14 @@ impl ApiClient {
     }
 
     pub async fn list_profiles(&self) -> anyhow::Result<Vec<Profile>> {
-        let url = self.url("/admin/v1/profiles")?;
+        let url = self.url(routes::admin::PROFILES.template())?;
         let resp: ProfilesResponse = self
             .auth(self.http.get(url))
             .send()
             .await
-            .context("GET /admin/v1/profiles")?
+            .with_context(|| format!("GET {}", routes::admin::PROFILES.template()))?
             .error_for_status()
-            .context("GET /admin/v1/profiles status")?
+            .with_context(|| format!("GET {} status", routes::admin::PROFILES.template()))?
             .json()
             .await
             .context("parse profiles response")?;
@@ -459,14 +465,14 @@ impl ApiClient {
     }
 
     pub async fn get_profile(&self, id: &str) -> anyhow::Result<Profile> {
-        let url = self.url(&format!("/admin/v1/profiles/{id}"))?;
+        let url = self.url(&routes::admin::PROFILE.bind([id])?)?;
         let profile: Profile = self
             .auth(self.http.get(url))
             .send()
             .await
-            .context("GET /admin/v1/profiles/{id}")?
+            .with_context(|| format!("GET {}", routes::admin::PROFILE.template()))?
             .error_for_status()
-            .context("GET /admin/v1/profiles/{id} status")?
+            .with_context(|| format!("GET {} status", routes::admin::PROFILE.template()))?
             .json()
             .await
             .context("parse profile response")?;
@@ -474,13 +480,13 @@ impl ApiClient {
     }
 
     pub async fn delete_profile(&self, id: &str) -> anyhow::Result<()> {
-        let url = self.url(&format!("/admin/v1/profiles/{id}"))?;
+        let url = self.url(&routes::admin::PROFILE.bind([id])?)?;
         self.auth(self.http.delete(url))
             .send()
             .await
-            .context("DELETE /admin/v1/profiles/{id}")?
+            .with_context(|| format!("DELETE {}", routes::admin::PROFILE.template()))?
             .error_for_status()
-            .context("DELETE /admin/v1/profiles/{id} status")?;
+            .with_context(|| format!("DELETE {} status", routes::admin::PROFILE.template()))?;
         Ok(())
     }
 
@@ -489,7 +495,7 @@ impl ApiClient {
         tenant_id: &str,
         ttl_seconds: Option<u64>,
     ) -> anyhow::Result<IssueTenantTokenResponse> {
-        let url = self.url("/admin/v1/tenant-tokens")?;
+        let url = self.url(routes::admin::TENANT_TOKENS.template())?;
         let resp: IssueTenantTokenResponse = self
             .auth(self.http.post(url))
             .json(&IssueTenantTokenRequest {
@@ -498,9 +504,9 @@ impl ApiClient {
             })
             .send()
             .await
-            .context("POST /admin/v1/tenant-tokens")?
+            .with_context(|| format!("POST {}", routes::admin::TENANT_TOKENS.template()))?
             .error_for_status()
-            .context("POST /admin/v1/tenant-tokens status")?
+            .with_context(|| format!("POST {} status", routes::admin::TENANT_TOKENS.template()))?
             .json()
             .await
             .context("parse issue tenant token response")?;
@@ -508,14 +514,14 @@ impl ApiClient {
     }
 
     pub async fn list_tool_sources(&self, tenant_id: &str) -> anyhow::Result<Vec<ToolSource>> {
-        let url = self.url(&format!("/admin/v1/tenants/{tenant_id}/tool-sources"))?;
+        let url = self.url(&routes::admin::TOOL_SOURCES.bind([tenant_id])?)?;
         let resp: ToolSourcesResponse = self
             .auth(self.http.get(url))
             .send()
             .await
-            .context("GET /admin/v1/tenants/{tenant_id}/tool-sources")?
+            .with_context(|| format!("GET {}", routes::admin::TOOL_SOURCES.template()))?
             .error_for_status()
-            .context("GET /admin/v1/tenants/{tenant_id}/tool-sources status")?
+            .with_context(|| format!("GET {} status", routes::admin::TOOL_SOURCES.template()))?
             .json()
             .await
             .context("parse tool sources response")?;
@@ -527,16 +533,14 @@ impl ApiClient {
         tenant_id: &str,
         source_id: &str,
     ) -> anyhow::Result<ToolSource> {
-        let url = self.url(&format!(
-            "/admin/v1/tenants/{tenant_id}/tool-sources/{source_id}"
-        ))?;
+        let url = self.url(&routes::admin::TOOL_SOURCE.bind([tenant_id, source_id])?)?;
         let source: ToolSource = self
             .auth(self.http.get(url))
             .send()
             .await
-            .context("GET /admin/v1/tenants/{tenant_id}/tool-sources/{source_id}")?
+            .with_context(|| format!("GET {}", routes::admin::TOOL_SOURCE.template()))?
             .error_for_status()
-            .context("GET /admin/v1/tenants/{tenant_id}/tool-sources/{source_id} status")?
+            .with_context(|| format!("GET {} status", routes::admin::TOOL_SOURCE.template()))?
             .json()
             .await
             .context("parse tool source response")?;
@@ -549,41 +553,37 @@ impl ApiClient {
         source_id: &str,
         body: serde_json::Value,
     ) -> anyhow::Result<()> {
-        let url = self.url(&format!(
-            "/admin/v1/tenants/{tenant_id}/tool-sources/{source_id}"
-        ))?;
+        let url = self.url(&routes::admin::TOOL_SOURCE.bind([tenant_id, source_id])?)?;
         self.auth(self.http.put(url))
             .json(&body)
             .send()
             .await
-            .context("PUT /admin/v1/tenants/{tenant_id}/tool-sources/{source_id}")?
+            .with_context(|| format!("PUT {}", routes::admin::TOOL_SOURCE.template()))?
             .error_for_status()
-            .context("PUT /admin/v1/tenants/{tenant_id}/tool-sources/{source_id} status")?;
+            .with_context(|| format!("PUT {} status", routes::admin::TOOL_SOURCE.template()))?;
         Ok(())
     }
 
     pub async fn delete_tool_source(&self, tenant_id: &str, source_id: &str) -> anyhow::Result<()> {
-        let url = self.url(&format!(
-            "/admin/v1/tenants/{tenant_id}/tool-sources/{source_id}"
-        ))?;
+        let url = self.url(&routes::admin::TOOL_SOURCE.bind([tenant_id, source_id])?)?;
         self.auth(self.http.delete(url))
             .send()
             .await
-            .context("DELETE /admin/v1/tenants/{tenant_id}/tool-sources/{source_id}")?
+            .with_context(|| format!("DELETE {}", routes::admin::TOOL_SOURCE.template()))?
             .error_for_status()
-            .context("DELETE /admin/v1/tenants/{tenant_id}/tool-sources/{source_id} status")?;
+            .with_context(|| format!("DELETE {} status", routes::admin::TOOL_SOURCE.template()))?;
         Ok(())
     }
 
     pub async fn list_secrets(&self, tenant_id: &str) -> anyhow::Result<Vec<TenantSecretMetadata>> {
-        let url = self.url(&format!("/admin/v1/tenants/{tenant_id}/secrets"))?;
+        let url = self.url(&routes::admin::SECRETS.bind([tenant_id])?)?;
         let resp: SecretsResponse = self
             .auth(self.http.get(url))
             .send()
             .await
-            .context("GET /admin/v1/tenants/{tenant_id}/secrets")?
+            .with_context(|| format!("GET {}", routes::admin::SECRETS.template()))?
             .error_for_status()
-            .context("GET /admin/v1/tenants/{tenant_id}/secrets status")?
+            .with_context(|| format!("GET {} status", routes::admin::SECRETS.template()))?
             .json()
             .await
             .context("parse secrets response")?;
@@ -591,25 +591,25 @@ impl ApiClient {
     }
 
     pub async fn put_secret(&self, tenant_id: &str, name: &str, value: &str) -> anyhow::Result<()> {
-        let url = self.url(&format!("/admin/v1/tenants/{tenant_id}/secrets/{name}"))?;
+        let url = self.url(&routes::admin::SECRET.bind([tenant_id, name])?)?;
         self.auth(self.http.put(url))
             .json(&PutSecretBody { value })
             .send()
             .await
-            .context("PUT /admin/v1/tenants/{tenant_id}/secrets/{name}")?
+            .with_context(|| format!("PUT {}", routes::admin::SECRET.template()))?
             .error_for_status()
-            .context("PUT /admin/v1/tenants/{tenant_id}/secrets/{name} status")?;
+            .with_context(|| format!("PUT {} status", routes::admin::SECRET.template()))?;
         Ok(())
     }
 
     pub async fn delete_secret(&self, tenant_id: &str, name: &str) -> anyhow::Result<()> {
-        let url = self.url(&format!("/admin/v1/tenants/{tenant_id}/secrets/{name}"))?;
+        let url = self.url(&routes::admin::SECRET.bind([tenant_id, name])?)?;
         self.auth(self.http.delete(url))
             .send()
             .await
-            .context("DELETE /admin/v1/tenants/{tenant_id}/secrets/{name}")?
+            .with_context(|| format!("DELETE {}", routes::admin::SECRET.template()))?
             .error_for_status()
-            .context("DELETE /admin/v1/tenants/{tenant_id}/secrets/{name} status")?;
+            .with_context(|| format!("DELETE {} status", routes::admin::SECRET.template()))?;
         Ok(())
     }
 
@@ -617,14 +617,14 @@ impl ApiClient {
         &self,
         tenant_id: &str,
     ) -> anyhow::Result<Vec<OidcPrincipalBinding>> {
-        let url = self.url(&format!("/admin/v1/tenants/{tenant_id}/oidc-principals"))?;
+        let url = self.url(&routes::admin::OIDC_PRINCIPALS.bind([tenant_id])?)?;
         let resp: OidcPrincipalsResponse = self
             .auth(self.http.get(url))
             .send()
             .await
-            .context("GET /admin/v1/tenants/{tenant_id}/oidc-principals")?
+            .with_context(|| format!("GET {}", routes::admin::OIDC_PRINCIPALS.template()))?
             .error_for_status()
-            .context("GET /admin/v1/tenants/{tenant_id}/oidc-principals status")?
+            .with_context(|| format!("GET {} status", routes::admin::OIDC_PRINCIPALS.template()))?
             .json()
             .await
             .context("parse oidc principals response")?;
@@ -638,7 +638,7 @@ impl ApiClient {
         profile_id: Option<&str>,
         enabled: bool,
     ) -> anyhow::Result<()> {
-        let url = self.url(&format!("/admin/v1/tenants/{tenant_id}/oidc-principals"))?;
+        let url = self.url(&routes::admin::OIDC_PRINCIPALS.bind([tenant_id])?)?;
         self.auth(self.http.put(url))
             .json(&PutOidcPrincipalRequest {
                 subject,
@@ -647,9 +647,9 @@ impl ApiClient {
             })
             .send()
             .await
-            .context("PUT /admin/v1/tenants/{tenant_id}/oidc-principals")?
+            .with_context(|| format!("PUT {}", routes::admin::OIDC_PRINCIPALS.template()))?
             .error_for_status()
-            .context("PUT /admin/v1/tenants/{tenant_id}/oidc-principals status")?;
+            .with_context(|| format!("PUT {} status", routes::admin::OIDC_PRINCIPALS.template()))?;
         Ok(())
     }
 
@@ -659,31 +659,31 @@ impl ApiClient {
         subject: &str,
         profile_id: Option<&str>,
     ) -> anyhow::Result<()> {
-        let mut url = self.url(&format!(
-            "/admin/v1/tenants/{tenant_id}/oidc-principals/{subject}"
-        ))?;
+        let mut url = self.url(&routes::admin::OIDC_PRINCIPAL.bind([tenant_id, subject])?)?;
         if let Some(pid) = profile_id {
             url.query_pairs_mut().append_pair("profileId", pid);
         }
         self.auth(self.http.delete(url))
             .send()
             .await
-            .context("DELETE /admin/v1/tenants/{tenant_id}/oidc-principals/{subject}")?
+            .with_context(|| format!("DELETE {}", routes::admin::OIDC_PRINCIPAL.template()))?
             .error_for_status()
-            .context("DELETE /admin/v1/tenants/{tenant_id}/oidc-principals/{subject} status")?;
+            .with_context(|| {
+                format!("DELETE {} status", routes::admin::OIDC_PRINCIPAL.template())
+            })?;
         Ok(())
     }
 
     // Tenant API (requires a tenant token as this client's bearer).
     pub async fn list_api_keys(&self) -> anyhow::Result<Vec<ApiKeyMetadata>> {
-        let url = self.url("/tenant/v1/api-keys")?;
+        let url = self.url(routes::tenant::API_KEYS.template())?;
         let resp: ApiKeysResponse = self
             .auth(self.http.get(url))
             .send()
             .await
-            .context("GET /tenant/v1/api-keys")?
+            .with_context(|| format!("GET {}", routes::tenant::API_KEYS.template()))?
             .error_for_status()
-            .context("GET /tenant/v1/api-keys status")?
+            .with_context(|| format!("GET {} status", routes::tenant::API_KEYS.template()))?
             .json()
             .await
             .context("parse api keys response")?;
@@ -695,7 +695,7 @@ impl ApiClient {
         name: Option<&str>,
         profile_id: Option<&str>,
     ) -> anyhow::Result<CreateApiKeyResponse> {
-        let url = self.url("/tenant/v1/api-keys")?;
+        let url = self.url(routes::tenant::API_KEYS.template())?;
         let resp: CreateApiKeyResponse = self
             .auth(self.http.post(url))
             .json(&CreateApiKeyRequest {
@@ -704,9 +704,9 @@ impl ApiClient {
             })
             .send()
             .await
-            .context("POST /tenant/v1/api-keys")?
+            .with_context(|| format!("POST {}", routes::tenant::API_KEYS.template()))?
             .error_for_status()
-            .context("POST /tenant/v1/api-keys status")?
+            .with_context(|| format!("POST {} status", routes::tenant::API_KEYS.template()))?
             .json()
             .await
             .context("parse create api key response")?;
@@ -714,13 +714,13 @@ impl ApiClient {
     }
 
     pub async fn revoke_api_key(&self, api_key_id: &str) -> anyhow::Result<()> {
-        let url = self.url(&format!("/tenant/v1/api-keys/{api_key_id}"))?;
+        let url = self.url(&routes::tenant::API_KEY.bind([api_key_id])?)?;
         self.auth(self.http.delete(url))
             .send()
             .await
-            .context("DELETE /tenant/v1/api-keys/{api_key_id}")?
+            .with_context(|| format!("DELETE {}", routes::tenant::API_KEY.template()))?
             .error_for_status()
-            .context("DELETE /tenant/v1/api-keys/{api_key_id} status")?;
+            .with_context(|| format!("DELETE {} status", routes::tenant::API_KEY.template()))?;
         Ok(())
     }
 }

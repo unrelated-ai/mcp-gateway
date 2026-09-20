@@ -139,7 +139,7 @@ mod tests {
 
     #[test]
     fn mode1_profile_allow_partial_upstreams_defaults_true() {
-        let cfg: GatewayConfig = serde_yaml::from_str(
+        let cfg: GatewayConfig = serde_saphyr::from_str(
             r"
 tenants: {}
 upstreams: {}
@@ -158,7 +158,7 @@ profiles:
 
     #[test]
     fn mode1_data_plane_auth_accept_x_api_key_defaults_false() {
-        let cfg: GatewayConfig = serde_yaml::from_str(
+        let cfg: GatewayConfig = serde_saphyr::from_str(
             r"
 tenants: {}
 profiles: {}
@@ -175,7 +175,7 @@ dataPlaneAuth: {}
 
     #[test]
     fn mode1_rejects_removed_initialize_only_setting() {
-        let parsed = serde_yaml::from_str::<GatewayConfig>(
+        let parsed = serde_saphyr::from_str::<GatewayConfig>(
             r"
 dataPlaneAuth:
   mode: static-api-keys
@@ -188,7 +188,7 @@ dataPlaneAuth:
 
     #[test]
     fn mode1_profile_tools_parsing_semantics() {
-        let cfg_omitted: GatewayConfig = serde_yaml::from_str(
+        let cfg_omitted: GatewayConfig = serde_saphyr::from_str(
             r"
 tenants: {}
 upstreams: {}
@@ -202,7 +202,7 @@ profiles:
         .expect("valid yaml");
         assert_eq!(cfg_omitted.profiles["p1"].tools, None);
 
-        let cfg_null: GatewayConfig = serde_yaml::from_str(
+        let cfg_null: GatewayConfig = serde_saphyr::from_str(
             r"
 tenants: {}
 upstreams: {}
@@ -217,7 +217,7 @@ profiles:
         .expect("valid yaml");
         assert_eq!(cfg_null.profiles["p1"].tools, None);
 
-        let cfg_empty: GatewayConfig = serde_yaml::from_str(
+        let cfg_empty: GatewayConfig = serde_saphyr::from_str(
             r"
 tenants: {}
 upstreams: {}

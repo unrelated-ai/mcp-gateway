@@ -174,6 +174,7 @@ mod tests {
 
     fn existing() -> AdminProfile {
         AdminProfile {
+            revision: 1,
             id: uuid::Uuid::new_v4().to_string(),
             name: "Original".to_string(),
             description: Some("Description".to_string()),

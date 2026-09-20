@@ -73,11 +73,18 @@ impl SessionSigner {
     /// Mint a new session token.
     ///
     /// This updates `iat`/`exp` based on `ttl`.
-    pub fn sign(&self, mut payload: TokenPayloadV1) -> anyhow::Result<String> {
+    pub fn sign(&self, payload: TokenPayloadV1) -> anyhow::Result<String> {
+        self.sign_until(
+            payload,
+            unix_epoch_secs(SystemTime::now())?.saturating_add(self.ttl.as_secs()),
+        )
+    }
+
+    fn sign_until(&self, mut payload: TokenPayloadV1, expires_at: u64) -> anyhow::Result<String> {
         let now = SystemTime::now();
         let now_secs = unix_epoch_secs(now)?;
         payload.iat = Some(now_secs);
-        payload.exp = Some(now_secs.saturating_add(self.ttl.as_secs()));
+        payload.exp = Some(expires_at);
 
         let key = &self.keys[0];
         let json = serde_json::to_value(&payload)?;
@@ -115,6 +122,61 @@ impl SessionSigner {
             return Err(session_token_err(SessionTokenVerifyErrorKind::Invalid));
         }
         self.verify_paseto_v4_local(token)
+    }
+
+    /// Seal application state with the same encryption, expiry and key rotation
+    /// as session tokens, using a distinct purpose that cannot identify a profile.
+    #[cfg(test)]
+    pub fn seal_state<T: Serialize>(&self, purpose: &str, value: &T) -> anyhow::Result<String> {
+        self.sign(TokenPayloadV1 {
+            request_meta: None,
+            profile_id: format!("unrelated-state:{purpose}"),
+            bindings: Vec::new(),
+            auth: None,
+            oidc: None,
+            iat: None,
+            exp: None,
+            proxy_key: Some(serde_json::to_string(value)?),
+        })
+    }
+
+    /// Continuations have their own bounded lifetime, independent of legacy sessions.
+    pub fn seal_state_until<T: Serialize>(
+        &self,
+        purpose: &str,
+        value: &T,
+        expires_at: u64,
+    ) -> anyhow::Result<String> {
+        self.sign_until(
+            TokenPayloadV1 {
+                request_meta: None,
+                profile_id: format!("unrelated-state:{purpose}"),
+                bindings: Vec::new(),
+                auth: None,
+                oidc: None,
+                iat: None,
+                exp: None,
+                proxy_key: Some(serde_json::to_string(value)?),
+            },
+            expires_at,
+        )
+    }
+
+    pub fn open_state<T: serde::de::DeserializeOwned>(
+        &self,
+        purpose: &str,
+        token: &str,
+    ) -> anyhow::Result<T> {
+        anyhow::ensure!(token.len() <= 32_768, "state token exceeds limit");
+        let payload = self.verify(token)?;
+        anyhow::ensure!(
+            payload.profile_id == format!("unrelated-state:{purpose}"),
+            "state token purpose mismatch"
+        );
+        let value = payload
+            .proxy_key
+            .ok_or_else(|| anyhow::anyhow!("missing state"))?;
+        serde_json::from_str(&value).map_err(Into::into)
     }
 
     fn verify_paseto_v4_local(&self, token: &str) -> anyhow::Result<TokenPayloadV1> {
@@ -167,6 +229,9 @@ impl SessionSigner {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenPayloadV1 {
+    /// Native per-request context, never persisted in a legacy routing token.
+    #[serde(skip)]
+    pub request_meta: Option<serde_json::Value>,
     pub profile_id: String,
     pub bindings: Vec<UpstreamSessionBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -280,6 +345,7 @@ mod tests {
         let signer =
             SessionSigner::new(vec![b"secret".to_vec()], Duration::from_secs(60)).expect("signer");
         let payload = TokenPayloadV1 {
+            request_meta: None,
             profile_id: "p1".to_string(),
             bindings: vec![UpstreamSessionBinding {
                 upstream: "u1".to_string(),

@@ -58,6 +58,20 @@ async fn fixture_post(
         }]}),
         "tools/call" => serde_json::json!({"content":[{"type":"text","text":source}]}),
         "resources/list" => serde_json::json!({"resources":[]}),
+        "resources/templates/list" => {
+            let last = message["params"]["cursor"] == "second";
+            let mut result = serde_json::json!({"resourceTemplates":[{
+                "uriTemplate":if last {"test:///second/{id}"} else {"test:///first/{id}"},
+                "name":if last {"second"} else {"first"}
+            }]});
+            if !last {
+                result["nextCursor"] = serde_json::json!("second");
+            }
+            result
+        }
+        "resources/read" => {
+            serde_json::json!({"contents":[{"uri":message["params"]["uri"],"text":source}]})
+        }
         "prompts/list" => serde_json::json!({"prompts":[]}),
         _ => serde_json::json!({}),
     };
@@ -97,7 +111,10 @@ async fn fixture_delete(
     StatusCode::ACCEPTED.into_response()
 }
 
-async fn gateway_state(upstream_base: &str, profile_id: &str) -> anyhow::Result<Arc<McpState>> {
+pub(super) async fn gateway_state(
+    upstream_base: &str,
+    profile_id: &str,
+) -> anyhow::Result<Arc<McpState>> {
     let cfg: GatewayConfig = serde_json::from_value(serde_json::json!({
         "tenants":{"t":{"enabled":true}},
         "profiles":{profile_id:{"tenantId":"t", "upstreams":["stateful","stateless"], "allowPartialUpstreams":false}}
@@ -149,6 +166,7 @@ async fn gateway_state(upstream_base: &str, profile_id: &str) -> anyhow::Result<
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // One complete mixed-upstream lifecycle scenario.
 async fn mixed_upstreams_support_discovery_calls_streams_and_session_cleanup() -> anyhow::Result<()>
 {
     let requests = Requests::default();
@@ -206,6 +224,27 @@ async fn mixed_upstreams_support_discovery_calls_streams_and_session_cleanup() -
         assert_eq!(response.status(), StatusCode::OK);
         assert!(response.text().await?.contains(source));
     }
+    let templates = client
+        .post(&url)
+        .header("accept", "application/json, text/event-stream")
+        .header(HEADER_SESSION_ID, &token)
+        .json(&serde_json::json!({"jsonrpc":"2.0","id":4,"method":"resources/templates/list"}))
+        .send()
+        .await?
+        .text()
+        .await?;
+    assert_eq!(templates.matches("uriTemplate").count(), 4, "{templates}");
+    let uri = unrelated_mcp_support::resource_template_uri("stateless", "test:///second/expanded");
+    let response: serde_json::Value = client.post(&url)
+        .header("accept", "application/json, text/event-stream")
+        .header(HEADER_SESSION_ID, &token)
+        .json(&serde_json::json!({"jsonrpc":"2.0","id":5,"method":"resources/read","params":{"uri":uri}}))
+        .send().await?.json().await?;
+    assert_eq!(
+        response["result"]["contents"][0]["uri"],
+        "test:///second/expanded"
+    );
+    assert_eq!(response["result"]["contents"][0]["text"], "stateless");
     let stream = client
         .get(&url)
         .header("accept", "text/event-stream")
@@ -321,6 +360,7 @@ async fn initialization_and_discovery_contact_independent_upstreams_concurrently
     assert!(initialized.warnings.is_empty());
     assert_eq!(initialized.bindings.len(), 2);
     let payload = TokenPayloadV1 {
+        request_meta: None,
         profile_id: profile_id.clone(),
         bindings: initialized.bindings,
         auth: None,
@@ -369,8 +409,8 @@ async fn endpoint_resolution_does_not_depend_on_cache_retention() -> anyhow::Res
 struct OverlappingCatalogReads(Arc<tokio::sync::Barrier>);
 
 impl rmcp::ServerHandler for OverlappingCatalogReads {
-    fn get_info(&self) -> rmcp::model::ServerInfo {
-        rmcp::model::ServerInfo::new(
+    fn get_info(&self) -> rmcp::model::ServerConfig {
+        rmcp::model::ServerConfig::new(
             rmcp::model::ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()

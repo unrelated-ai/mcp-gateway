@@ -662,6 +662,7 @@ fn session_token_expiry_maps_to_unauthorized_expired_message() {
     let signer =
         SessionSigner::new(vec![b"secret".to_vec()], Duration::from_secs(0)).expect("signer");
     let payload = TokenPayloadV1 {
+        request_meta: None,
         profile_id: "p".to_string(),
         bindings: vec![],
         auth: None,
@@ -1342,7 +1343,7 @@ impl crate::store::Store for CountingStore {
 
 #[tokio::test]
 async fn initialize_profile_sources_skips_shared_and_tenant_local_sources() -> anyhow::Result<()> {
-    let cfg: GatewayConfig = serde_yaml::from_str(
+    let cfg: GatewayConfig = serde_saphyr::from_str(
         r"
 tenants: {}
 profiles: {}
@@ -1448,7 +1449,7 @@ sharedSources:
 
 #[tokio::test]
 async fn tools_surface_prefixes_on_collision_across_shared_sources() -> anyhow::Result<()> {
-    let cfg: GatewayConfig = serde_yaml::from_str(
+    let cfg: GatewayConfig = serde_saphyr::from_str(
         r"
 tenants: {}
 profiles: {}
@@ -1519,6 +1520,7 @@ sharedSources:
         mcp: crate::store::McpProfileSettings::default(),
     };
     let payload = TokenPayloadV1 {
+        request_meta: None,
         profile_id: profile.id.clone(),
         bindings: vec![],
         auth: None,
@@ -1546,7 +1548,7 @@ sharedSources:
 
 #[tokio::test]
 async fn tools_surface_allows_optional_prefix_when_not_ambiguous() -> anyhow::Result<()> {
-    let cfg: GatewayConfig = serde_yaml::from_str(
+    let cfg: GatewayConfig = serde_saphyr::from_str(
         r"
 tenants: {}
 profiles: {}
@@ -1608,6 +1610,7 @@ sharedSources:
         mcp: crate::store::McpProfileSettings::default(),
     };
     let payload = TokenPayloadV1 {
+        request_meta: None,
         profile_id: profile.id.clone(),
         bindings: vec![],
         auth: None,
@@ -1742,6 +1745,7 @@ async fn tool_call_propagates_timeout_budget_meta_and_retries_when_configured() 
     };
 
     let payload = TokenPayloadV1 {
+        request_meta: None,
         profile_id: profile.id.clone(),
         bindings: vec![UpstreamSessionBinding {
             upstream: "u1".to_string(),
@@ -1761,6 +1765,7 @@ async fn tool_call_propagates_timeout_budget_meta_and_retries_when_configured() 
     let routes = Arc::new(HashMap::from([(
         "foo".to_string(),
         ToolRoute {
+            original_input_schema: Arc::default(),
             kind: ToolRouteKind::Upstream,
             source_id: "u1".to_string(),
             original_name: "foo".to_string(),
@@ -1815,3 +1820,5 @@ mod request_context;
 mod sdk_compatibility;
 
 mod upstream_sessions;
+
+mod modern_protocol;

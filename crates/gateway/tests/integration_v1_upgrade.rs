@@ -107,7 +107,7 @@ async fn public_0131_database_upgrades_with_existing_profiles_keys_and_sessions(
     old.process.stop()?;
 
     // This is a maintenance-window migration: no old Gateway remains running.
-    common::pg::apply_dbmate_migration_file(&database_url, MIGRATION).await?;
+    common::pg::apply_dbmate_migrations_from(&database_url, MIGRATION).await?;
     let candidate = Gateway::start(
         dir.path(),
         "v1",

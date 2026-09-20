@@ -1,3 +1,4 @@
+use unrelated_test_support::images;
 mod common;
 mod common_mcp;
 
@@ -24,7 +25,7 @@ fn find_header<'a>(headers: &'a serde_json::Value, name: &str) -> Option<&'a str
 #[ignore = "requires Docker (testcontainers)"]
 #[allow(clippy::too_many_lines)]
 async fn http_tools_echo_request_roundtrip() -> anyhow::Result<()> {
-    let httpbin = GenericImage::new("kennethreitz/httpbin", "latest")
+    let httpbin = GenericImage::new(images::HTTPBIN.name, images::HTTPBIN.tag)
         .with_exposed_port(80.tcp())
         .start()
         .await

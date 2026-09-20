@@ -1,3 +1,5 @@
+//! Shared Gateway and Adapter tool-call timeout policy.
+
 /// Default tool call timeout (seconds) when no env override is provided.
 pub const DEFAULT_TOOL_CALL_TIMEOUT_SECS: u64 = 60;
 
@@ -17,7 +19,8 @@ pub fn tool_call_timeout_max_secs() -> u64 {
         .unwrap_or(DEFAULT_TOOL_CALL_TIMEOUT_SECS)
 }
 
-/// Global default timeout for `tools/call` when no per-request budget is provided (seconds).
+/// Global default timeout for `tools/call` when no per-profile/per-tool override is configured
+/// (seconds).
 ///
 /// Shared env vars (Gateway + Adapter):
 /// - `UNRELATED_TOOL_CALL_TIMEOUT_DEFAULT_SECS` (preferred)
@@ -31,12 +34,4 @@ pub fn tool_call_timeout_default_secs() -> u64 {
         .or_else(|| read_positive_u64_env("UNRELATED_TOOL_CALL_TIMEOUT_SECS"))
         .unwrap_or(DEFAULT_TOOL_CALL_TIMEOUT_SECS);
     default.min(max).max(1)
-}
-
-/// Backward-compatible alias for the maximum timeout cap.
-///
-/// Prefer `tool_call_timeout_max_secs()` for new code.
-#[must_use]
-pub fn tool_call_timeout_cap_secs() -> u64 {
-    tool_call_timeout_max_secs()
 }

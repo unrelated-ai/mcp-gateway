@@ -12,6 +12,7 @@ use crate::contracts::ContractNotifier;
 use crate::supervisor::BackendManager;
 use axum::http::request::Parts;
 use parking_lot::RwLock;
+use rmcp::transport::common::http_header::HEADER_SESSION_ID;
 use rmcp::{
     ErrorData as McpError, ServerHandler,
     model::{
@@ -19,7 +20,7 @@ use rmcp::{
         CompleteResult, ContentBlock, GetPromptRequestParams, GetPromptResponse, Implementation,
         ListPromptsResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams, Prompt,
         ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse, Reference, Resource,
-        ServerCapabilities, ServerInfo, SetLevelRequestParams, SubscribeRequestParams, Tool,
+        ServerCapabilities, ServerConfig, SetLevelRequestParams, SubscribeRequestParams, Tool,
         UnsubscribeRequestParams,
     },
     service::{RequestContext, RoleServer},
@@ -34,7 +35,7 @@ fn mcp_session_id_from_context(context: &RequestContext<RoleServer>) -> Option<&
     context
         .extensions
         .get::<Parts>()
-        .and_then(|parts| parts.headers.get("mcp-session-id"))
+        .and_then(|parts| parts.headers.get(HEADER_SESSION_ID))
         .and_then(|h| h.to_str().ok())
 }
 
@@ -44,7 +45,7 @@ fn timeout_budget_from_meta(meta: &rmcp::model::RequestMetaObject) -> Option<Dur
     if timeout_ms == 0 {
         return None;
     }
-    let cap_ms = crate::timeouts::tool_call_timeout_cap_secs().saturating_mul(1000);
+    let cap_ms = crate::timeouts::tool_call_timeout_max_secs().saturating_mul(1000);
     let timeout_ms = timeout_ms.min(cap_ms);
     Some(Duration::from_millis(timeout_ms))
 }
@@ -68,7 +69,7 @@ mod tests {
             Some(Duration::from_millis(1234))
         );
 
-        let cap_ms = crate::timeouts::tool_call_timeout_cap_secs().saturating_mul(1000);
+        let cap_ms = crate::timeouts::tool_call_timeout_max_secs().saturating_mul(1000);
         meta.insert(
             "unrelated".to_string(),
             json!({ "timeoutMs": cap_ms + 10_000 }),
@@ -128,7 +129,7 @@ impl ServerHandler for AdapterMcpServer {
         ])
     }
 
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         let capabilities = ServerCapabilities::builder()
             .enable_logging()
             .enable_completions()
@@ -140,7 +141,7 @@ impl ServerHandler for AdapterMcpServer {
             .enable_prompts()
             .enable_prompts_list_changed()
             .build();
-        ServerInfo::new(capabilities)
+        ServerConfig::new(capabilities)
             .with_protocol_version(ProtocolVersion::LATEST)
             .with_server_info(Implementation::from_build_env())
             .with_instructions("MCP adapter that bridges stdio MCP servers and OpenAPI backends.")
@@ -550,6 +551,52 @@ impl ServerHandler for AdapterMcpServer {
     }
 
     /// List resources from all backends.
+    async fn on_roots_list_changed(&self, context: rmcp::service::NotificationContext<RoleServer>) {
+        let session_id = context
+            .extensions
+            .get::<Parts>()
+            .and_then(|parts| parts.headers.get(HEADER_SESSION_ID))
+            .and_then(|value| value.to_str().ok());
+        if let Some(id) = session_id {
+            self.contracts.observe_peer(id, context.peer.clone());
+        }
+        for backend in self.backend_manager.get_all_backends() {
+            if let Err(error) = backend.roots_list_changed(session_id).await {
+                tracing::warn!(backend = backend.name(), %error, "roots notification failed");
+            }
+        }
+    }
+
+    async fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ListResourceTemplatesResult, McpError> {
+        let session_id = mcp_session_id_from_context(&context);
+        if let Some(id) = session_id {
+            self.contracts.observe_peer(id, context.peer.clone());
+        }
+        let mut templates = Vec::new();
+        for backend in self.backend_manager.get_all_backends() {
+            let mut items = backend
+                .list_resource_templates(session_id)
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            for item in &mut items {
+                item.uri_template = unrelated_mcp_support::resource_template_uri(
+                    backend.name(),
+                    &item.uri_template,
+                );
+            }
+            templates.extend(items);
+        }
+        templates.sort_by(|a, b| a.uri_template.cmp(&b.uri_template));
+        Ok(rmcp::model::ListResourceTemplatesResult {
+            resource_templates: templates,
+            ..Default::default()
+        })
+    }
+
     async fn list_resources(
         &self,
         _request: Option<PaginatedRequestParams>,

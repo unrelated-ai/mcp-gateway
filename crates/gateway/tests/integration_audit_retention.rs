@@ -6,9 +6,9 @@ use common::{KillOnDrop, spawn_gateway, wait_http_ok};
 use serde_json::json;
 use sqlx::Row as _;
 use std::time::Duration;
+use testcontainers::ImageExt as _;
 use testcontainers::core::IntoContainerPort;
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{GenericImage, ImageExt as _};
 
 const ADMIN_TOKEN: &str = "test-admin-token";
 const SESSION_SECRET: &str = "test-session-secret";
@@ -17,7 +17,7 @@ const SESSION_SECRET: &str = "test-session-secret";
 #[ignore = "requires Docker (testcontainers)"]
 async fn audit_retention_cleanup_endpoint_deletes_old_rows() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")

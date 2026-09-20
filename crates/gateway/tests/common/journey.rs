@@ -5,7 +5,7 @@ use rmcp::{
     ErrorData, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-        ListToolsResult, ServerCapabilities, ServerInfo, Tool,
+        ListToolsResult, ServerCapabilities, ServerConfig, Tool,
     },
     service::{RequestContext, RoleServer},
     transport::streamable_http_server::{
@@ -214,6 +214,7 @@ pub async fn start_adapter(dir: &Path) -> anyhow::Result<(Process, String)> {
 
 #[derive(Clone, Default)]
 pub struct RemoteControl {
+    pub tool_count: Arc<AtomicUsize>,
     pub list_delay_ms: Arc<AtomicU64>,
     pub initialize_delay_ms: Arc<AtomicU64>,
     pub initializations: Arc<AtomicUsize>,
@@ -227,8 +228,8 @@ struct Remote {
 }
 
 impl ServerHandler for Remote {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("v1-rmcp-fixture", self.generation))
     }
     async fn list_tools(
@@ -241,17 +242,29 @@ impl ServerHandler for Remote {
             self.control.list_delay_ms.load(Ordering::SeqCst),
         ))
         .await;
-        Ok(ListToolsResult::with_all_items(vec![Tool::new(
-            "echo",
-            "Echo from the sessionless rmcp upstream",
-            Arc::new(
-                json!({"type":"object", "properties":{}})
-                    .as_object()
-                    .unwrap()
-                    .clone(),
-            ),
-        )]))
+        let count = self.control.tool_count.load(Ordering::SeqCst).max(1);
+        Ok(ListToolsResult::with_all_items(
+            (0..count)
+                .map(|index| {
+                    Tool::new(
+                        if index == 0 {
+                            "echo".to_owned()
+                        } else {
+                            format!("tool_{index}")
+                        },
+                        "Echo from the sessionless rmcp upstream",
+                        Arc::new(
+                            json!({"type":"object", "properties":{}})
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        ),
+                    )
+                })
+                .collect(),
+        ))
     }
+
     fn call_tool(
         &self,
         request: CallToolRequestParams,

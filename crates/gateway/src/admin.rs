@@ -33,6 +33,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
+use unrelated_gateway_api::error::{ApiError, Resource, StoreKind};
+use unrelated_gateway_api::routes;
 use unrelated_http_tools::config::AuthConfig;
 use unrelated_http_tools::config::HttpServerConfig;
 use unrelated_openapi_tools::config::ApiServerConfig;
@@ -79,103 +81,120 @@ pub struct AdminState {
     pub invalidation: Arc<crate::pg_invalidation::InvalidationDispatcher>,
 }
 
-pub fn router() -> Router {
-    let admin_v1 = Router::new()
-        .route("/admin/v1/tenants", post(put_tenant).get(list_tenants))
+fn tenant_management_routes() -> Router {
+    Router::new()
         .route(
-            "/admin/v1/tenants/{tenant_id}",
+            routes::admin::TENANTS.template(),
+            post(put_tenant).get(list_tenants),
+        )
+        .route(
+            routes::admin::TENANT.template(),
             get(get_tenant).delete(delete_tenant),
         )
         .route(
-            "/admin/v1/tenants/{tenant_id}/tool-sources",
+            routes::admin::TOOL_SOURCES.template(),
             get(list_tool_sources),
         )
         .route(
-            "/admin/v1/tenants/{tenant_id}/tool-sources/{source_id}",
+            routes::admin::TOOL_SOURCE.template(),
             get(get_tool_source)
                 .put(put_tool_source)
                 .delete(delete_tool_source),
         )
-        .route("/admin/v1/tenants/{tenant_id}/secrets", get(list_secrets))
+        .route(routes::admin::SECRETS.template(), get(list_secrets))
         .route(
-            "/admin/v1/tenants/{tenant_id}/secrets/{name}",
+            routes::admin::SECRET.template(),
             put(put_secret).delete(delete_secret),
         )
         .route(
-            "/admin/v1/tenants/{tenant_id}/oidc-principals",
+            routes::admin::OIDC_PRINCIPALS.template(),
             get(list_oidc_principals).put(put_oidc_principal),
         )
         .route(
-            "/admin/v1/tenants/{tenant_id}/oidc-principals/{subject}",
+            routes::admin::OIDC_PRINCIPAL.template(),
             delete(delete_oidc_principal),
         )
         .route(
-            "/admin/v1/tenants/{tenant_id}/audit/settings",
+            routes::admin::AUDIT_SETTINGS.template(),
             get(get_tenant_audit_settings).put(put_tenant_audit_settings),
         )
         .route(
-            "/admin/v1/tenants/{tenant_id}/audit/events",
+            routes::admin::AUDIT_EVENTS.template(),
             get(list_tenant_audit_events),
         )
         .route(
-            "/admin/v1/tenants/{tenant_id}/audit/analytics/tool-calls/by-tool",
+            routes::admin::AUDIT_BY_TOOL.template(),
             get(tool_call_stats_by_tool),
         )
         .route(
-            "/admin/v1/tenants/{tenant_id}/audit/analytics/tool-calls/by-api-key",
+            routes::admin::AUDIT_BY_API_KEY.template(),
             get(tool_call_stats_by_api_key),
         )
         .route(
-            "/admin/v1/tenants/{tenant_id}/audit/cleanup",
+            routes::admin::AUDIT_CLEANUP.template(),
             post(cleanup_tenant_audit_events),
         )
+}
+
+pub fn router() -> Router {
+    let admin_v1 = Router::new()
+        .merge(tenant_management_routes())
         .route(
-            "/admin/v1/upstreams",
+            routes::admin::UPSTREAMS.template(),
             post(put_upstream).get(list_upstreams),
         )
         .route(
-            "/admin/v1/upstreams/{upstream_id}",
+            routes::admin::UPSTREAM.template(),
             get(get_upstream).delete(delete_upstream),
         )
         .route(
-            "/admin/v1/upstreams/{upstream_id}/session-activity",
+            routes::admin::UPSTREAM_ACTIVITY.template(),
             get(get_upstream_session_activity),
         )
         .route(
-            "/admin/v1/upstreams/{upstream_id}/endpoints/{endpoint_id}",
+            routes::admin::ENDPOINT.template(),
             patch(patch_upstream_endpoint).delete(delete_upstream_endpoint),
         )
-        .route("/admin/v1/profiles", post(put_profile).get(list_profiles))
         .route(
-            "/admin/v1/profiles/{profile_id}",
+            routes::admin::PROFILES.template(),
+            post(put_profile).get(list_profiles),
+        )
+        .route(
+            routes::admin::PROFILE.template(),
             get(get_profile).delete(delete_profile),
         )
         .route(
-            "/admin/v1/profiles/{profile_id}/audit/settings",
+            routes::admin::PROFILE_AUDIT.template(),
             get(get_profile_audit_settings).put(put_profile_audit_settings),
         )
-        .route("/admin/v1/tenant-tokens", post(issue_tenant_token))
         .route(
-            "/admin/v1/managed-mcp/deployables",
+            routes::admin::TENANT_TOKENS.template(),
+            post(issue_tenant_token),
+        )
+        .route(
+            routes::admin::DEPLOYABLES.template(),
             get(list_managed_mcp_deployables).put(put_managed_mcp_deployable),
         )
         .route(
-            "/admin/v1/managed-mcp/reconciler-heartbeat",
+            routes::admin::HEARTBEAT.template(),
             post(put_managed_mcp_reconciler_heartbeat),
         )
         .route(
-            "/admin/v1/managed-mcp/deployments",
+            routes::admin::DEPLOYMENTS.template(),
             get(list_managed_mcp_deployment_requests),
         )
         .route(
-            "/admin/v1/managed-mcp/deployments/{request_id}",
+            routes::admin::DEPLOYMENT.template(),
             get(get_managed_mcp_deployment_request).patch(patch_managed_mcp_deployment_request),
         )
         .route_layer(from_fn(control_plane_auth_middleware));
 
     Router::new()
-        .route("/bootstrap/v1/tenant/status", get(bootstrap_tenant_status))
-        .route("/bootstrap/v1/tenant", post(bootstrap_tenant))
+        .route(
+            routes::bootstrap::STATUS.template(),
+            get(bootstrap_tenant_status),
+        )
+        .route(routes::bootstrap::TENANT.template(), post(bootstrap_tenant))
         .merge(admin_v1)
 }
 
@@ -535,7 +554,7 @@ async fn validate_no_self_upstream_loop(
         let Some(upstream) = store
             .get_upstream(upstream_id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response())?
+            .map_err(|e| ApiError::internal(e).into_response())?
         else {
             continue;
         };
@@ -564,7 +583,7 @@ async fn put_tenant(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     let started = Instant::now();
 
@@ -583,7 +602,7 @@ async fn put_tenant(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 false,
                 Some(AuditError::new("internal_error", msg.clone())),
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                ApiError::internal(msg).into_response(),
             )
         }
     };
@@ -596,7 +615,7 @@ async fn put_tenant(
             actor: AuditActor::default(),
             action: "admin.tenant_put",
             http_method: "POST",
-            http_route: "/admin/v1/tenants",
+            http_route: routes::admin::TENANTS.template(),
             status_code: i32::from(status.as_u16()),
             ok,
             elapsed: started.elapsed(),
@@ -619,7 +638,7 @@ async fn list_tenants(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
 
     match store.list_tenants().await {
@@ -627,7 +646,7 @@ async fn list_tenants(
             tenants: tenants.into_iter().map(tenant_to_response).collect(),
         })
         .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -640,13 +659,13 @@ async fn get_tenant(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
 
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) => Json(tenant_to_response(t)).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "tenant not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::not_found(Resource::Tenant).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -659,7 +678,7 @@ async fn delete_tenant(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     let started = Instant::now();
 
@@ -675,7 +694,7 @@ async fn delete_tenant(
             StatusCode::NOT_FOUND,
             false,
             Some(AuditError::new("not_found", "tenant not found")),
-            (StatusCode::NOT_FOUND, "tenant not found").into_response(),
+            ApiError::not_found(Resource::Tenant).into_response(),
         ),
         Err(e) => {
             let msg = e.to_string();
@@ -683,7 +702,7 @@ async fn delete_tenant(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 false,
                 Some(AuditError::new("internal_error", msg.clone())),
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                ApiError::internal(msg).into_response(),
             )
         }
     };
@@ -695,7 +714,7 @@ async fn delete_tenant(
             actor: AuditActor::default(),
             action: "admin.tenant_delete",
             http_method: "DELETE",
-            http_route: "/admin/v1/tenants/{tenant_id}",
+            http_route: routes::admin::TENANT.template(),
             status_code: i32::from(status.as_u16()),
             ok,
             elapsed: started.elapsed(),
@@ -719,7 +738,7 @@ async fn put_upstream(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     if matches!(
         req.network_class,
@@ -744,7 +763,7 @@ async fn put_upstream(
             Ok(None) => {
                 return (StatusCode::BAD_REQUEST, "tenantId does not exist").into_response();
             }
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Err(e) => return ApiError::internal(e).into_response(),
         }
         tenant_upstream_internal_id(tenant_id, &req.id)
     } else {
@@ -773,7 +792,7 @@ async fn put_upstream(
         .put_upstream(&upstream_id, req.enabled, req.network_class, &endpoints)
         .await
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return ApiError::internal(e).into_response();
     }
     (StatusCode::CREATED, Json(OkResponse { ok: true })).into_response()
 }
@@ -786,7 +805,7 @@ async fn list_upstreams(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
 
     match store.list_upstreams().await {
@@ -794,7 +813,7 @@ async fn list_upstreams(
             upstreams: upstreams.into_iter().map(upstream_to_response).collect(),
         })
         .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -807,13 +826,13 @@ async fn get_upstream(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
 
     match store.get_upstream(&upstream_id).await {
         Ok(Some(u)) => Json(upstream_to_response(u)).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "upstream not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::not_found(Resource::Upstream).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -827,7 +846,7 @@ async fn get_upstream_session_activity(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     let ttl_secs = crate::pg_store::resolve_upstream_session_activity_ttl_secs(q.ttl_secs);
     match store
@@ -844,7 +863,7 @@ async fn get_upstream_session_activity(
             })
             .into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -856,11 +875,11 @@ async fn list_managed_mcp_deployables(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     match store.list_managed_mcp_deployables().await {
         Ok(deployables) => Json(ManagedMcpDeployablesResponse { deployables }).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -873,7 +892,7 @@ async fn put_managed_mcp_reconciler_heartbeat(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     if let Err(message) = validate_managed_mcp_reconciler_heartbeat_request(&req) {
         return (StatusCode::BAD_REQUEST, message).into_response();
@@ -883,7 +902,7 @@ async fn put_managed_mcp_reconciler_heartbeat(
         .await
     {
         Ok(()) => (StatusCode::CREATED, Json(OkResponse { ok: true })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -928,7 +947,7 @@ async fn list_managed_mcp_deployment_requests(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     let statuses = match parse_managed_mcp_deployment_status_filter(query.status.as_deref()) {
         Ok(v) => v,
@@ -940,7 +959,7 @@ async fn list_managed_mcp_deployment_requests(
         .await
     {
         Ok(requests) => Json(ManagedMcpDeploymentsResponse { requests }).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -953,7 +972,7 @@ async fn put_managed_mcp_deployable(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     if req.id.trim().is_empty()
         || req.display_name.trim().is_empty()
@@ -976,7 +995,7 @@ async fn put_managed_mcp_deployable(
     };
     match store.upsert_managed_mcp_deployable(&deployable).await {
         Ok(()) => (StatusCode::CREATED, Json(OkResponse { ok: true })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -989,12 +1008,12 @@ async fn get_managed_mcp_deployment_request(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     match store.get_managed_mcp_deployment_request(&request_id).await {
         Ok(Some(request)) => Json(ManagedMcpDeploymentResponse { request }).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "deployment request not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::not_found(Resource::Deployment).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1008,7 +1027,7 @@ async fn patch_managed_mcp_deployment_request(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     if let Err(message) = validate_managed_mcp_status_patch_request(&req) {
         return (StatusCode::BAD_REQUEST, message).into_response();
@@ -1023,8 +1042,8 @@ async fn patch_managed_mcp_deployment_request(
         .await
     {
         Ok(true) => Json(OkResponse { ok: true }).into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, "deployment request not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(false) => ApiError::not_found(Resource::Deployment).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1052,13 +1071,13 @@ async fn delete_upstream(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
 
     match store.delete_upstream(&upstream_id).await {
         Ok(true) => Json(OkResponse { ok: true }).into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, "upstream not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(false) => ApiError::not_found(Resource::Upstream).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1072,7 +1091,7 @@ async fn patch_upstream_endpoint(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     if req.enabled.is_none() && req.lifecycle.is_none() {
         return (
@@ -1086,8 +1105,8 @@ async fn patch_upstream_endpoint(
         .await
     {
         Ok(true) => Json(OkResponse { ok: true }).into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, "upstream endpoint not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(false) => ApiError::not_found(Resource::Endpoint).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1100,15 +1119,15 @@ async fn delete_upstream_endpoint(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     match store
         .delete_upstream_endpoint(&upstream_id, &endpoint_id)
         .await
     {
         Ok(true) => Json(OkResponse { ok: true }).into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, "upstream endpoint not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(false) => ApiError::not_found(Resource::Endpoint).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -1121,20 +1140,20 @@ async fn issue_tenant_token(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
 
     match store.get_tenant(&req.tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
         Ok(Some(_)) => return (StatusCode::BAD_REQUEST, "tenant is disabled").into_response(),
-        Ok(None) => return (StatusCode::NOT_FOUND, "tenant not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => return ApiError::not_found(Resource::Tenant).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     let ttl = req.ttl_seconds.unwrap_or(31_536_000);
     let now = match now_unix_secs() {
         Ok(n) => n,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     let exp = now.saturating_add(ttl).max(now + 1);
 
@@ -1144,7 +1163,7 @@ async fn issue_tenant_token(
     };
     let token = match state.tenant_signer.sign_v1(&payload) {
         Ok(t) => t,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     Json(IssueTenantTokenResponse {

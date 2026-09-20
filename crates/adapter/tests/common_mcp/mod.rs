@@ -91,6 +91,19 @@ impl McpStreamableHttpSession {
 
         Ok(msg)
     }
+
+    #[allow(dead_code)]
+    pub async fn notify(&self, method: &str) -> anyhow::Result<()> {
+        let response = post_mcp(
+            &self.client,
+            &self.base_url,
+            Some(&self.session_id),
+            json!({"jsonrpc":"2.0","method":method}),
+        )
+        .await?;
+        anyhow::ensure!(response.status().as_u16() == 202, "notification rejected");
+        Ok(())
+    }
 }
 
 /// Extract the tool call response body as JSON.

@@ -1,3 +1,6 @@
+use crate::catalog::{
+    DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, OPENAPI_PROBE_ENABLED, OPENAPI_PROBE_TIMEOUT,
+};
 use crate::store::{Store, ToolSourceKind, ToolSourceSpec};
 use anyhow::Context as _;
 use parking_lot::RwLock;
@@ -50,10 +53,10 @@ impl TenantCatalog {
             inner: Arc::new(TenantCatalogInner {
                 cache: RwLock::new(HashMap::new()),
                 safety,
-                default_timeout: Duration::from_secs(30),
-                startup_timeout: Duration::from_secs(30),
-                openapi_probe_enabled: true,
-                openapi_probe_timeout: Duration::from_secs(5),
+                default_timeout: DEFAULT_CALL_TIMEOUT,
+                startup_timeout: DEFAULT_STARTUP_TIMEOUT,
+                openapi_probe_enabled: OPENAPI_PROBE_ENABLED,
+                openapi_probe_timeout: OPENAPI_PROBE_TIMEOUT,
             }),
         }
     }

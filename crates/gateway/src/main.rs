@@ -45,7 +45,7 @@ mod store;
 mod tenant;
 mod tenant_catalog;
 mod tenant_token;
-mod timeouts;
+use unrelated_mcp_support::timeouts;
 mod tool_policy;
 mod tools_cache;
 mod transport_limits;
@@ -613,7 +613,7 @@ async fn load_config(args: &CliArgs) -> anyhow::Result<(config::GatewayConfig, b
         let bytes = tokio::fs::read(path)
             .await
             .with_context(|| format!("read config: {}", path.display()))?;
-        let cfg: config::GatewayConfig = serde_yaml::from_slice(&bytes)
+        let cfg: config::GatewayConfig = serde_saphyr::from_reader(bytes.as_slice())
             .with_context(|| format!("parse YAML config: {}", path.display()))?;
         validate_config(&cfg).with_context(|| format!("validate config: {}", path.display()))?;
         Ok((cfg, true))

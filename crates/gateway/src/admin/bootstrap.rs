@@ -1,4 +1,5 @@
 use super::*;
+use unrelated_gateway_api::error::{ApiError, StoreKind};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,12 +49,12 @@ pub(super) async fn bootstrap_tenant_status(
         return (StatusCode::NOT_FOUND, "Not found").into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
 
     let tenants = match store.list_tenants().await {
         Ok(t) => t,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     Json(BootstrapTenantStatusResponse {
         bootstrap_enabled: true,
@@ -89,6 +90,7 @@ async fn create_bootstrap_profile(
     let (transforms, mcp) = (TransformPipeline::default(), McpProfileSettings::default());
     if let Err(e) = store
         .put_profile(PutProfileInput {
+            expected_revision: None,
             profile_id: &profile_id,
             tenant_id,
             name,
@@ -126,7 +128,7 @@ async fn create_bootstrap_profile(
             )
                 .into_response());
         }
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response());
+        return Err(ApiError::internal(e).into_response());
     }
     Ok(Some(BootstrapProfileResult {
         data_plane_path: format!("/{profile_id}/mcp"),
@@ -164,7 +166,7 @@ pub(super) async fn bootstrap_tenant(
         return (StatusCode::NOT_FOUND, "Not found").into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
 
     let tenant_id = req.tenant_id.trim();
@@ -175,14 +177,14 @@ pub(super) async fn bootstrap_tenant(
     // Only allow bootstrapping on an empty DB.
     let existing = match store.list_tenants().await {
         Ok(t) => t,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     if !existing.is_empty() {
         return (StatusCode::CONFLICT, "already bootstrapped").into_response();
     }
 
     if let Err(e) = store.put_tenant(tenant_id, true).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return ApiError::internal(e).into_response();
     }
 
     let bootstrap_profile = match create_bootstrap_profile(store, tenant_id, &req).await {

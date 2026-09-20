@@ -17,9 +17,9 @@ use rmcp::model::{
 use serde_json::json;
 use std::time::Duration;
 use std::{collections::HashSet, sync::Arc};
+use testcontainers::ImageExt as _;
 use testcontainers::core::IntoContainerPort;
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{GenericImage, ImageExt as _};
 use tokio::sync::Mutex;
 
 const ADMIN_TOKEN: &str = "test-admin-token";
@@ -265,7 +265,7 @@ async fn admin_issue_tenant_token(
 #[allow(clippy::too_many_lines)]
 async fn tenant_profiles_are_scoped_and_cross_tenant_access_is_404() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -360,6 +360,7 @@ async fn tenant_profiles_are_scoped_and_cross_tenant_access_is_404() -> anyhow::
     );
 
     assert_profile_nullable_updates(&client, &admin_base, &profile_id, &t1_token).await?;
+    assert_profile_revision_conflicts(&client, &admin_base, &profile_id, &t1_token).await?;
 
     // Cross-tenant access is 404 (not 403).
     let resp = client
@@ -379,6 +380,68 @@ async fn tenant_profiles_are_scoped_and_cross_tenant_access_is_404() -> anyhow::
         .context("tenant invalid token GET")?;
     anyhow::ensure!(resp.status() == reqwest::StatusCode::UNAUTHORIZED);
 
+    Ok(())
+}
+
+async fn assert_profile_revision_conflicts(
+    client: &reqwest::Client,
+    admin_base: &str,
+    profile_id: &str,
+    token: &str,
+) -> anyhow::Result<()> {
+    let url = format!("{admin_base}/tenant/v1/profiles/{profile_id}");
+    let original: serde_json::Value = client
+        .get(&url)
+        .bearer_auth(token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let revision = original["revision"].as_i64().context("profile revision")?;
+    let mut first = original.clone();
+    first["expectedRevision"] = json!(revision);
+    first["description"] = json!("first browser");
+    let mut second = first.clone();
+    second["description"] = json!("second browser");
+    let (a, b) = tokio::join!(
+        client.put(&url).bearer_auth(token).json(&first).send(),
+        client.put(&url).bearer_auth(token).json(&second).send(),
+    );
+    let a = a?;
+    let b = b?;
+    assert!(
+        (a.status().is_success() && b.status() == reqwest::StatusCode::CONFLICT)
+            || (b.status().is_success() && a.status() == reqwest::StatusCode::CONFLICT),
+        "concurrent writes: {} / {}",
+        a.status(),
+        b.status(),
+    );
+    let stored: serde_json::Value = client
+        .get(&url)
+        .bearer_auth(token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(stored["revision"], json!(revision + 1));
+    assert_eq!(
+        stored["description"],
+        if a.status().is_success() {
+            &first["description"]
+        } else {
+            &second["description"]
+        }
+        .clone()
+    );
+    let stale = client
+        .put(&url)
+        .bearer_auth(token)
+        .json(&first)
+        .send()
+        .await?;
+    assert_eq!(stale.status(), reqwest::StatusCode::CONFLICT);
     Ok(())
 }
 
@@ -442,7 +505,7 @@ async fn assert_profile_nullable_updates(
 #[allow(clippy::too_many_lines)]
 async fn profile_name_is_unique_per_tenant_case_insensitive() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -517,7 +580,7 @@ async fn profile_name_is_unique_per_tenant_case_insensitive() -> anyhow::Result<
 #[allow(clippy::too_many_lines)]
 async fn bootstrap_tenant_creates_first_tenant_and_returns_tenant_token() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -598,7 +661,7 @@ async fn bootstrap_tenant_creates_first_tenant_and_returns_tenant_token() -> any
 #[allow(clippy::too_many_lines)]
 async fn tenant_can_create_upstream_and_attach_to_profile() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -723,7 +786,7 @@ async fn tenant_can_create_upstream_and_attach_to_profile() -> anyhow::Result<()
 async fn tenant_tool_source_requires_secret_and_appears_in_tools_list_after_put_secret()
 -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -873,7 +936,7 @@ async fn tenant_tool_source_requires_secret_and_appears_in_tools_list_after_put_
 #[ignore = "requires Docker (testcontainers)"]
 async fn tenant_tool_source_get_returns_spec_for_round_trip() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -967,7 +1030,7 @@ async fn tenant_tool_source_get_returns_spec_for_round_trip() -> anyhow::Result<
 #[allow(clippy::too_many_lines)]
 async fn tenant_profile_surface_probe_returns_tools_and_source_status() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -1130,7 +1193,7 @@ async fn tenant_profile_surface_probe_returns_tools_and_source_status() -> anyho
 #[allow(clippy::too_many_lines)]
 async fn tenant_can_patch_delete_and_inspect_upstream_endpoints() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -1311,7 +1374,7 @@ async fn tenant_can_patch_delete_and_inspect_upstream_endpoints() -> anyhow::Res
 #[allow(clippy::too_many_lines)]
 async fn tenant_managed_mcp_deployables_and_requests_are_scoped() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -1721,7 +1784,7 @@ async fn tenant_managed_mcp_deployables_and_requests_are_scoped() -> anyhow::Res
 #[allow(clippy::too_many_lines)]
 async fn tenant_managed_upstream_created_via_admin_is_tenant_scoped() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")

@@ -1,3 +1,4 @@
+use unrelated_test_support::images;
 mod common;
 mod common_mcp;
 
@@ -16,7 +17,7 @@ use common_mcp::{McpStreamableHttpSession, tool_call_body_json};
 #[ignore = "requires Docker (testcontainers)"]
 #[allow(clippy::too_many_lines)]
 async fn mixed_sources_tool_collision_is_prefixed_and_routed() -> anyhow::Result<()> {
-    let httpbin = GenericImage::new("kennethreitz/httpbin", "latest")
+    let httpbin = GenericImage::new(images::HTTPBIN.name, images::HTTPBIN.tag)
         .with_exposed_port(80.tcp())
         .start()
         .await
@@ -27,7 +28,7 @@ async fn mixed_sources_tool_collision_is_prefixed_and_routed() -> anyhow::Result
     let httpbin_base = format!("http://{httpbin_host}:{httpbin_port}");
     wait_http_ok(&format!("{httpbin_base}/get"), Duration::from_secs(20)).await?;
 
-    let petstore = GenericImage::new("swaggerapi/petstore3", "latest")
+    let petstore = GenericImage::new(images::PETSTORE.name, images::PETSTORE.tag)
         .with_exposed_port(8080.tcp())
         .start()
         .await

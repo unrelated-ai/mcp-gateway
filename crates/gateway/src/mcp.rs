@@ -46,6 +46,7 @@ mod aggregation;
 mod auth;
 mod ids;
 mod initialize;
+mod modern;
 mod probe;
 mod protocol;
 mod request_context;
@@ -474,71 +475,74 @@ async fn handle_tools_call_in_session(
     message: &mut ClientJsonRpcMessage,
     req_id: &RequestId,
 ) -> Result<Response, Response> {
-    if let Some(auth) = ctx.payload.auth.as_ref() {
-        ctx.state
-            .store
-            .record_tool_call_attempt(&auth.tenant_id, &auth.api_key_id)
-            .await
-            .map_err(internal_error_response("record tool call attempt"))?;
+    if !modern::is_verified_continuation(message) {
+        if let Some(auth) = ctx.payload.auth.as_ref() {
+            ctx.state
+                .store
+                .record_tool_call_attempt(&auth.tenant_id, &auth.api_key_id)
+                .await
+                .map_err(internal_error_response("record tool call attempt"))?;
 
-        let rate_limit = if ctx.profile.rate_limit_enabled {
-            ctx.profile.rate_limit_tool_calls_per_minute
-        } else {
-            None
-        };
-        let quota = if ctx.profile.quota_enabled {
-            ctx.profile.quota_tool_calls
-        } else {
-            None
-        };
+            let rate_limit = if ctx.profile.rate_limit_enabled {
+                ctx.profile.rate_limit_tool_calls_per_minute
+            } else {
+                None
+            };
+            let quota = if ctx.profile.quota_enabled {
+                ctx.profile.quota_tool_calls
+            } else {
+                None
+            };
 
-        if (ctx.profile.rate_limit_enabled && rate_limit.is_none())
-            || (ctx.profile.quota_enabled && quota.is_none())
-        {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "profile limits misconfigured",
-            )
-                .into_response());
-        }
+            if (ctx.profile.rate_limit_enabled && rate_limit.is_none())
+                || (ctx.profile.quota_enabled && quota.is_none())
+            {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "profile limits misconfigured",
+                )
+                    .into_response());
+            }
 
-        if let Some(rejection) = ctx
-            .state
-            .store
-            .check_and_apply_tool_call_limits(
-                &auth.tenant_id,
-                &ctx.profile.id,
-                &auth.api_key_id,
-                rate_limit,
-                quota,
-            )
-            .await
-            .map_err(internal_error_response("apply tool call limits"))?
-        {
-            match rejection {
-                ToolCallLimitRejection::RateLimited { retry_after_secs } => {
-                    let data = retry_after_secs.map(|s| serde_json::json!({ "retryAfterSecs": s }));
-                    return Err(jsonrpc_error_response_with_data(
-                        req_id.clone(),
-                        ERROR_CODE_RATE_LIMIT_EXCEEDED,
-                        "rate limit exceeded".to_string(),
-                        data,
-                    ));
-                }
-                ToolCallLimitRejection::QuotaExceeded => {
-                    return Err(jsonrpc_error_response_with_data(
-                        req_id.clone(),
-                        ERROR_CODE_QUOTA_EXCEEDED,
-                        "quota exceeded".to_string(),
-                        None,
-                    ));
+            if let Some(rejection) = ctx
+                .state
+                .store
+                .check_and_apply_tool_call_limits(
+                    &auth.tenant_id,
+                    &ctx.profile.id,
+                    &auth.api_key_id,
+                    rate_limit,
+                    quota,
+                )
+                .await
+                .map_err(internal_error_response("apply tool call limits"))?
+            {
+                match rejection {
+                    ToolCallLimitRejection::RateLimited { retry_after_secs } => {
+                        let data =
+                            retry_after_secs.map(|s| serde_json::json!({ "retryAfterSecs": s }));
+                        return Err(jsonrpc_error_response_with_data(
+                            req_id.clone(),
+                            ERROR_CODE_RATE_LIMIT_EXCEEDED,
+                            "rate limit exceeded".to_string(),
+                            data,
+                        ));
+                    }
+                    ToolCallLimitRejection::QuotaExceeded => {
+                        return Err(jsonrpc_error_response_with_data(
+                            req_id.clone(),
+                            ERROR_CODE_QUOTA_EXCEEDED,
+                            "quota exceeded".to_string(),
+                            None,
+                        ));
+                    }
                 }
             }
+        } else if ctx.profile.rate_limit_enabled || ctx.profile.quota_enabled {
+            return Err(unauthorized(
+                "Unauthorized: profile limits require API key authentication",
+            ));
         }
-    } else if ctx.profile.rate_limit_enabled || ctx.profile.quota_enabled {
-        return Err(unauthorized(
-            "Unauthorized: profile limits require API key authentication",
-        ));
     }
 
     Box::pin(route_and_proxy_tools_call(
@@ -699,6 +703,10 @@ async fn handle_post_in_session_request(
             .await
         }
         "resources/list" => aggregate_list_resources(state, profile_id, payload, req_id, hop).await,
+        "resources/templates/list" => {
+            surface::aggregate_list_resource_templates(state, profile_id, payload, req_id, hop)
+                .await
+        }
         "resources/subscribe" => {
             handle_resource_subscription_in_session(
                 ctx,

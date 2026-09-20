@@ -11,6 +11,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use unrelated_gateway_api::error::{ApiError, Resource, StoreKind};
+use unrelated_gateway_api::routes;
 
 const DEFAULT_TENANT_MANAGED_MCP_DEPLOYMENT_LIST_LIMIT: u32 = 200;
 const MIN_MANAGED_MCP_REPLICAS: i32 = 0;
@@ -19,15 +21,15 @@ const MAX_MANAGED_MCP_REPLICAS: i32 = 50;
 pub(super) fn router() -> Router {
     Router::new()
         .route(
-            "/tenant/v1/managed-mcp/deployables",
+            routes::tenant::DEPLOYABLES.template(),
             get(list_managed_mcp_deployables),
         )
         .route(
-            "/tenant/v1/managed-mcp/deployments",
+            routes::tenant::DEPLOYMENTS.template(),
             get(list_managed_mcp_deployment_requests).post(create_managed_mcp_deployment_request),
         )
         .route(
-            "/tenant/v1/managed-mcp/deployments/{request_id}",
+            routes::tenant::DEPLOYMENT.template(),
             get(get_managed_mcp_deployment_request).patch(patch_managed_mcp_deployment_request),
         )
 }
@@ -74,7 +76,7 @@ async fn list_managed_mcp_deployables(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
         return resp;
@@ -84,7 +86,7 @@ async fn list_managed_mcp_deployables(
             deployables.retain(|d| d.enabled);
             Json(ManagedMcpDeployablesResponse { deployables }).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -98,7 +100,7 @@ async fn create_managed_mcp_deployment_request(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
         return resp;
@@ -137,7 +139,7 @@ async fn list_managed_mcp_deployment_requests(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
         return resp;
@@ -150,7 +152,7 @@ async fn list_managed_mcp_deployment_requests(
         .await
     {
         Ok(requests) => Json(ManagedMcpDeploymentsResponse { requests }).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -164,15 +166,15 @@ async fn get_managed_mcp_deployment_request(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     match store
         .get_managed_mcp_deployment_request_for_tenant(&tenant_id, &request_id)
         .await
     {
         Ok(Some(request)) => Json(ManagedMcpDeploymentResponse { request }).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "deployment request not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::not_found(Resource::Deployment).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -187,7 +189,7 @@ async fn patch_managed_mcp_deployment_request(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
         return resp;
@@ -211,9 +213,9 @@ async fn patch_managed_mcp_deployment_request(
         .await
     {
         Ok(v) => v,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }) else {
-        return (StatusCode::NOT_FOUND, "deployment request not found").into_response();
+        return ApiError::not_found(Resource::Deployment).into_response();
     };
 
     let (desired_enabled, desired_replicas) = match resolve_managed_mcp_patch(&existing, &req) {
@@ -231,8 +233,8 @@ async fn patch_managed_mcp_deployment_request(
         .await
     {
         Ok(Some(request)) => Json(ManagedMcpDeploymentResponse { request }).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "deployment request not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::not_found(Resource::Deployment).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 

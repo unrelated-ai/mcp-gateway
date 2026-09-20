@@ -777,12 +777,22 @@ async fn post_upstream_with_retry(
         let mut msg = call.message.clone();
         inject_timeout_budget_meta(&mut msg, remaining);
 
-        let fut = streamable_http::post_message(
+        let mut body = serde_json::to_value(&msg).expect("serializable request");
+        super::upstream::rewrite_request_metadata(
+            &mut body,
+            &call
+                .profile
+                .mcp
+                .security
+                .effective_upstream_policy(&call.route.source_id),
+        );
+        let fut = streamable_http::post_value(
             call.state.http.for_class(endpoint.network_class),
             endpoint_url.clone().into(),
-            msg,
+            body,
             binding.session.clone().map(Into::into),
             headers,
+            Some(&call.route.original_input_schema),
         );
 
         match tokio::time::timeout(remaining, fut).await {
@@ -840,7 +850,11 @@ async fn proxy_upstream_tool_call_with_retry(
 ) -> Result<Response, Response> {
     let tool_ref = stable_tool_ref(&call.route.source_id, &call.route.original_name);
     let retry = tool_retry_policy_for(call.profile, &tool_ref);
-    let max_attempts: u32 = retry.as_ref().map_or(1, |r| r.maximum_attempts.max(1));
+    let max_attempts: u32 = if super::modern::is_verified_continuation(&call.message) {
+        1
+    } else {
+        retry.as_ref().map_or(1, |r| r.maximum_attempts.max(1))
+    };
 
     let binding = find_upstream_binding(&call).ok_or_else(|| {
         super::jsonrpc_error_response(

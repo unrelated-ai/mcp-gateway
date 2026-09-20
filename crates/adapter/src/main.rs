@@ -13,7 +13,7 @@ mod mcp_server;
 mod openapi;
 mod session_manager;
 mod supervisor;
-mod timeouts;
+use unrelated_mcp_support::timeouts;
 
 use crate::aggregator::Aggregator;
 use crate::config::{AdapterConfig, CliArgs, ServerConfig};
@@ -48,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
     let config = AdapterConfig::load(cli)?;
 
     if config.cli.print_effective_config {
-        let yaml = serde_yaml::to_string(&config.effective_redacted())?;
+        let yaml = serde_saphyr::to_string(&config.effective_redacted())?;
         print!("{yaml}");
         return Ok(());
     }

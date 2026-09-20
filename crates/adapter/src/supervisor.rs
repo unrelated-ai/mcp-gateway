@@ -20,7 +20,7 @@ use parking_lot::RwLock;
 use rmcp::{
     ClientHandler, RoleClient, ServiceExt,
     model::{
-        CallToolRequestParams, CallToolResult, ClientInfo, CompleteRequestParams, CompleteResult,
+        CallToolRequestParams, CallToolResult, ClientConfig, CompleteRequestParams, CompleteResult,
         CreateMessageRequestMethod, CreateMessageRequestParams, CreateMessageResult,
         ElicitRequestParams, ElicitResult, ErrorData as McpError, GetPromptRequestParams,
         GetPromptResult, ListRootsResult, LoggingMessageNotificationParam,
@@ -93,7 +93,7 @@ struct ProxyClientHandler {
     backend_name: String,
     aggregator: Arc<Aggregator>,
     downstream_peer: Option<Peer<RoleServer>>,
-    downstream_client_info: ClientInfo,
+    downstream_client_info: ClientConfig,
     // Best-effort: when the upstream signals list_changed, trigger a registry refresh in the
     // adapter main loop (only wired for persistent stdio backends).
     refresh_tx: Option<UnboundedSender<String>>,
@@ -106,7 +106,7 @@ impl ProxyClientHandler {
             backend_name,
             aggregator,
             downstream_peer: None,
-            downstream_client_info: ClientInfo::default(),
+            downstream_client_info: ClientConfig::default(),
             refresh_tx: None,
             registry_dirty: None,
         }
@@ -122,7 +122,7 @@ impl ProxyClientHandler {
             backend_name,
             aggregator,
             downstream_peer: None,
-            downstream_client_info: ClientInfo::default(),
+            downstream_client_info: ClientConfig::default(),
             refresh_tx,
             registry_dirty: Some(registry_dirty),
         }
@@ -182,7 +182,7 @@ impl std::fmt::Debug for ProxyClientHandler {
 }
 
 impl ClientHandler for ProxyClientHandler {
-    fn get_info(&self) -> ClientInfo {
+    fn get_info(&self) -> ClientConfig {
         self.downstream_client_info.clone()
     }
 
@@ -1330,6 +1330,73 @@ impl Backend for StdioBackend {
                 size: r.size,
             })
             .collect())
+    }
+
+    async fn list_resource_templates(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<Vec<rmcp::model::ResourceTemplate>> {
+        let mut temporary = None;
+        let peer = match self.lifecycle {
+            StdioLifecycle::Persistent => self.get_peer().await?,
+            StdioLifecycle::PerSession => {
+                self.get_peer_for_session(session_id.ok_or_else(|| {
+                    AdapterError::Runtime("resource templates require a session".into())
+                })?)
+                .await?
+            }
+            StdioLifecycle::PerCall => {
+                let client = timeout(
+                    self.startup_timeout,
+                    self.connect_client(self.per_call_handler(session_id)),
+                )
+                .await
+                .map_err(|_| {
+                    AdapterError::Runtime("template discovery startup timed out".into())
+                })??;
+                let peer = client.peer().clone();
+                temporary = Some(client);
+                peer
+            }
+        };
+        let result = timeout(self.call_timeout, peer.list_all_resource_templates()).await;
+        if let Some(client) = temporary {
+            let _ = client.cancel().await;
+        }
+        result
+            .map_err(|_| AdapterError::Runtime("template discovery timed out".into()))?
+            .map_err(|e| AdapterError::Runtime(format!("template discovery failed: {e}")))
+    }
+
+    async fn roots_list_changed(&self, session_id: Option<&str>) -> Result<()> {
+        // A notification never starts a process. Per-call processes get current
+        // roots on their next request; per-session notifications stay isolated.
+        let peer = match self.lifecycle {
+            StdioLifecycle::Persistent => {
+                self.client.lock().await.as_ref().map(|c| c.peer().clone())
+            }
+            StdioLifecycle::PerSession => {
+                let process =
+                    session_id.and_then(|id| self.session_processes.read().get(id).cloned());
+                if let Some(process) = process {
+                    process
+                        .client
+                        .lock()
+                        .await
+                        .as_ref()
+                        .map(|c| c.peer().clone())
+                } else {
+                    None
+                }
+            }
+            StdioLifecycle::PerCall => None,
+        };
+        if let Some(peer) = peer {
+            peer.notify_roots_list_changed()
+                .await
+                .map_err(|e| AdapterError::Runtime(format!("roots notification failed: {e}")))?;
+        }
+        Ok(())
     }
 
     async fn read_resource(

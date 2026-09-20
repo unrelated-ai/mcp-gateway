@@ -1,3 +1,5 @@
+pub mod images;
+
 use anyhow::Context as _;
 use std::net::TcpListener;
 use std::process::Child;

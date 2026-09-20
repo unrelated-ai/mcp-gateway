@@ -1,6 +1,14 @@
 use anyhow::Context as _;
 use std::time::{Duration, Instant};
 
+/// All PostgreSQL integration fixtures use the shared infrastructure pin.
+pub fn image() -> testcontainers::GenericImage {
+    testcontainers::GenericImage::new(
+        unrelated_test_support::images::POSTGRES.name,
+        unrelated_test_support::images::POSTGRES.tag,
+    )
+}
+
 pub async fn wait_pg_ready(database_url: &str, timeout: Duration) -> anyhow::Result<()> {
     let start = Instant::now();
     loop {
@@ -31,19 +39,6 @@ pub fn extract_dbmate_up(sql: &str) -> anyhow::Result<String> {
     Ok(up.trim().to_string())
 }
 
-fn strip_sql_line_comments(sql: &str) -> String {
-    // NOTE: This is a deliberately small helper for our migrations:
-    // - It removes `-- ...` comments so semicolons in comments don't break statement splitting.
-    // - It does not attempt to understand string literals; our migrations avoid `--` inside strings.
-    let mut out = String::with_capacity(sql.len());
-    for line in sql.lines() {
-        let code = line.split_once("--").map_or(line, |(code, _)| code);
-        out.push_str(code);
-        out.push('\n');
-    }
-    out
-}
-
 pub async fn apply_dbmate_migrations(database_url: &str) -> anyhow::Result<()> {
     apply_dbmate_migrations_filtered(database_url, |_| true).await
 }
@@ -56,6 +51,18 @@ pub async fn apply_dbmate_migrations_before(
         path.file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name < filename)
+    })
+    .await
+}
+
+pub async fn apply_dbmate_migrations_from(
+    database_url: &str,
+    filename: &str,
+) -> anyhow::Result<()> {
+    apply_dbmate_migrations_filtered(database_url, |path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name >= filename)
     })
     .await
 }
@@ -98,22 +105,14 @@ async fn apply_dbmate_migrations_filtered(
         let sql = std::fs::read_to_string(&path)
             .with_context(|| format!("read migration {}", path.display()))?;
         let up = extract_dbmate_up(&sql)?;
-        let up = strip_sql_line_comments(&up);
         // Execute each migration inside a transaction for better failure isolation.
         let mut tx = pool.begin().await.context("begin migration tx")?;
-        for stmt in up.split(';') {
-            let stmt = stmt.trim();
-            if stmt.is_empty() {
-                continue;
-            }
-            sqlx::query(stmt).execute(&mut *tx).await.with_context(|| {
-                format!(
-                    "execute migration statement from {}:\n{}",
-                    path.display(),
-                    stmt
-                )
-            })?;
-        }
+        // PostgreSQL parses dollar-quoted function bodies and statement boundaries.
+        // Input is exclusively checked-in migration SQL, never request data.
+        sqlx::raw_sql(sqlx::AssertSqlSafe(up.as_str()))
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("execute migration {}", path.display()))?;
         tx.commit().await.context("commit migration tx")?;
     }
 

@@ -11,6 +11,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
+use rmcp::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
 use rmcp::{
     model::{ClientJsonRpcMessage, ErrorCode, RequestId},
     transport::common::http_header::{HEADER_LAST_EVENT_ID, HEADER_SESSION_ID},
@@ -80,6 +81,7 @@ async fn post_mcp(
         return Err((StatusCode::NOT_FOUND, "profile not found").into_response());
     }
 
+    super::modern::validate_origin(&headers)?;
     ensure_accepts_post(&headers).map_err(|(s, m)| (s, m).into_response())?;
     ensure_json_content_type(&headers).map_err(|(s, m)| (s, m).into_response())?;
 
@@ -87,7 +89,7 @@ async fn post_mcp(
         .await
         .map_err(internal_error_response("load profile"))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "profile not found").into_response())?;
-    let message = parse_post_body_message_with_limits(
+    let value = parse_post_body_value_with_limits(
         state.as_ref(),
         &profile_id,
         &request.profile,
@@ -96,6 +98,11 @@ async fn post_mcp(
     )
     .await?;
 
+    if super::modern::is_modern_request(&headers, &value) {
+        return super::modern::handle_post(state, request, headers, value).await;
+    }
+
+    let message = parse_client_jsonrpc_message(value)?;
     let session_header = headers
         .get(HEADER_SESSION_ID)
         .and_then(|v| v.to_str().ok())
@@ -124,13 +131,13 @@ async fn post_mcp(
     .await
 }
 
-async fn parse_post_body_message_with_limits(
+async fn parse_post_body_value_with_limits(
     state: &McpState,
     profile_id: &str,
     profile: &crate::store::Profile,
     limits: crate::transport_limits::EffectiveTransportLimits,
     body: &Bytes,
-) -> Result<ClientJsonRpcMessage, Response> {
+) -> Result<serde_json::Value, Response> {
     let ctx = PostBodyLimitsCtx {
         state,
         profile_id,
@@ -152,7 +159,7 @@ async fn parse_post_body_message_with_limits(
         enforce_post_json_complexity_limit(&ctx, &value, body).await?;
     }
 
-    parse_client_jsonrpc_message(value)
+    Ok(value)
 }
 
 struct PostBodyLimitsCtx<'a> {
@@ -293,6 +300,19 @@ async fn get_mcp(
     State(state): State<Arc<McpState>>,
     headers: HeaderMap,
 ) -> Result<Response, Response> {
+    super::modern::validate_origin(&headers)?;
+    if headers
+        .get(HEADER_MCP_PROTOCOL_VERSION)
+        .and_then(|v| v.to_str().ok())
+        == Some(unrelated_mcp_support::headers::VERSION)
+    {
+        return Err((
+            StatusCode::METHOD_NOT_ALLOWED,
+            [("allow", "POST")],
+            "Native MCP uses POST",
+        )
+            .into_response());
+    }
     if Uuid::parse_str(&profile_id)
         .ok()
         .and_then(|u| (u.get_version() == Some(Version::Random)).then_some(u))
@@ -331,6 +351,19 @@ async fn delete_mcp(
     State(state): State<Arc<McpState>>,
     headers: HeaderMap,
 ) -> Result<Response, Response> {
+    super::modern::validate_origin(&headers)?;
+    if headers
+        .get(HEADER_MCP_PROTOCOL_VERSION)
+        .and_then(|v| v.to_str().ok())
+        == Some(unrelated_mcp_support::headers::VERSION)
+    {
+        return Err((
+            StatusCode::METHOD_NOT_ALLOWED,
+            [("allow", "POST")],
+            "Native MCP uses POST",
+        )
+            .into_response());
+    }
     if Uuid::parse_str(&profile_id)
         .ok()
         .and_then(|u| (u.get_version() == Some(Version::Random)).then_some(u))

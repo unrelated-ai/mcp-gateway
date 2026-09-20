@@ -18,7 +18,6 @@ use serde_json::json;
 use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
-use testcontainers::GenericImage;
 use testcontainers::ImageExt as _;
 use testcontainers::core::IntoContainerPort;
 use testcontainers::runners::AsyncRunner;
@@ -268,7 +267,7 @@ async fn tenant_create_api_key(
 async fn mode3_pg_profile_aggregates_two_upstreams_and_prefixes_on_collision() -> anyhow::Result<()>
 {
     // Postgres
-    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -489,7 +488,7 @@ async fn mode3_pg_profile_aggregates_two_upstreams_and_prefixes_on_collision() -
 #[ignore = "requires Docker (testcontainers)"]
 async fn admin_profile_prefers_tenant_owned_upstream_binding() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -606,7 +605,7 @@ async fn admin_profile_prefers_tenant_owned_upstream_binding() -> anyhow::Result
 #[ignore = "requires Docker (testcontainers)"]
 async fn admin_static_token_can_set_cluster_internal_managed_network_class() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16.14-alpine3.24")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")

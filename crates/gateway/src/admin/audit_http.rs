@@ -1,4 +1,6 @@
 use super::*;
+use unrelated_gateway_api::error::{ApiError, Resource, StoreKind};
+use unrelated_gateway_api::routes;
 
 fn validate_audit_default_level(level: &str) -> Result<(), &'static str> {
     match level {
@@ -16,7 +18,7 @@ pub(super) async fn get_tenant_audit_settings(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
 
     match store.get_tenant_audit_settings(&tenant_id).await {
@@ -26,8 +28,8 @@ pub(super) async fn get_tenant_audit_settings(
             default_level: s.default_level,
         })
         .into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "tenant not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::not_found(Resource::Tenant).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -41,7 +43,7 @@ pub(super) async fn put_tenant_audit_settings(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     let started = Instant::now();
 
@@ -79,7 +81,7 @@ pub(super) async fn put_tenant_audit_settings(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     false,
                     Some(AuditError::new("internal_error", msg.clone())),
-                    (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                    ApiError::internal(msg).into_response(),
                 )
             }
         };
@@ -91,7 +93,7 @@ pub(super) async fn put_tenant_audit_settings(
             actor: AuditActor::default(),
             action: "admin.audit_settings_put",
             http_method: "PUT",
-            http_route: "/admin/v1/tenants/{tenant_id}/audit/settings",
+            http_route: routes::admin::AUDIT_SETTINGS.template(),
             status_code: i32::from(status.as_u16()),
             ok,
             elapsed: started.elapsed(),
@@ -118,14 +120,14 @@ pub(super) async fn list_tenant_audit_events(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
 
     // Ensure tenant exists.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(_)) => {}
-        Ok(None) => return (StatusCode::NOT_FOUND, "tenant not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => return ApiError::not_found(Resource::Tenant).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     let filter = crate::store::AuditEventFilter {
@@ -156,14 +158,14 @@ pub(super) async fn tool_call_stats_by_tool(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
 
     // Ensure tenant exists.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(_)) => {}
-        Ok(None) => return (StatusCode::NOT_FOUND, "tenant not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => return ApiError::not_found(Resource::Tenant).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     let filter = crate::store::AuditStatsFilter {
@@ -191,14 +193,14 @@ pub(super) async fn tool_call_stats_by_api_key(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
 
     // Ensure tenant exists.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(_)) => {}
-        Ok(None) => return (StatusCode::NOT_FOUND, "tenant not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => return ApiError::not_found(Resource::Tenant).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     let filter = crate::store::AuditStatsFilter {
@@ -225,15 +227,15 @@ pub(super) async fn cleanup_tenant_audit_events(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     let started = Instant::now();
 
     // Ensure tenant exists.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(_)) => {}
-        Ok(None) => return (StatusCode::NOT_FOUND, "tenant not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => return ApiError::not_found(Resource::Tenant).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     let (status, ok, error, resp, deleted) =
@@ -251,7 +253,7 @@ pub(super) async fn cleanup_tenant_audit_events(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     false,
                     Some(AuditError::new("internal_error", msg.clone())),
-                    (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                    ApiError::internal(msg).into_response(),
                     0,
                 )
             }
@@ -264,7 +266,7 @@ pub(super) async fn cleanup_tenant_audit_events(
             actor: AuditActor::default(),
             action: "admin.audit_cleanup",
             http_method: "POST",
-            http_route: "/admin/v1/tenants/{tenant_id}/audit/cleanup",
+            http_route: routes::admin::AUDIT_CLEANUP.template(),
             status_code: i32::from(status.as_u16()),
             ok,
             elapsed: started.elapsed(),
@@ -288,7 +290,7 @@ pub(super) async fn get_profile_audit_settings(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
 
     // Avoid leaking details / DB errors on obviously-invalid ids.
@@ -297,13 +299,13 @@ pub(super) async fn get_profile_audit_settings(
         .and_then(|u| (u.get_version() == Some(Version::Random)).then_some(u))
         .is_none()
     {
-        return (StatusCode::NOT_FOUND, "profile not found").into_response();
+        return ApiError::not_found(Resource::Profile).into_response();
     }
 
     match store.get_profile_audit_settings(&profile_id).await {
         Ok(Some(v)) => Json(ProfileAuditSettingsResponse { audit_settings: v }).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "profile not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::not_found(Resource::Profile).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -317,14 +319,14 @@ pub(super) async fn put_profile_audit_settings(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     let started = Instant::now();
 
     // Avoid leaking details / DB errors on obviously-invalid ids.
     let profile_uuid = match Uuid::parse_str(&profile_id) {
         Ok(u) if u.get_version() == Some(Version::Random) => u,
-        _ => return (StatusCode::NOT_FOUND, "profile not found").into_response(),
+        _ => return ApiError::not_found(Resource::Profile).into_response(),
     };
 
     if !req.audit_settings.is_object() {
@@ -337,8 +339,8 @@ pub(super) async fn put_profile_audit_settings(
 
     let tenant_id_for_audit = match store.get_profile(&profile_id).await {
         Ok(Some(p)) => p.tenant_id,
-        Ok(None) => return (StatusCode::NOT_FOUND, "profile not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => return ApiError::not_found(Resource::Profile).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     let (status, ok, error, resp) = match store
@@ -357,7 +359,7 @@ pub(super) async fn put_profile_audit_settings(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 false,
                 Some(AuditError::new("internal_error", msg.clone())),
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                ApiError::internal(msg).into_response(),
             )
         }
     };
@@ -372,7 +374,7 @@ pub(super) async fn put_profile_audit_settings(
             },
             action: "admin.profile_audit_settings_put",
             http_method: "PUT",
-            http_route: "/admin/v1/profiles/{profile_id}/audit/settings",
+            http_route: routes::admin::PROFILE_AUDIT.template(),
             status_code: i32::from(status.as_u16()),
             ok,
             elapsed: started.elapsed(),

@@ -23,10 +23,18 @@ pub(super) async fn handle_initialize(
     state: &McpState,
     profile: &crate::store::Profile,
     headers: &HeaderMap,
-    message: ClientJsonRpcMessage,
+    mut message: ClientJsonRpcMessage,
 ) -> Result<Response, Response> {
     let (req_id, protocol_version) =
         parse_initialize_request(&message).map_err(|(s, m)| (s, m).into_response())?;
+    let protocol_version = negotiate_legacy_version(&protocol_version);
+    if let ClientJsonRpcMessage::Request(JsonRpcRequest {
+        request: ClientRequest::InitializeRequest(init),
+        ..
+    }) = &mut message
+    {
+        init.params.protocol_version = protocol_version.clone();
+    }
 
     // Data-plane authn/z (per-profile).
     let (auth, oidc): (Option<TokenAuthV1>, Option<TokenOidcV1>) =
@@ -91,6 +99,7 @@ pub(super) async fn handle_initialize(
     };
 
     let token_payload = TokenPayloadV1 {
+        request_meta: None,
         profile_id: profile.id.clone(),
         bindings: bindings.clone(),
         auth,
@@ -127,6 +136,27 @@ fn parse_initialize_request(
     }
 }
 
+// Initialize is the legacy lifecycle. A modern client must use server/discover;
+// never claim its version while giving it legacy session semantics.
+pub(super) fn negotiate_legacy_version(
+    requested: &rmcp::model::ProtocolVersion,
+) -> rmcp::model::ProtocolVersion {
+    use rmcp::model::ProtocolVersion as V;
+    if LEGACY_VERSIONS.contains(requested) {
+        requested.clone()
+    } else {
+        V::V_2025_11_25
+    }
+}
+
+/// Legacy revisions implemented by the Gateway, newest first.
+pub(super) const LEGACY_VERSIONS: [rmcp::model::ProtocolVersion; 4] = [
+    rmcp::model::ProtocolVersion::V_2025_11_25,
+    rmcp::model::ProtocolVersion::V_2025_06_18,
+    rmcp::model::ProtocolVersion::V_2025_03_26,
+    rmcp::model::ProtocolVersion::V_2024_11_05,
+];
+
 fn mint_proxy_key_b64() -> anyhow::Result<String> {
     let mut bytes = [0u8; PROXY_KEY_BYTES];
     getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("OS RNG failure: {e}"))?;
@@ -151,12 +181,27 @@ pub(super) async fn initialize_profile_sources(
     init_message: &ClientJsonRpcMessage,
     hop: u32,
 ) -> Result<InitializedSources, Response> {
+    let local_ids = state
+        .store
+        .tenant_tool_source_ids(&profile.tenant_id, &profile.source_ids)
+        .await
+        .map_err(internal_error_response("classify tenant tool sources"))?;
     let results = super::aggregation::AggregationPolicy::from_env()
         .collect(
             profile
                 .source_ids
                 .iter()
-                .map(|id| initialize_source(state, profile, init_message, hop, id).boxed())
+                .map(|id| {
+                    initialize_source(
+                        state,
+                        profile,
+                        init_message,
+                        hop,
+                        id,
+                        local_ids.contains(id),
+                    )
+                    .boxed()
+                })
                 .collect(),
         )
         .await;
@@ -185,14 +230,9 @@ async fn initialize_source(
     init_message: &ClientJsonRpcMessage,
     hop: u32,
     upstream_id: &str,
+    tenant_local: bool,
 ) -> Result<InitializedSource, Response> {
-    if state.catalog.is_local_tool_source(upstream_id)
-        || state
-            .tenant_catalog
-            .has_tool_source(state.store.as_ref(), &profile.tenant_id, upstream_id)
-            .await
-            .map_err(internal_error_response("check tenant tool source"))?
-    {
+    if state.catalog.is_local_tool_source(upstream_id) || tenant_local {
         return Ok(InitializedSource::Local);
     }
     let upstream = state
@@ -260,7 +300,7 @@ async fn initialize_source(
 // SEP-2577 keeps logging wire-compatible during its deprecation window. Continue advertising it
 // when profile policy allows it so an SDK-only upgrade does not change the gateway contract.
 #[allow(deprecated)]
-fn gateway_initialize_result(
+pub(super) fn gateway_initialize_result(
     profile: &crate::store::Profile,
     protocol_version: rmcp::model::ProtocolVersion,
     warnings: &[String],
@@ -320,4 +360,25 @@ fn gateway_initialize_result(
     }
 
     init_result
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::negotiate_legacy_version;
+    use rmcp::model::ProtocolVersion as V;
+
+    #[test]
+    fn initialize_only_negotiates_implemented_legacy_versions() {
+        for version in [
+            V::V_2024_11_05,
+            V::V_2025_03_26,
+            V::V_2025_06_18,
+            V::V_2025_11_25,
+        ] {
+            assert_eq!(negotiate_legacy_version(&version), version);
+        }
+        assert_eq!(negotiate_legacy_version(&V::V_2026_07_28), V::V_2025_11_25);
+        let unknown: V = serde_json::from_str("\"2099-01-01\"").unwrap();
+        assert_eq!(negotiate_legacy_version(&unknown), V::V_2025_11_25);
+    }
 }

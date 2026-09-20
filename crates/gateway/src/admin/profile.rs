@@ -1,4 +1,6 @@
 use super::*;
+use unrelated_gateway_api::error::{ApiError, Resource, StoreKind};
+use unrelated_gateway_api::routes;
 
 fn parse_or_generate_profile_uuid(id: Option<&str>) -> Result<Uuid, &'static str> {
     let Some(id) = id else {
@@ -104,7 +106,7 @@ async fn load_existing_profile_for_update(
     store
         .get_profile(profile_id)
         .await
-        .map_err(|e| Box::new((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()))
+        .map_err(|e| Box::new(ApiError::internal(e).into_response()))
 }
 
 fn resolve_profile_name(
@@ -171,6 +173,7 @@ async fn put_profile_in_store(
 ) -> Result<(), BoxResponse> {
     store
         .put_profile(PutProfileInput {
+            expected_revision: None,
             profile_id: input.profile_id,
             tenant_id: &req.tenant_id,
             name: input.name,
@@ -211,7 +214,7 @@ async fn put_profile_in_store(
                         .into_response(),
                 )
             } else {
-                Box::new((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response())
+                Box::new(ApiError::internal(e).into_response())
             }
         })?;
     Ok(())
@@ -226,7 +229,7 @@ pub(super) async fn put_profile(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     let started = Instant::now();
     let tenant_id = req.tenant_id.clone();
@@ -243,7 +246,7 @@ pub(super) async fn put_profile(
             },
             action: "admin.profile_put",
             http_method: "POST",
-            http_route: "/admin/v1/profiles",
+            http_route: routes::admin::PROFILES.template(),
             status_code: i32::from(status.as_u16()),
             ok: status.is_success(),
             elapsed: started.elapsed(),
@@ -543,7 +546,7 @@ async fn resolve_admin_profile_upstream_ids(
         let has_tenant_owned = store
             .get_upstream(&internal_id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response())?
+            .map_err(|e| ApiError::internal(e).into_response())?
             .is_some();
         if has_tenant_owned {
             resolved.push(internal_id);
@@ -628,7 +631,7 @@ pub(super) async fn list_profiles(
     }
 
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
 
     match store.list_profiles().await {
@@ -639,7 +642,7 @@ pub(super) async fn list_profiles(
                 .collect(),
         })
         .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -653,7 +656,7 @@ pub(super) async fn get_profile(
     }
 
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
 
     // Avoid leaking details / DB errors on obviously-invalid ids.
@@ -662,13 +665,13 @@ pub(super) async fn get_profile(
         .and_then(|u| (u.get_version() == Some(Version::Random)).then_some(u))
         .is_none()
     {
-        return (StatusCode::NOT_FOUND, "profile not found").into_response();
+        return ApiError::not_found(Resource::Profile).into_response();
     }
 
     match store.get_profile(&profile_id).await {
         Ok(Some(profile)) => Json(profile_to_admin_response(profile)).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "profile not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::not_found(Resource::Profile).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -681,7 +684,7 @@ pub(super) async fn delete_profile(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     let started = Instant::now();
 
@@ -690,7 +693,7 @@ pub(super) async fn delete_profile(
         .and_then(|u| (u.get_version() == Some(Version::Random)).then_some(u))
         .is_none()
     {
-        return (StatusCode::NOT_FOUND, "profile not found").into_response();
+        return ApiError::not_found(Resource::Profile).into_response();
     }
     let profile_uuid = Uuid::parse_str(&profile_id).ok();
 
@@ -710,7 +713,7 @@ pub(super) async fn delete_profile(
             StatusCode::NOT_FOUND,
             false,
             Some(AuditError::new("not_found", "profile not found")),
-            (StatusCode::NOT_FOUND, "profile not found").into_response(),
+            ApiError::not_found(Resource::Profile).into_response(),
         ),
         Err(e) => {
             let msg = e.to_string();
@@ -718,7 +721,7 @@ pub(super) async fn delete_profile(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 false,
                 Some(AuditError::new("internal_error", msg.clone())),
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                ApiError::internal(msg).into_response(),
             )
         }
     };
@@ -734,7 +737,7 @@ pub(super) async fn delete_profile(
                 },
                 action: "admin.profile_delete",
                 http_method: "DELETE",
-                http_route: "/admin/v1/profiles/{profile_id}",
+                http_route: routes::admin::PROFILE.template(),
                 status_code: i32::from(status.as_u16()),
                 ok,
                 elapsed: started.elapsed(),

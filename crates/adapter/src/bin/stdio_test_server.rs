@@ -26,6 +26,7 @@ struct ServerState {
     instance_id: String,
     pid: u32,
     call_count: u64,
+    roots_changes: u64,
 }
 
 impl ServerState {
@@ -40,6 +41,7 @@ impl ServerState {
             instance_id,
             pid,
             call_count: 0,
+            roots_changes: 0,
         }
     }
 }
@@ -57,6 +59,11 @@ fn handle_line(state: &mut ServerState, line: &str) -> Option<serde_json::Value>
 fn handle_message(state: &mut ServerState, msg: &serde_json::Value) -> Option<serde_json::Value> {
     let method = msg.get("method").and_then(serde_json::Value::as_str)?;
 
+    if method == "notifications/roots/list_changed" {
+        state.roots_changes += 1;
+        return None;
+    }
+
     // Ignore notifications (no `id`).
     let id = msg.get("id")?.clone();
 
@@ -69,6 +76,18 @@ fn handle_message(state: &mut ServerState, msg: &serde_json::Value) -> Option<se
             let result = json!({ "resources": [] });
             Some(jsonrpc_ok(&id, &result))
         }
+        "resources/templates/list" => Some(jsonrpc_ok(
+            &id,
+            &json!({"resourceTemplates":[{
+                "uriTemplate":"test:///notes/{id}","name":"note","mimeType":"text/plain"
+            }]}),
+        )),
+        "resources/read" => Some(jsonrpc_ok(
+            &id,
+            &json!({"contents":[{
+                "uri":msg["params"]["uri"],"mimeType":"text/plain","text":"template resource"
+            }]}),
+        )),
         "prompts/list" => {
             let result = json!({ "prompts": [] });
             Some(jsonrpc_ok(&id, &result))
@@ -132,7 +151,8 @@ fn tools_call_result(
         "body": {
             "instanceId": state.instance_id,
             "pid": state.pid,
-            "callCount": state.call_count
+            "callCount": state.call_count,
+            "rootsChanges": state.roots_changes
         }
     });
 

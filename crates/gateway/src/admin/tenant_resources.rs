@@ -1,4 +1,6 @@
 use super::*;
+use unrelated_gateway_api::error::{ApiError, Resource, StoreKind};
+use unrelated_gateway_api::routes;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -92,7 +94,7 @@ pub(super) async fn list_tool_sources(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
 
     match store.list_tool_sources(&tenant_id).await {
@@ -107,7 +109,7 @@ pub(super) async fn list_tool_sources(
                 .collect();
             Json(ToolSourcesResponse { sources }).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -120,7 +122,7 @@ pub(super) async fn get_tool_source(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
 
     match store.get_tool_source(&tenant_id, &source_id).await {
@@ -130,8 +132,8 @@ pub(super) async fn get_tool_source(
             enabled: s.enabled,
         })
         .into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "tool source not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::not_found(Resource::ToolSource).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -145,7 +147,7 @@ pub(super) async fn put_tool_source(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     let started = Instant::now();
 
@@ -160,7 +162,7 @@ pub(super) async fn put_tool_source(
             actor: AuditActor::default(),
             action: "admin.tool_source_put",
             http_method: "PUT",
-            http_route: "/admin/v1/tenants/{tenant_id}/tool-sources/{source_id}",
+            http_route: routes::admin::TOOL_SOURCE.template(),
             status_code: i32::from(outcome.status.as_u16()),
             ok: outcome.ok,
             elapsed: started.elapsed(),
@@ -346,7 +348,7 @@ pub(super) async fn delete_tool_source(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     let started = Instant::now();
 
@@ -363,7 +365,7 @@ pub(super) async fn delete_tool_source(
             StatusCode::NOT_FOUND,
             false,
             Some(AuditError::new("not_found", "tool source not found")),
-            (StatusCode::NOT_FOUND, "tool source not found").into_response(),
+            ApiError::not_found(Resource::ToolSource).into_response(),
         ),
         Err(e) => {
             let msg = e.to_string();
@@ -371,7 +373,7 @@ pub(super) async fn delete_tool_source(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 false,
                 Some(AuditError::new("internal_error", msg.clone())),
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                ApiError::internal(msg).into_response(),
             )
         }
     };
@@ -383,7 +385,7 @@ pub(super) async fn delete_tool_source(
             actor: AuditActor::default(),
             action: "admin.tool_source_delete",
             http_method: "DELETE",
-            http_route: "/admin/v1/tenants/{tenant_id}/tool-sources/{source_id}",
+            http_route: routes::admin::TOOL_SOURCE.template(),
             status_code: i32::from(status.as_u16()),
             ok,
             elapsed: started.elapsed(),
@@ -407,12 +409,12 @@ pub(super) async fn list_secrets(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
 
     match store.list_secrets(&tenant_id).await {
         Ok(secrets) => Json(SecretsResponse { secrets }).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -426,7 +428,7 @@ pub(super) async fn put_secret(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     let started = Instant::now();
     let tenant_id_for_audit = tenant_id.clone();
@@ -443,7 +445,7 @@ pub(super) async fn put_secret(
                 actor: AuditActor::default(),
                 action: "admin.secret_put",
                 http_method: "PUT",
-                http_route: "/admin/v1/tenants/{tenant_id}/secrets/{name}",
+                http_route: routes::admin::SECRET.template(),
                 status_code: i32::from(status.as_u16()),
                 ok: false,
                 elapsed: started.elapsed(),
@@ -467,7 +469,7 @@ pub(super) async fn put_secret(
                 actor: AuditActor::default(),
                 action: "admin.secret_put",
                 http_method: "PUT",
-                http_route: "/admin/v1/tenants/{tenant_id}/secrets/{name}",
+                http_route: routes::admin::SECRET.template(),
                 status_code: i32::from(status.as_u16()),
                 ok: false,
                 elapsed: started.elapsed(),
@@ -495,7 +497,7 @@ pub(super) async fn put_secret(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 false,
                 Some(AuditError::new("internal_error", msg.clone())),
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                ApiError::internal(msg).into_response(),
             )
         }
     };
@@ -507,7 +509,7 @@ pub(super) async fn put_secret(
             actor: AuditActor::default(),
             action: "admin.secret_put",
             http_method: "PUT",
-            http_route: "/admin/v1/tenants/{tenant_id}/secrets/{name}",
+            http_route: routes::admin::SECRET.template(),
             status_code: i32::from(status.as_u16()),
             ok,
             elapsed: started.elapsed(),
@@ -532,7 +534,7 @@ pub(super) async fn delete_secret(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     let started = Instant::now();
 
@@ -549,7 +551,7 @@ pub(super) async fn delete_secret(
             StatusCode::NOT_FOUND,
             false,
             Some(AuditError::new("not_found", "secret not found")),
-            (StatusCode::NOT_FOUND, "secret not found").into_response(),
+            ApiError::not_found(Resource::Secret).into_response(),
         ),
         Err(e) => {
             let msg = e.to_string();
@@ -557,7 +559,7 @@ pub(super) async fn delete_secret(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 false,
                 Some(AuditError::new("internal_error", msg.clone())),
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                ApiError::internal(msg).into_response(),
             )
         }
     };
@@ -569,7 +571,7 @@ pub(super) async fn delete_secret(
             actor: AuditActor::default(),
             action: "admin.secret_delete",
             http_method: "DELETE",
-            http_route: "/admin/v1/tenants/{tenant_id}/secrets/{name}",
+            http_route: routes::admin::SECRET.template(),
             status_code: i32::from(status.as_u16()),
             ok,
             elapsed: started.elapsed(),
@@ -600,7 +602,7 @@ pub(super) async fn list_oidc_principals(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     let Some(issuer) = state.oidc_issuer.as_deref() else {
         return (
@@ -613,13 +615,13 @@ pub(super) async fn list_oidc_principals(
     // Ensure tenant exists.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(_)) => {}
-        Ok(None) => return (StatusCode::NOT_FOUND, "tenant not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => return ApiError::not_found(Resource::Tenant).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     match store.list_oidc_principals(&tenant_id, issuer).await {
         Ok(principals) => Json(OidcPrincipalsResponse { principals }).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -633,7 +635,7 @@ pub(super) async fn put_oidc_principal(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     let Some(issuer) = state.oidc_issuer.as_deref() else {
         return (
@@ -651,8 +653,8 @@ pub(super) async fn put_oidc_principal(
     // Ensure tenant exists.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(_)) => {}
-        Ok(None) => return (StatusCode::NOT_FOUND, "tenant not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => return ApiError::not_found(Resource::Tenant).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     if let Some(profile_id) = req.profile_id.as_deref() {
@@ -662,12 +664,12 @@ pub(super) async fn put_oidc_principal(
             .and_then(|u| (u.get_version() == Some(Version::Random)).then_some(u))
             .is_none()
         {
-            return (StatusCode::NOT_FOUND, "profile not found").into_response();
+            return ApiError::not_found(Resource::Profile).into_response();
         }
         match store.get_profile(profile_id).await {
             Ok(Some(p)) if p.tenant_id == tenant_id => {}
-            Ok(_) => return (StatusCode::NOT_FOUND, "profile not found").into_response(),
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Ok(_) => return ApiError::not_found(Resource::Profile).into_response(),
+            Err(e) => return ApiError::internal(e).into_response(),
         }
     }
 
@@ -681,7 +683,7 @@ pub(super) async fn put_oidc_principal(
         )
         .await
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return ApiError::internal(e).into_response();
     }
 
     Json(OkResponse { ok: true }).into_response()
@@ -697,7 +699,7 @@ pub(super) async fn delete_oidc_principal(
         return resp.into_response();
     }
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Admin store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Admin).into_response();
     };
     let Some(issuer) = state.oidc_issuer.as_deref() else {
         return (
@@ -715,8 +717,8 @@ pub(super) async fn delete_oidc_principal(
     // Ensure tenant exists.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(_)) => {}
-        Ok(None) => return (StatusCode::NOT_FOUND, "tenant not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => return ApiError::not_found(Resource::Tenant).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     match store
@@ -725,6 +727,6 @@ pub(super) async fn delete_oidc_principal(
     {
         Ok(0) => (StatusCode::NOT_FOUND, "oidc principal not found").into_response(),
         Ok(_) => Json(OkResponse { ok: true }).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }

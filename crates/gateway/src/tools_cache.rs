@@ -16,6 +16,7 @@ pub enum ToolRouteKind {
 
 #[derive(Debug, Clone)]
 pub struct ToolRoute {
+    pub original_input_schema: Arc<rmcp::model::JsonObject>,
     pub kind: ToolRouteKind,
     pub source_id: String,
     pub original_name: String,
@@ -100,6 +101,7 @@ pub fn profile_fingerprint(profile: &Profile) -> String {
         "sourceIds": profile.source_ids,
         "enabledTools": profile.enabled_tools,
         "transforms": profile.transforms,
+        "modernProtocol": profile.mcp.modern_protocol,
     });
     let s = serde_json::to_string(&v).expect("profile fingerprint json serializes");
     hex::encode(sha2::Sha256::digest(s.as_bytes()))

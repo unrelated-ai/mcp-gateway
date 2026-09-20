@@ -16,6 +16,10 @@ use sha2::Digest as _;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct McpProfileSettings {
+    /// Opt in to native MCP 2026-07-28. Every attached MCP upstream must support
+    /// the stateless lifecycle; legacy clients can still initialize this profile.
+    #[serde(default)]
+    pub modern_protocol: bool,
     /// Control which MCP server capabilities the Gateway advertises (and enforces).
     #[serde(default)]
     pub capabilities: McpCapabilitiesPolicy,
@@ -710,6 +714,7 @@ pub struct AdminUpstream {
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct AdminProfile {
+    pub revision: i64,
     pub id: String,
     /// Human-friendly profile name (unique per tenant, case-insensitive).
     pub name: String,
@@ -1000,6 +1005,25 @@ pub trait Store: Send + Sync {
         tenant_id: &str,
         source_id: &str,
     ) -> anyhow::Result<Option<TenantToolSource>>;
+
+    /// Classify profile sources in one store operation without loading their specs.
+    async fn tenant_tool_source_ids(
+        &self,
+        tenant_id: &str,
+        ids: &[String],
+    ) -> anyhow::Result<std::collections::HashSet<String>> {
+        let mut local = std::collections::HashSet::new();
+        for id in ids {
+            if self
+                .get_tenant_tool_source(tenant_id, id)
+                .await?
+                .is_some_and(|source| source.enabled)
+            {
+                local.insert(id.clone());
+            }
+        }
+        Ok(local)
+    }
 
     /// Load a tenant secret value (never returned by control-plane GETs; internal use only).
     async fn get_tenant_secret_value(
@@ -1351,6 +1375,8 @@ pub struct PutProfileLimits {
 
 #[derive(Debug, Clone)]
 pub struct PutProfileInput<'a> {
+    /// Compare-and-swap revision; None preserves administrative upsert compatibility.
+    pub expected_revision: Option<i64>,
     pub profile_id: &'a str,
     pub tenant_id: &'a str,
     pub name: &'a str,
@@ -1366,6 +1392,10 @@ pub struct PutProfileInput<'a> {
     pub tool_policies: &'a [ToolPolicy],
     pub mcp: &'a McpProfileSettings,
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("Profile changed in another window. Reload the profile before saving again.")]
+pub struct ProfileRevisionConflict;
 
 /// In-memory store backed by a static config file (Mode 1).
 #[derive(Clone)]

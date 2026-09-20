@@ -368,6 +368,9 @@ impl Aggregator {
     /// Route a resource read to the correct server.
     /// Returns (`server_name`, `original_uri`) or None if not found.
     pub fn route_resource(&self, uri: &str) -> Option<(String, String)> {
+        if let Some(route) = unrelated_mcp_support::parse_resource_template_uri(uri) {
+            return Some(route);
+        }
         let registry = self.resources.read();
         registry
             .get(uri)

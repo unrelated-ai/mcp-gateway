@@ -310,7 +310,7 @@ fn prompts_contract_hash(prompts: &[Prompt]) -> String {
     hex::encode(sha2::Sha256::digest(serialized.as_bytes()))
 }
 
-fn canonicalize_json(v: &Value) -> Value {
+pub(crate) fn canonicalize_json(v: &Value) -> Value {
     match v {
         Value::Object(map) => {
             let mut keys: Vec<_> = map.keys().cloned().collect();

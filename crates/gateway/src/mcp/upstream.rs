@@ -7,12 +7,14 @@ use base64::Engine as _;
 use futures::{FutureExt as _, StreamExt as _};
 use reqwest::header::HeaderValue;
 use rmcp::model::{JsonRpcResponse, ServerJsonRpcMessage};
+use rmcp::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
 use rmcp::{
     model::{ClientJsonRpcMessage, ClientRequest, JsonRpcRequest, JsonRpcVersion2_0, ServerResult},
     transport::streamable_http_client::StreamableHttpPostResponse,
 };
 use std::collections::{HashMap, HashSet};
 use unrelated_http_tools::config::AuthConfig;
+use unrelated_mcp_support::headers::{CLIENT_CAPABILITIES_META, CLIENT_INFO_META};
 use uuid::Uuid;
 
 pub(super) const HOP_HEADER: &str = "x-unrelated-gateway-hop";
@@ -62,7 +64,7 @@ pub(super) async fn upstream_initialize(
     let protocol_version = result.protocol_version.to_string();
     let mut headers = headers.clone();
     headers.insert(
-        "mcp-protocol-version",
+        HEADER_MCP_PROTOCOL_VERSION,
         HeaderValue::from_str(&protocol_version)?,
     );
 
@@ -106,7 +108,7 @@ pub(super) fn build_bound_upstream_headers(
     if let Some(version) = binding.protocol_version.as_deref()
         && let Ok(value) = HeaderValue::from_str(version)
     {
-        headers.insert("mcp-protocol-version", value);
+        headers.insert(HEADER_MCP_PROTOCOL_VERSION, value);
     }
     headers
 }
@@ -228,6 +230,33 @@ pub(super) fn rewrite_upstream_initialize_message(
     msg
 }
 
+/// Apply the same upstream privacy policy to per-request metadata as initialization.
+pub(super) fn rewrite_request_metadata(
+    body: &mut serde_json::Value,
+    policy: &UpstreamSecurityPolicy,
+) {
+    let meta = &body["params"]["_meta"];
+    if meta
+        .get(unrelated_mcp_support::headers::VERSION_META)
+        .is_none()
+    {
+        return;
+    }
+    let initialize = serde_json::json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{
+        "protocolVersion":rmcp::model::ProtocolVersion::V_2025_11_25,
+        "clientInfo":meta[CLIENT_INFO_META],
+        "capabilities":meta[CLIENT_CAPABILITIES_META]
+    }});
+    if let Ok(initialize) = serde_json::from_value(initialize) {
+        let rewritten = rewrite_upstream_initialize_message(&initialize, policy);
+        if let Ok(rewritten) = serde_json::to_value(rewritten) {
+            body["params"]["_meta"][CLIENT_INFO_META] = rewritten["params"]["clientInfo"].clone();
+            body["params"]["_meta"][CLIENT_CAPABILITIES_META] =
+                rewritten["params"]["capabilities"].clone();
+        }
+    }
+}
+
 pub(super) async fn proxy_to_single_upstream(
     state: &McpState,
     profile_id: &str,
@@ -258,12 +287,27 @@ pub(super) async fn proxy_to_single_upstream(
     let endpoint_url = apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
     let headers = build_bound_upstream_headers(binding, endpoint.auth.as_ref(), hop + 1);
 
-    let resp = streamable_http::post_message(
+    let mut body = serde_json::to_value(message)
+        .map_err(|e| super::internal_error_response("serialize request")(e.into()))?;
+    if binding.protocol_version.as_deref() == Some(unrelated_mcp_support::headers::VERSION)
+        && let Some(profile) = state
+            .store
+            .get_profile(profile_id)
+            .await
+            .map_err(super::internal_error_response("load profile policy"))?
+    {
+        rewrite_request_metadata(
+            &mut body,
+            &profile.mcp.security.effective_upstream_policy(upstream_id),
+        );
+    }
+    let resp = streamable_http::post_value(
         state.http.for_class(endpoint.network_class),
         endpoint_url.into(),
-        message,
+        body,
         binding.session.clone().map(Into::into),
         &headers,
+        None,
     )
     .await
     .map_err(|e| {
@@ -367,11 +411,11 @@ async fn list_all_upstreams<T, FBuild, FExtract>(
     ctx: ListAllUpstreamsCtx<'_>,
     build_request: FBuild,
     extract: FExtract,
-) -> Result<Vec<(String, T)>, Response>
+) -> Result<Vec<(String, Vec<T>)>, Response>
 where
     T: Send,
     FBuild: Fn() -> ClientJsonRpcMessage + Sync,
-    FExtract: Fn(ServerResult) -> Option<T> + Sync,
+    FExtract: Fn(ServerResult) -> Option<(Vec<T>, Option<String>)> + Sync,
 {
     if ctx.hop >= MAX_HOPS {
         return Err((
@@ -380,6 +424,13 @@ where
         )
             .into_response());
     }
+    let profile = if ctx.payload.request_meta.is_some() {
+        ctx.state.store.get_profile(ctx.profile_id).await.map_err(
+            super::internal_error_response("load upstream privacy policy"),
+        )?
+    } else {
+        None
+    };
     let results = super::aggregation::AggregationPolicy::from_env().collect(
         ctx.payload.bindings.iter().map(|binding| async {
             let Some(endpoint) = resolve_endpoint(ctx.state, ctx.profile_id, binding).await? else {
@@ -387,23 +438,52 @@ where
             };
             let endpoint_url = apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
             let headers = build_bound_upstream_headers(binding, endpoint.auth.as_ref(), ctx.hop + 1);
-            let response = streamable_http::post_message(
-                ctx.state.http.for_class(endpoint.network_class), endpoint_url.into(), build_request(),
-                binding.session.clone().map(Into::into), &headers,
-            ).await;
-            match response {
-                Ok(response) => match read_first_response(response).await {
-                    Ok(result) => Ok(extract(result).map(|value| (binding.upstream.clone(), value))),
+            let mut cursor = None;
+            let mut seen = HashSet::new();
+            let mut items = Vec::new();
+            for _ in 0..64 {
+                let mut request = serde_json::to_value(build_request()).expect("serializable request");
+                if let Some(cursor) = &cursor {
+                    request["params"] = serde_json::json!({"cursor": cursor});
+                }
+                if let Some(meta) = &ctx.payload.request_meta {
+                    request["params"]["_meta"] = meta.clone();
+                    if let Some(profile) = &profile { rewrite_request_metadata(&mut request, &profile.mcp.security.effective_upstream_policy(&binding.upstream)); }
+                }
+                let response = streamable_http::post_value(
+                    ctx.state.http.for_class(endpoint.network_class), endpoint_url.clone().into(), request,
+                    binding.session.clone().map(Into::into), &headers, None,
+                ).await;
+                let result = match response {
+                    Ok(response) => read_first_response(response).await,
+                    Err(error) => {
+                        tracing::warn!(upstream_id = %binding.upstream, %error, "{}", ctx.transport_failed_message);
+                        return Ok(None);
+                    }
+                };
+                let (page, next) = match result {
+                    Ok(result) => match extract(result) {
+                        Some(page) => page,
+                        None => return Ok(None),
+                    },
                     Err(error) => {
                         tracing::warn!(upstream_id = %binding.upstream, %error, "{}", ctx.request_failed_message);
-                        Ok(None)
+                        return Ok(None);
                     }
-                },
-                Err(error) => {
-                    tracing::warn!(upstream_id = %binding.upstream, %error, "{}", ctx.transport_failed_message);
-                    Ok(None)
+                };
+                items.extend(page);
+                if items.len() > 100_000 {
+                    return Err((StatusCode::BAD_GATEWAY, "upstream catalog exceeds item limit").into_response());
                 }
+                let Some(next) = next else {
+                    return Ok(Some((binding.upstream.clone(), items)));
+                };
+                if !seen.insert(next.clone()) {
+                    return Err((StatusCode::BAD_GATEWAY, "upstream repeated a catalog cursor").into_response());
+                }
+                cursor = Some(next);
             }
+            Err((StatusCode::BAD_GATEWAY, "upstream catalog exceeds page limit").into_response())
         }.boxed()).collect(),
     ).await;
     let mut out = Vec::new();
@@ -453,7 +533,7 @@ pub(super) async fn list_tools_all_upstreams(
             })
         },
         |result| match result {
-            ServerResult::ListToolsResult(r) => Some(r.tools),
+            ServerResult::ListToolsResult(r) => Some((r.tools, r.next_cursor)),
             _ => None,
         },
     )
@@ -487,7 +567,45 @@ pub(super) async fn list_resources_all_upstreams(
             })
         },
         |result| match result {
-            ServerResult::ListResourcesResult(r) => Some(r.resources),
+            ServerResult::ListResourcesResult(r) => Some((r.resources, r.next_cursor)),
+            _ => None,
+        },
+    )
+    .await
+}
+
+pub(super) async fn list_resource_templates_all_upstreams(
+    state: &McpState,
+    profile_id: &str,
+    payload: &TokenPayloadV1,
+    hop: u32,
+) -> Result<Vec<(String, Vec<rmcp::model::ResourceTemplate>)>, Response> {
+    list_all_upstreams(
+        ListAllUpstreamsCtx {
+            state,
+            profile_id,
+            payload,
+            request_failed_message: "resources/templates/list failed",
+            transport_failed_message: "resources/templates/list transport failed",
+            hop,
+        },
+        || {
+            ClientJsonRpcMessage::Request(JsonRpcRequest {
+                jsonrpc: JsonRpcVersion2_0,
+                id: new_internal_request_id(),
+                request: ClientRequest::ListResourceTemplatesRequest(
+                    rmcp::model::ListResourceTemplatesRequest {
+                        method: rmcp::model::ListResourceTemplatesRequestMethod,
+                        params: None,
+                        extensions: rmcp::model::Extensions::default(),
+                    },
+                ),
+            })
+        },
+        |result| match result {
+            ServerResult::ListResourceTemplatesResult(r) => {
+                Some((r.resource_templates, r.next_cursor))
+            }
             _ => None,
         },
     )
@@ -521,7 +639,7 @@ pub(super) async fn list_prompts_all_upstreams(
             })
         },
         |result| match result {
-            ServerResult::ListPromptsResult(r) => Some(r.prompts),
+            ServerResult::ListPromptsResult(r) => Some((r.prompts, r.next_cursor)),
             _ => None,
         },
     )

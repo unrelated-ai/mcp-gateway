@@ -10,6 +10,7 @@
 !crates/
 !crates/**
 !deploy/
+!deploy/images.env
 !deploy/migrator/
 !deploy/migrator/go.mod
 !deploy/migrator/go.sum

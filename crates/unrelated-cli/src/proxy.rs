@@ -7,7 +7,7 @@ use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt as _,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, JsonObject,
-        ListToolsResult, ProtocolVersion, ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
+        ListToolsResult, ProtocolVersion, ServerCapabilities, ServerConfig, Tool, ToolAnnotations,
     },
     service::{RequestContext, RoleServer},
     transport::stdio,
@@ -61,8 +61,8 @@ impl ServerHandler for CompactProxy {
         ])
     }
 
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("unrelated", env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "Search the authorized Gateway catalog, then execute one stable tool reference.",

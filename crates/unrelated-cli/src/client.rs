@@ -5,12 +5,12 @@ use crate::{
 };
 use anyhow::{Context as _, bail};
 use rmcp::{
-    ClientHandler, RoleClient, ServiceExt as _,
+    ClientHandler, RoleClient,
     model::{
-        CallToolRequestParams, CallToolResult, ClientCapabilities, ClientInfo, Implementation,
+        CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig, Implementation,
         JsonObject, Tool,
     },
-    service::{NotificationContext, RunningService},
+    service::{ClientLifecycleMode, ClientServiceExt as _, NotificationContext, RunningService},
     transport::{
         AuthClient, AuthorizationManager, AuthorizationRequest, AuthorizationSession,
         CredentialStore as _, StoredCredentials, StreamableHttpClientTransport,
@@ -45,8 +45,8 @@ impl GatewayClientHandler {
 }
 
 impl ClientHandler for GatewayClientHandler {
-    fn get_info(&self) -> ClientInfo {
-        ClientInfo::new(
+    fn get_info(&self) -> ClientConfig {
+        ClientConfig::new(
             ClientCapabilities::default(),
             Implementation::new("unrelated", env!("CARGO_PKG_VERSION")),
         )
@@ -78,6 +78,15 @@ async fn connect_with_auth(
     context: &ContextConfig,
     timeout: Duration,
 ) -> anyhow::Result<GatewayConnection> {
+    let lifecycle = match std::env::var("UNRELATED_MCP_PROTOCOL").as_deref() {
+        Ok(version) if version == rmcp::model::ProtocolVersion::V_2026_07_28.as_str() => {
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![rmcp::model::ProtocolVersion::V_2026_07_28],
+            }
+        }
+        Ok("legacy") | Err(_) => ClientLifecycleMode::Initialize,
+        Ok(value) => bail!("unsupported UNRELATED_MCP_PROTOCOL: {value}"),
+    };
     let handler = GatewayClientHandler::default();
     let http = reqwest::Client::builder()
         .timeout(timeout)
@@ -92,7 +101,7 @@ async fn connect_with_auth(
             bail!("UNRELATED_TOKEN is set but empty");
         }
         let transport = StreamableHttpClientTransport::with_client(http, config.auth_header(token));
-        return tokio::time::timeout(timeout, handler.serve(transport))
+        return tokio::time::timeout(timeout, handler.serve_with_lifecycle(transport, lifecycle))
             .await
             .context("MCP connection timed out")?
             .context("failed to initialize MCP connection");
@@ -113,7 +122,7 @@ async fn connect_with_auth(
             }
             let transport =
                 StreamableHttpClientTransport::with_client(AuthClient::new(http, manager), config);
-            tokio::time::timeout(timeout, handler.serve(transport))
+            tokio::time::timeout(timeout, handler.serve_with_lifecycle(transport, lifecycle))
                 .await
                 .context("MCP connection timed out")?
                 .context("failed to initialize authenticated MCP connection")
@@ -132,14 +141,14 @@ async fn connect_with_auth(
                     AuthClient::new(http, manager),
                     config,
                 );
-                tokio::time::timeout(timeout, handler.serve(transport))
+                tokio::time::timeout(timeout, handler.serve_with_lifecycle(transport, lifecycle))
                     .await
                     .context("MCP connection timed out")?
                     .context("failed to initialize authenticated MCP connection")
             } else if let Some(token) = credentials::load_api_key(context_name).await? {
                 let transport =
                     StreamableHttpClientTransport::with_client(http, config.auth_header(token));
-                tokio::time::timeout(timeout, handler.serve(transport))
+                tokio::time::timeout(timeout, handler.serve_with_lifecycle(transport, lifecycle))
                     .await
                     .context("MCP connection timed out")?
                     .context("failed to initialize API-key MCP connection")
@@ -147,10 +156,13 @@ async fn connect_with_auth(
                 match detect_auth_mode(context).await? {
                     AuthMode::None => {
                         let transport = StreamableHttpClientTransport::with_client(http, config);
-                        tokio::time::timeout(timeout, handler.serve(transport))
-                            .await
-                            .context("MCP connection timed out")?
-                            .context("failed to initialize MCP connection")
+                        tokio::time::timeout(
+                            timeout,
+                            handler.serve_with_lifecycle(transport, lifecycle),
+                        )
+                        .await
+                        .context("MCP connection timed out")?
+                        .context("failed to initialize MCP connection")
                     }
                     AuthMode::Oauth => {
                         bail!("OAuth login required; run `unrelated auth login`")
@@ -168,14 +180,14 @@ async fn connect_with_auth(
                 .context("API key login required; run `unrelated auth login`")?;
             let transport =
                 StreamableHttpClientTransport::with_client(http, config.auth_header(token));
-            tokio::time::timeout(timeout, handler.serve(transport))
+            tokio::time::timeout(timeout, handler.serve_with_lifecycle(transport, lifecycle))
                 .await
                 .context("MCP connection timed out")?
                 .context("failed to initialize API-key MCP connection")
         }
         AuthMode::None => {
             let transport = StreamableHttpClientTransport::with_client(http, config);
-            tokio::time::timeout(timeout, handler.serve(transport))
+            tokio::time::timeout(timeout, handler.serve_with_lifecycle(transport, lifecycle))
                 .await
                 .context("MCP connection timed out")?
                 .context("failed to initialize MCP connection")
@@ -198,7 +210,7 @@ pub async fn detect_auth_mode(context: &ContextConfig) -> anyhow::Result<AuthMod
             "id": 1,
             "method": "initialize",
             "params": {
-                "protocolVersion": "2025-11-25",
+                "protocolVersion": rmcp::model::ProtocolVersion::V_2025_11_25,
                 "capabilities": {},
                 "clientInfo": {"name": "unrelated-auth-probe", "version": env!("CARGO_PKG_VERSION")}
             }

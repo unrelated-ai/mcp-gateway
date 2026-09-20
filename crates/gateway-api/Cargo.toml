@@ -1,0 +1,20 @@
+[package]
+name = "unrelated-gateway-api"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared Gateway HTTP routes and error contracts"
+
+[features]
+axum = ["dep:axum"]
+
+[dependencies]
+http.workspace = true
+percent-encoding.workspace = true
+thiserror.workspace = true
+axum = { workspace = true, optional = true }
+
+[dev-dependencies]
+url.workspace = true

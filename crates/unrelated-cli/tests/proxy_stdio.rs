@@ -3,7 +3,7 @@ use rmcp::{
     ErrorData as McpError, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-        ListToolsResult, ServerCapabilities, ServerInfo, Tool,
+        ListToolsResult, ServerCapabilities, ServerConfig, Tool,
     },
     service::{RequestContext, RoleServer},
     transport::streamable_http_server::{
@@ -26,8 +26,8 @@ use unrelated_cli::{
 struct RemoteTools;
 
 impl ServerHandler for RemoteTools {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("proxy-test-remote", "1"))
     }
 

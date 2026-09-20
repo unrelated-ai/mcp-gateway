@@ -9,39 +9,40 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+unrelated-mcp-support = { path = "../mcp-support" }
 # MCP Protocol - Official Rust SDK
-rmcp = { version = "3.2.0", features = ["client", "transport-child-process", "transport-streamable-http-server", "elicitation"] }
-tokio = { version = "1", features = ["full", "signal"] }
-tokio-util = "0.7"
-axum = { version = "0.8", features = ["macros"] }
-clap = { version = "4", features = ["derive", "env"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-base64 = "0.22"
+rmcp = { workspace = true, features = ["client", "transport-child-process", "transport-streamable-http-server", "elicitation"] }
+tokio = { workspace = true, features = ["full", "signal"] }
+tokio-util = { workspace = true }
+axum = { workspace = true, features = ["macros"] }
+clap = { workspace = true, features = ["derive", "env"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+base64 = { workspace = true }
 
 # Utilities
-thiserror = "2"
-anyhow = "1"
-futures = "0.3"
-parking_lot = "0.12"
-chrono = { version = "0.4", features = ["serde"] }
-async-trait = "0.1"
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+futures = { workspace = true }
+parking_lot = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+async-trait = { workspace = true }
 
 # OpenAPI support
-serde_yaml = "0.9"
-sha2 = "0.10"
-hex = "0.4"
+serde-saphyr = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
 unrelated-http-tools = { path = "../http-tools" }
 unrelated-openapi-tools = { path = "../openapi-tools" }
 unrelated-tool-transforms = { path = "../tool-transforms" }
 unrelated-env = { path = "../env" }
 
 [dev-dependencies]
-tempfile = "3"
-testcontainers = "0.27.3"
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
+tempfile = { workspace = true }
+testcontainers = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls"] }
 unrelated-test-support = { path = "../test-support" }
 
 [[bin]]

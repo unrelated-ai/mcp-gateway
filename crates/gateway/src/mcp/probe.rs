@@ -4,6 +4,7 @@ use futures::FutureExt as _;
 use rmcp::model::{
     ClientJsonRpcMessage, ClientRequest, JsonRpcRequest, JsonRpcVersion2_0, ServerResult,
 };
+use rmcp::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -85,7 +86,7 @@ async fn initialize_upstream_probe_session(
                 if let Ok(value) =
                     reqwest::header::HeaderValue::from_str(&handshake.protocol_version)
                 {
-                    headers.insert("mcp-protocol-version", value);
+                    headers.insert(HEADER_MCP_PROTOCOL_VERSION, value);
                 }
                 return Ok(UpstreamCtx {
                     upstream_id: upstream_id.to_string(),

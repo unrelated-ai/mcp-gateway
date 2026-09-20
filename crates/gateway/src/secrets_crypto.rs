@@ -91,7 +91,7 @@ impl SecretsCipher {
         };
         self.keys[0]
             .aead
-            .encrypt(XNonce::from_slice(&nonce), payload)
+            .encrypt(&XNonce::from(nonce), payload)
             .map_err(|e| {
                 // `aead::Error` doesn't implement `std::error::Error`, so wrap manually.
                 anyhow::anyhow!("encrypt secret failed: {e:?}")
@@ -111,7 +111,7 @@ impl SecretsCipher {
         if nonce.len() != 24 {
             anyhow::bail!("invalid nonce length (expected 24)");
         }
-        let nonce = XNonce::from_slice(nonce);
+        let nonce = <&XNonce>::try_from(nonce).context("invalid nonce length (expected 24)")?;
 
         // Try keyed first if provided, then fall back to all keys (rotation/config mistakes).
         let candidates: Vec<&KeyEntry> = if let Some(k) = kid {
@@ -161,6 +161,24 @@ fn decode_key_material(s: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decrypts_pre_upgrade_ciphertext() -> anyhow::Result<()> {
+        // Produced with chacha20poly1305 0.10.1 and sha2 0.10.9, before the
+        // dependency migration. Persisted secrets must survive the upgrade.
+        let cipher = SecretsCipher::new_from_secrets(vec![b"legacy-fixture-key".to_vec()])?;
+        let ciphertext = hex::decode("0328ff65a2e49fcb51b2cba4808b67ff4e5bc9bc63ce59ed3f2a76a2b9")?;
+        assert_eq!(
+            cipher.decrypt("t1", "s1", Some(cipher.active_kid()), &[7; 24], &ciphertext)?,
+            "legacy-secret"
+        );
+        assert!(
+            cipher
+                .decrypt("t2", "s1", None, &[7; 24], &ciphertext)
+                .is_err()
+        );
+        Ok(())
+    }
 
     #[test]
     fn encrypt_decrypt_roundtrip_and_rotation() -> anyhow::Result<()> {

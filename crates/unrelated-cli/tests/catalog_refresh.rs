@@ -1,7 +1,7 @@
 use rmcp::{
     ErrorData, ServerHandler,
     model::{
-        Implementation, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo,
+        Implementation, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig,
         Tool,
     },
     service::{RequestContext, RoleServer},
@@ -25,8 +25,8 @@ use unrelated_cli::{
 struct ChangingCatalog(Arc<AtomicUsize>);
 
 impl ServerHandler for ChangingCatalog {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("changing-catalog", "1"))
     }
 
