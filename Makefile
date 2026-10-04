@@ -448,6 +448,7 @@ test-gateway-contracts:
 	  --test integration_mode3_limits \
 	  --test integration_mode3_pg \
 	  --test integration_pg_fanout_notifications \
+	  --test integration_profile_audit \
 	  -- --ignored --nocapture --test-threads=1
 
 ## Real CLI, compact proxy, Adapter and sessionless rmcp acceptance tests

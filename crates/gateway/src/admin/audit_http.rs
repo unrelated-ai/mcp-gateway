@@ -2,13 +2,6 @@ use super::*;
 use unrelated_gateway_api::error::{ApiError, Resource, StoreKind};
 use unrelated_gateway_api::routes;
 
-fn validate_audit_default_level(level: &str) -> Result<(), &'static str> {
-    match level {
-        "off" | "summary" | "metadata" | "payload" => Ok(()),
-        _ => Err("invalid defaultLevel (allowed: off|summary|metadata|payload)"),
-    }
-}
-
 pub(super) async fn get_tenant_audit_settings(
     Extension(state): Extension<Arc<AdminState>>,
     headers: HeaderMap,
@@ -50,7 +43,11 @@ pub(super) async fn put_tenant_audit_settings(
     if req.retention_days < 0 {
         return (StatusCode::BAD_REQUEST, "retentionDays must be >= 0").into_response();
     }
-    if let Err(msg) = validate_audit_default_level(req.default_level.trim()) {
+    if let Err(msg) = req
+        .default_level
+        .trim()
+        .parse::<unrelated_gateway_api::audit::AuditLevel>()
+    {
         return (StatusCode::BAD_REQUEST, msg).into_response();
     }
 
@@ -175,6 +172,7 @@ pub(super) async fn tool_call_stats_by_tool(
         api_key_id: q.api_key_id,
         tool_ref: q.tool_ref,
         limit: q.limit.unwrap_or(100).clamp(1, 1000),
+        offset: q.offset.unwrap_or(0).max(0),
     };
 
     match store.tool_call_stats_by_tool(&tenant_id, filter).await {
@@ -210,6 +208,7 @@ pub(super) async fn tool_call_stats_by_api_key(
         api_key_id: q.api_key_id,
         tool_ref: q.tool_ref,
         limit: q.limit.unwrap_or(100).clamp(1, 1000),
+        offset: q.offset.unwrap_or(0).max(0),
     };
 
     match store.tool_call_stats_by_api_key(&tenant_id, filter).await {
@@ -302,8 +301,16 @@ pub(super) async fn get_profile_audit_settings(
         return ApiError::not_found(Resource::Profile).into_response();
     }
 
-    match store.get_profile_audit_settings(&profile_id).await {
-        Ok(Some(v)) => Json(ProfileAuditSettingsResponse { audit_settings: v }).into_response(),
+    let tenant_id = match store.get_profile(&profile_id).await {
+        Ok(Some(profile)) => profile.tenant_id,
+        Ok(None) => return ApiError::not_found(Resource::Profile).into_response(),
+        Err(error) => return ApiError::internal(error).into_response(),
+    };
+    match store
+        .get_profile_audit_settings(&tenant_id, &profile_id)
+        .await
+    {
+        Ok(Some(v)) => Json(v).into_response(),
         Ok(None) => ApiError::not_found(Resource::Profile).into_response(),
         Err(e) => ApiError::internal(e).into_response(),
     }
@@ -329,13 +336,13 @@ pub(super) async fn put_profile_audit_settings(
         _ => return ApiError::not_found(Resource::Profile).into_response(),
     };
 
-    if !req.audit_settings.is_object() {
-        return (
-            StatusCode::BAD_REQUEST,
-            "auditSettings must be a JSON object",
-        )
-            .into_response();
-    }
+    let audit_settings = match serde_json::from_value::<
+        unrelated_gateway_api::audit::ProfileAuditSettings,
+    >(req.audit_settings.clone())
+    {
+        Ok(settings) => settings,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
 
     let tenant_id_for_audit = match store.get_profile(&profile_id).await {
         Ok(Some(p)) => p.tenant_id,
@@ -344,14 +351,32 @@ pub(super) async fn put_profile_audit_settings(
     };
 
     let (status, ok, error, resp) = match store
-        .put_profile_audit_settings(&profile_id, req.audit_settings.clone())
+        .put_profile_audit_settings(
+            &tenant_id_for_audit,
+            &profile_id,
+            audit_settings,
+            req.expected_revision,
+        )
         .await
     {
-        Ok(()) => (
-            StatusCode::OK,
-            true,
-            None,
-            Json(OkResponse { ok: true }).into_response(),
+        Ok(()) => {
+            state
+                .invalidation
+                .apply_local(&crate::pg_invalidation::InvalidationEvent::Profile {
+                    profile_id: profile_id.clone(),
+                });
+            (
+                StatusCode::OK,
+                true,
+                None,
+                Json(OkResponse { ok: true }).into_response(),
+            )
+        }
+        Err(e) if e.is::<crate::store::ProfileRevisionConflict>() => (
+            StatusCode::CONFLICT,
+            false,
+            Some(AuditError::new("revision_conflict", e.to_string())),
+            (StatusCode::CONFLICT, e.to_string()).into_response(),
         ),
         Err(e) => {
             let msg = e.to_string();

@@ -119,5 +119,73 @@ limit 1
     assert!(ok);
     assert_eq!(error_kind, None);
 
+    assert_audit_pagination(&pool, &client, &admin_base).await?;
+
+    Ok(())
+}
+
+async fn assert_audit_pagination(
+    pool: &sqlx::PgPool,
+    client: &reqwest::Client,
+    base: &str,
+) -> anyhow::Result<()> {
+    // Equal totals exercise the secondary sort key across pages.
+    let mut keys = Vec::new();
+    for tool in ["source:a", "source:b", "source:c"] {
+        let key = uuid::Uuid::new_v4();
+        sqlx::query("insert into api_keys (id, tenant_id, name, prefix, secret_hash) values ($1, 't1', $2, $2, $2)")
+            .bind(key).bind(tool).execute(pool).await?;
+        sqlx::query("insert into audit_events (tenant_id, api_key_id, action, tool_ref, ok) values ('t1', $1, 'mcp.tools_call', $2, true)")
+            .bind(key).bind(tool).execute(pool).await?;
+        keys.push(key.to_string());
+    }
+    keys.sort();
+    for (group, field, expected) in [
+        (
+            "by-tool",
+            "toolRef",
+            vec![
+                "source:a".to_string(),
+                "source:b".to_string(),
+                "source:c".to_string(),
+            ],
+        ),
+        ("by-api-key", "apiKeyId", keys),
+    ] {
+        let mut found = Vec::new();
+        for offset in [0, 2, 4] {
+            let response: serde_json::Value = client.get(format!("{base}/admin/v1/tenants/t1/audit/analytics/tool-calls/{group}?limit=2&offset={offset}"))
+                .bearer_auth(ADMIN_TOKEN).send().await?.error_for_status()?.json().await?;
+            for item in response["items"].as_array().context("items array")? {
+                assert_eq!(item["total"], 1);
+                found.push(item[field].as_str().context("group id")?.to_string());
+            }
+        }
+        assert_eq!(found, expected);
+    }
+    let events_url =
+        format!("{base}/admin/v1/tenants/t1/audit/events?action=mcp.tools_call&limit=2");
+    let first: serde_json::Value = client
+        .get(&events_url)
+        .bearer_auth(ADMIN_TOKEN)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let events = first["events"].as_array().context("events array")?;
+    assert_eq!(events.len(), 2);
+    let before = events[1]["id"].as_i64().context("event id")?;
+    let second: serde_json::Value = client
+        .get(format!("{events_url}&beforeId={before}"))
+        .bearer_auth(ADMIN_TOKEN)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let rest = second["events"].as_array().context("events array")?;
+    assert_eq!(rest.len(), 1);
+    assert!(rest[0]["id"].as_i64().unwrap() < before);
     Ok(())
 }

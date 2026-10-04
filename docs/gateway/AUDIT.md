@@ -1,159 +1,109 @@
-# Audit logging (Mode 3 / Postgres)
+# Audit logging
 
-> **Scope**: an internal, Postgres-backed audit trail (append-only) for tenant activity and basic tool-usage analytics.
+Audit logging records configuration changes and MCP activity in Postgres (Mode 3).
+The **Audit** page shows events and tool-call analytics, with filters for profiles,
+API keys, tools, and outcomes. Opening an event shows its details and metadata.
+File-based Mode 1 does not store audit events.
 
----
+## Tenant defaults and profile overrides
 
-## Start here
+**Settings → Audit** controls the tenant's logging switch, default detail level,
+and retention. Logging starts disabled; the default level is Metadata and the
+retention period is 30 days.
 
-- Gateway overview: [`docs/gateway/INDEX.md`](INDEX.md)
-- Mode 3 storage model (tenants/profiles/sources/secrets): [`docs/gateway/MODE3_TENANT_OVERLAY.md`](MODE3_TENANT_OVERLAY.md)
-- Web UI overview: [`docs/ui/INDEX.md`](../ui/INDEX.md)
+**Profile → Security → Profile audit** selects the detail level for that profile's
+MCP activity. The card shows the tenant default, the currently effective level,
+and tenant-wide retention. New profiles inherit the tenant default.
 
----
+- **Inherit tenant default** follows later changes to the tenant's default level.
+- An explicit profile level replaces the default for that profile, including
+  choosing more detail or turning its activity logging off.
+- Turning tenant logging off, or setting its default level to **Off**, stops
+  logging for every profile. Saved overrides remain available when logging resumes.
+- Configuration changes always follow tenant settings. Turning a profile's MCP
+  activity off still allows its settings changes to be recorded.
 
-## What this is (and what it is not)
+| Level | Stored detail |
+| --- | --- |
+| Off | No new events in the applicable scope. |
+| Summary | Event identity, profile, caller when available, tool, outcome, timing, and error kind. Additional metadata and error messages are omitted. |
+| Metadata | Summary fields plus event metadata and error messages, without payload samples. |
+| Payload samples | Metadata plus bounded samples from transport-limit failures. Full tool request and response bodies are not recorded. |
 
-Audit logging is intended to answer questions like:
+Settings affect new writes, including events waiting to be flushed. They do not
+rewrite existing events. Metadata and payload samples can contain sensitive data;
+access to the audit log should be restricted accordingly. Writes are buffered and
+best-effort, so this is not a guaranteed delivery log.
 
-- “What changed in my tenant configuration?”
-- “Which tools are being called, how often, and how slow are they?”
-- “Which API key is generating errors?”
+## Recorded activity
 
-Non-goals (today):
+The Gateway records tool calls (`mcp.tools_call`), transport-limit failures
+(`mcp.payload_limit_exceeded`), and configuration changes such as profile updates,
+source updates, secret changes, and API-key creation.
 
-- It is **not** a distributed tracing system (OTel comes later).
-- It does **not** store full `tools/call` request/response payloads (it may store tool names and argument-validation error details).
-- It is **not** a per-user “who did this” log yet (tenant auth is token-scoped today, not identity-scoped).
+Tool calls use `toolRef` in the form `<source_id>:<original_tool_name>`, so their
+identity remains useful after a display name changes. Caller information can
+include an API-key ID or OAuth issuer and subject. Tenant-token configuration
+changes do not identify an individual person.
 
----
+At Metadata or Payload samples level, transport-limit failures include the
+limit, observed size or complexity, direction, and action taken. Each payload sample
+uses at most 4096 bytes of the original payload. Tool-call argument-validation details can appear in
+metadata; Summary omits them.
 
-## Storage model
+Tenant-token updates to the tenant-wide audit settings are not themselves recorded.
+Profile audit-setting changes are recorded while tenant logging is enabled.
 
-In Mode 3, audit events are stored in the `audit_events` table (see `crates/gateway/migrations/20260201145648_audit_mode3.sql`).
+## Retention
 
-Each row includes:
+Retention applies to all profiles in a tenant. A background task removes expired
+events every 10 minutes; multiple replicas coordinate cleanup through Postgres.
+A value of zero makes existing events eligible for deletion at the next cleanup.
+Turning logging off does not remove stored events immediately.
 
-- **Tenant linkage**: `tenant_id` (required)
-- **Optional profile linkage**: `profile_id` (UUID, nullable)
-- **Best-effort caller identity**:
-  - `api_key_id` (UUID, nullable)
-  - `oidc_issuer`, `oidc_subject` (nullable)
-- **Action**: `action` (string)
-- **Optional HTTP context** (control-plane requests): `http_method`, `http_route`, `status_code`
-- **Optional tool context** (`tools/call`): `tool_ref`, `tool_name_at_time`
-- **Outcome**: `ok` (boolean), `duration_ms` (nullable), `error_kind`/`error_message` (nullable)
-- **Extra metadata**: `meta` (JSONB object; best-effort, action-specific; treat as potentially sensitive)
+An operator can trigger cleanup with
+`POST /admin/v1/tenants/{tenant_id}/audit/cleanup`.
 
-### Stable tool identity (`tool_ref`)
+## API
 
-For tool calls, the Gateway uses a stable identifier:
+Tenant-token endpoints:
 
-- `tool_ref = "<source_id>:<original_tool_name>"`
+- `GET|PUT /tenant/v1/audit/settings`
+- `GET|PUT /tenant/v1/profiles/{profile_id}/audit/settings`
+- `GET /tenant/v1/audit/events`
+- `GET /tenant/v1/audit/analytics/tool-calls/by-tool`
+- `GET /tenant/v1/audit/analytics/tool-calls/by-api-key`
 
-This is designed to stay meaningful even if tools are renamed (via transforms) or if a source changes its exported surface over time.
+The admin equivalents use `/admin/v1/tenants/{tenant_id}/audit/...` for tenant
+settings, events, and analytics, and
+`/admin/v1/profiles/{profile_id}/audit/settings` for profile overrides.
 
----
+A profile audit-setting update accepts one optional setting, `level`:
 
-## Enablement and settings
+```json
+{
+  "auditSettings": { "level": "summary" },
+  "expectedRevision": 4
+}
+```
 
-Audit storage is **Mode 3 only** (Postgres-backed). Mode 1 intentionally does not write audit events.
+Allowed values are `off`, `summary`, `metadata`, and `payload`. An empty object
+or `"level": null` restores inheritance. Retention and the tenant master switch
+cannot be set here; unsupported fields and values are rejected.
 
-Tenant settings live on the `tenants` row:
+GET returns the saved `auditSettings`, the profile's `revision`, `tenantSettings`
+(`enabled`, `defaultLevel`, `retentionDays`), and `effectiveLevel`. Send that
+revision as `expectedRevision` to protect against concurrent changes; a stale
+revision returns HTTP 409. Audit settings share the profile's revision counter
+with other profile edits. Omitting the revision allows an unconditional update.
 
-- `audit_enabled` (boolean, default `false`)
-- `audit_retention_days` (integer, default `30`, must be \(\ge 0\))
-- `audit_default_level` (`off|summary|metadata|payload`, default `metadata`)
+Earlier releases accepted arbitrary JSON without using it. Existing values that
+do not match the supported format now inherit tenant defaults. GET flags them
+with `hasUnrecognizedSettings: true`; saving a supported setting replaces them.
 
-Today, `audit_default_level` controls whether some events are allowed to include **bounded payload samples** for forensics (still best-effort, and still not intended for secrets). Audit writes are enabled when:
+Event listing supports `limit` and `beforeId`: pass the last event's ID for the
+next page of older events. Analytics support `limit` and a zero-based `offset`.
+Keep `fromUnixSecs` and `toUnixSecs` fixed while paging for a consistent time window.
 
-- `audit_enabled = true`, and
-- `audit_default_level != 'off'`
-
-> **Security note**: the Gateway intentionally avoids storing secrets and full `tools/call` payloads by default. The `meta` field is best-effort and not strictly enforced/redacted today; do not put secrets into arbitrary config blobs (for example, profile audit settings) and treat `meta` as potentially sensitive.
-
----
-
-## Events emitted (high-level)
-
-This is a **“what happened”** log (not a “who did it” log).
-
-- **Data plane**
-  - `mcp.tools_call`
-  - `mcp.payload_limit_exceeded` (transport / payload safety limits)
-- **Tenant control plane** (tenant token scoped)
-  - examples: `tenant.profile_put`, `tenant.profile_delete`, `tenant.tool_source_put`, `tenant.secret_put`, `tenant.api_key_create`, …
-- **Admin control plane** (admin token scoped; acts on a tenant)
-  - examples: `admin.tenant_put`, `admin.profile_put`, `admin.tool_source_put`, `admin.secret_put`, …
-
-Note: updating tenant audit settings via `/tenant/v1/audit/settings` is intentionally **not** recorded as an audit event.
-
-### `mcp.payload_limit_exceeded`
-
-Emitted when the Gateway rejects/closes a request/stream due to configured transport limits (body/SSE size or JSON complexity caps).
-
-- `ok`: `false`
-- `error_kind`: `payload_limit_exceeded`
-- `meta` includes (best-effort):
-  - `direction`: `downstream_request | upstream_sse | downstream_sse`
-  - `metric`: `bytes | complexity`
-  - `observed`, `limit`
-  - `actionTaken`: e.g. `rejected | closed_stream`
-  - `reason`: which limit tripped (e.g. `maxPostBodyBytes`, `maxSseEventBytes`, `maxJsonDepth`, …)
-  - `profileId` and (if relevant) `upstreamId`
-  - convenience keys for byte limits: `bytesObserved`, `limitBytes`
-  - when `audit_default_level = payload`: a bounded sample (`sample`, plus `sampleTruncated`)
-
----
-
-## Retention and cleanup (including HA)
-
-Audit events are deleted by a background retention task:
-
-- Runs every **10 minutes**
-- Deletes `audit_events` older than `now() - (audit_retention_days * 1 day)` per tenant
-
-In HA deployments (multiple gateway replicas), the task uses a **Postgres advisory lock** to ensure only **one** replica performs cleanup on a given tick.
-
-Manual cleanup can also be triggered via the admin API (see below).
-
----
-
-## APIs (tenant + admin)
-
-### Tenant-scoped
-
-- **Tenant audit settings**
-  - `GET /tenant/v1/audit/settings`
-  - `PUT /tenant/v1/audit/settings`
-- **Audit event listing**
-  - `GET /tenant/v1/audit/events`
-- **Tool-call analytics**
-  - `GET /tenant/v1/audit/analytics/tool-calls/by-tool`
-  - `GET /tenant/v1/audit/analytics/tool-calls/by-api-key`
-- **Profile audit settings (raw JSONB)**
-  - `GET /tenant/v1/profiles/{profile_id}/audit/settings`
-  - `PUT /tenant/v1/profiles/{profile_id}/audit/settings`
-
-These profile audit settings are stored as-is (JSONB) and are intended for future extensions. They are not currently used to change what gets recorded in the audit log.
-
-### Admin (operator-scoped)
-
-The admin API can read/write tenant audit settings and query tenant audit events/analytics:
-
-- `GET|PUT /admin/v1/tenants/{tenant_id}/audit/settings`
-- `GET /admin/v1/tenants/{tenant_id}/audit/events`
-- `GET /admin/v1/tenants/{tenant_id}/audit/analytics/tool-calls/by-tool`
-- `GET /admin/v1/tenants/{tenant_id}/audit/analytics/tool-calls/by-api-key`
-- `POST /admin/v1/tenants/{tenant_id}/audit/cleanup`
-- `GET|PUT /admin/v1/profiles/{profile_id}/audit/settings`
-
----
-
-## Web UI
-
-The Web UI exposes:
-
-- **Settings → Audit**: enable/disable + default level + retention (auto-saved)
-- **Audit**: tenant-wide event listing + analytics with filters (including per-profile filtering and deep-links from profile pages)
-- Clicking an event opens an **Event Details** drawer (raw fields + `meta` JSON with copy support).
+See also: [Gateway overview](INDEX.md), [Mode 3 configuration](MODE3_TENANT_OVERLAY.md),
+and [Web UI](../ui/INDEX.md).

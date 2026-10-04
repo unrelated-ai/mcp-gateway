@@ -1,4 +1,5 @@
 //! HTTP contracts shared without coupling clients to the Gateway runtime.
+pub mod audit;
 pub mod error;
 pub mod routes;
 

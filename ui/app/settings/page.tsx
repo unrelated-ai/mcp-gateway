@@ -1,4 +1,5 @@
 "use client";
+import { AUDIT_LEVELS } from "@/src/lib/auditSettings";
 
 import {
   BYTES_PER_MIB,
@@ -9,7 +10,7 @@ import {
 
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, ConfirmModal, CopyButton, Input, Select } from "@/components/ui";
 import { SectionCard, Toggle } from "@/components/ui";
 import { qk } from "@/src/lib/queryKeys";
@@ -25,7 +26,11 @@ import {
   putTenantAuditSettings,
   putTenantTransportLimits,
 } from "@/src/lib/tenantApi";
-import type { TenantAuditSettings, TenantTransportLimitsSettings } from "@/src/lib/types";
+import type {
+  AuditLevel,
+  TenantAuditSettings,
+  TenantTransportLimitsSettings,
+} from "@/src/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +65,7 @@ const subscribeToSession = () => () => {};
 const serverSessionExpiry = () => null;
 
 export default function SettingsPage() {
+  const queryClient = useQueryClient();
   const [showConfirmLock, setShowConfirmLock] = useState(false);
   const toast = useToastStore((s) => s.push);
   const { gatewayDataBase: dataBase } = useRuntimeConfig();
@@ -110,7 +116,7 @@ export default function SettingsPage() {
 
   const [auditEnabledDraft, setAuditEnabledDraft] = useState<boolean | null>(null);
   const [auditRetentionDaysDraft, setAuditRetentionDaysDraft] = useState<number | null>(null);
-  const [auditDefaultLevelDraft, setAuditDefaultLevelDraft] = useState<string | null>(null);
+  const [auditDefaultLevelDraft, setAuditDefaultLevelDraft] = useState<AuditLevel | null>(null);
 
   const [maxPostBodyBytesDraft, setMaxPostBodyBytesDraft] = useState<number | null>(null);
   const [maxSseEventBytesDraft, setMaxSseEventBytesDraft] = useState<number | null>(null);
@@ -149,6 +155,7 @@ export default function SettingsPage() {
     },
     onSuccess: async () => {
       await auditSettingsQuery.refetch();
+      await queryClient.invalidateQueries({ queryKey: qk.profiles() });
     },
     onError: (e) => {
       toast({
@@ -311,8 +318,8 @@ export default function SettingsPage() {
                 label="Default detail level"
                 description={
                   <>
-                    Default capture level for this tenant. Keep this at <code>metadata</code> unless
-                    you really need more.
+                    Default for profile activity and configuration changes. Profiles can override
+                    their activity level. Choosing Off disables logging across the tenant.
                   </>
                 }
                 right={
@@ -320,12 +327,13 @@ export default function SettingsPage() {
                     <Select
                       aria-label="Default detail level"
                       value={draftDefaultLevel}
-                      onChange={(e) => setAuditDefaultLevelDraft(e.target.value)}
+                      onChange={(e) => setAuditDefaultLevelDraft(e.target.value as AuditLevel)}
                     >
-                      <option value="off">off</option>
-                      <option value="summary">summary</option>
-                      <option value="metadata">metadata</option>
-                      <option value="payload">payload</option>
+                      {AUDIT_LEVELS.map((level) => (
+                        <option key={level.value} value={level.value}>
+                          {level.label}
+                        </option>
+                      ))}
                     </Select>
                   </div>
                 }

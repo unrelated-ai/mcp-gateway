@@ -1,34 +1,19 @@
+use crate::ttl_cache::{DEFAULT_CAPACITY, TtlCache};
 use parking_lot::RwLock;
 use serde_json::Value;
 use sqlx::{PgPool, Row as _};
-use std::collections::HashMap;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
 };
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+pub use unrelated_gateway_api::audit::AuditLevel;
+use unrelated_gateway_api::audit::ProfileAuditSettings;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AuditLevel {
-    Off,
-    Summary,
-    Metadata,
-    Payload,
-}
-
-impl AuditLevel {
-    fn from_db(s: &str) -> Self {
-        match s {
-            "off" => Self::Off,
-            "summary" => Self::Summary,
-            "payload" => Self::Payload,
-            _ => Self::Metadata,
-        }
-    }
-}
+const SETTINGS_CACHE_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 pub struct AuditEvent {
@@ -155,7 +140,7 @@ fn truncate_string(mut s: String, max_len: usize) -> String {
     if s.len() <= max_len {
         return s;
     }
-    s.truncate(max_len);
+    s.truncate(s.floor_char_boundary(max_len));
     s
 }
 
@@ -167,10 +152,9 @@ fn normalize_meta(mut meta: Value) -> Value {
 }
 
 #[derive(Debug, Clone)]
-struct TenantAuditSettingsCached {
-    enabled: bool,
-    level: AuditLevel,
-    expires_at: Instant,
+struct ProfileAuditSettingsCached {
+    tenant_id: String,
+    settings: ProfileAuditSettings,
 }
 
 #[async_trait::async_trait]
@@ -182,6 +166,13 @@ pub trait AuditSink: Send + Sync {
     /// Returns `AuditLevel::Off` when audit is disabled for the tenant or when the setting cannot
     /// be loaded.
     async fn tenant_default_level(&self, tenant_id: &str) -> AuditLevel;
+
+    /// Effective policy for profile MCP activity. Control-plane events use tenant defaults.
+    async fn profile_level(&self, tenant_id: &str, _profile_id: Option<Uuid>) -> AuditLevel {
+        self.tenant_default_level(tenant_id).await
+    }
+
+    fn invalidate_profile_settings_cache(&self, _profile_id: &str) {}
 
     /// Best-effort cache invalidation hook for tenant audit settings.
     ///
@@ -205,8 +196,9 @@ pub struct PostgresAuditSink {
     pool: PgPool,
     sender: mpsc::Sender<AuditEvent>,
     dropped: AtomicU64,
-    tenant_cache: RwLock<HashMap<String, TenantAuditSettingsCached>>,
-    cache_ttl: Duration,
+    tenant_cache: TtlCache<(bool, AuditLevel)>,
+    profile_cache: TtlCache<ProfileAuditSettingsCached>,
+    cache_generation: RwLock<u64>,
 }
 
 impl PostgresAuditSink {
@@ -216,8 +208,9 @@ impl PostgresAuditSink {
             pool,
             sender,
             dropped: AtomicU64::new(0),
-            tenant_cache: RwLock::new(HashMap::new()),
-            cache_ttl: Duration::from_secs(30),
+            tenant_cache: TtlCache::new(SETTINGS_CACHE_TTL, DEFAULT_CAPACITY),
+            profile_cache: TtlCache::new(SETTINGS_CACHE_TTL, DEFAULT_CAPACITY),
+            cache_generation: RwLock::new(0),
         });
         Self::spawn_worker(sink.clone(), receiver, shutdown);
         sink
@@ -266,12 +259,10 @@ impl PostgresAuditSink {
     }
 
     async fn tenant_audit_settings(&self, tenant_id: &str) -> (bool, AuditLevel) {
-        let now = Instant::now();
-        if let Some(cached) = self.tenant_cache.read().get(tenant_id)
-            && cached.expires_at > now
-        {
-            return (cached.enabled, cached.level);
+        if let Some(cached) = self.tenant_cache.get(tenant_id) {
+            return cached;
         }
+        let generation = *self.cache_generation.read();
 
         // Refresh from DB (best-effort).
         let row = sqlx::query(
@@ -291,29 +282,70 @@ where id = $1
                 let lvl: String = r
                     .try_get("audit_default_level")
                     .unwrap_or_else(|_| "metadata".to_string());
-                (enabled, AuditLevel::from_db(lvl.as_str()))
+                (enabled, lvl.parse().unwrap_or_default())
             }
             _ => (false, AuditLevel::Off),
         };
 
-        self.tenant_cache.write().insert(
-            tenant_id.to_string(),
-            TenantAuditSettingsCached {
-                enabled,
-                level,
-                expires_at: now + self.cache_ttl,
-            },
-        );
+        let current = self.cache_generation.read();
+        if generation == *current {
+            self.tenant_cache
+                .put(tenant_id.to_owned(), (enabled, level));
+        }
 
         (enabled, level)
     }
 
+    async fn profile_audit_settings(
+        &self,
+        tenant_id: &str,
+        profile_id: Uuid,
+    ) -> ProfileAuditSettings {
+        let key = profile_id.to_string();
+        if let Some(cached) = self
+            .profile_cache
+            .get(&key)
+            .filter(|entry| entry.tenant_id == tenant_id)
+        {
+            return cached.settings;
+        }
+        let generation = *self.cache_generation.read();
+        let value = sqlx::query_scalar::<_, Value>(
+            "select audit_settings from profiles where id = $1 and tenant_id = $2",
+        )
+        .bind(profile_id)
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await;
+        let settings = match value {
+            Ok(Some(value)) => serde_json::from_value(value).unwrap_or_default(),
+            _ => ProfileAuditSettings {
+                level: Some(AuditLevel::Off),
+            },
+        };
+        let current = self.cache_generation.read();
+        if generation == *current {
+            self.profile_cache.put(
+                key,
+                ProfileAuditSettingsCached {
+                    tenant_id: tenant_id.to_owned(),
+                    settings,
+                },
+            );
+        }
+        settings
+    }
+
     async fn flush_batch(&self, buf: &mut Vec<AuditEvent>) {
-        // Filter by per-tenant enablement first, then insert.
+        // Apply current policy again at flush time, including stripping previously captured samples.
         let mut batch: Vec<AuditEvent> = Vec::with_capacity(buf.len());
-        for ev in buf.drain(..) {
-            let (enabled, level) = self.tenant_audit_settings(&ev.tenant_id).await;
-            if enabled && level != AuditLevel::Off {
+        for mut ev in buf.drain(..) {
+            let level = if ev.action.starts_with("mcp.") {
+                self.profile_level(&ev.tenant_id, ev.profile_id).await
+            } else {
+                self.tenant_default_level(&ev.tenant_id).await
+            };
+            if apply_detail_level(&mut ev, level) {
                 batch.push(ev);
             }
         }
@@ -355,7 +387,10 @@ insert into audit_events (
   error_message,
   meta
 )
-values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+values ($1,
+  (select id from profiles where id = $2 and tenant_id = $1),
+  (select id from api_keys where id = $3 and tenant_id = $1),
+  $4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 ",
             )
             .bind(&ev.tenant_id)
@@ -397,9 +432,47 @@ impl AuditSink for PostgresAuditSink {
         if enabled { level } else { AuditLevel::Off }
     }
 
-    fn invalidate_tenant_settings_cache(&self, tenant_id: &str) {
-        self.tenant_cache.write().remove(tenant_id);
+    async fn profile_level(&self, tenant_id: &str, profile_id: Option<Uuid>) -> AuditLevel {
+        let (enabled, tenant_level) = self.tenant_audit_settings(tenant_id).await;
+        if !enabled || tenant_level == AuditLevel::Off {
+            return AuditLevel::Off;
+        }
+        let settings = match profile_id {
+            Some(id) => self.profile_audit_settings(tenant_id, id).await,
+            None => ProfileAuditSettings::default(),
+        };
+        settings.effective_level(enabled, tenant_level)
     }
+
+    fn invalidate_tenant_settings_cache(&self, tenant_id: &str) {
+        let mut generation = self.cache_generation.write();
+        *generation = generation.wrapping_add(1);
+        self.tenant_cache.remove(tenant_id);
+    }
+
+    fn invalidate_profile_settings_cache(&self, profile_id: &str) {
+        let mut generation = self.cache_generation.write();
+        *generation = generation.wrapping_add(1);
+        self.profile_cache.remove(profile_id);
+    }
+}
+
+fn apply_detail_level(event: &mut AuditEvent, level: AuditLevel) -> bool {
+    match level {
+        AuditLevel::Off => return false,
+        AuditLevel::Summary => {
+            event.meta = serde_json::json!({});
+            event.error_message = None;
+        }
+        AuditLevel::Metadata => {
+            if let Some(meta) = event.meta.as_object_mut() {
+                meta.remove("sample");
+                meta.remove("sampleTruncated");
+            }
+        }
+        AuditLevel::Payload => {}
+    }
+    true
 }
 
 #[cfg(test)]
@@ -409,16 +482,31 @@ mod tests {
 
     #[test]
     fn audit_level_from_db_maps_known_values() {
-        assert_eq!(AuditLevel::from_db("off"), AuditLevel::Off);
-        assert_eq!(AuditLevel::from_db("summary"), AuditLevel::Summary);
-        assert_eq!(AuditLevel::from_db("metadata"), AuditLevel::Metadata);
-        assert_eq!(AuditLevel::from_db("payload"), AuditLevel::Payload);
+        assert_eq!("off".parse::<AuditLevel>().unwrap(), AuditLevel::Off);
+        assert_eq!(
+            "summary".parse::<AuditLevel>().unwrap(),
+            AuditLevel::Summary
+        );
+        assert_eq!(
+            "metadata".parse::<AuditLevel>().unwrap(),
+            AuditLevel::Metadata
+        );
+        assert_eq!(
+            "payload".parse::<AuditLevel>().unwrap(),
+            AuditLevel::Payload
+        );
     }
 
     #[test]
     fn audit_level_from_db_defaults_to_metadata() {
-        assert_eq!(AuditLevel::from_db("nope"), AuditLevel::Metadata);
-        assert_eq!(AuditLevel::from_db(""), AuditLevel::Metadata);
+        assert_eq!(
+            "nope".parse::<AuditLevel>().unwrap_or_default(),
+            AuditLevel::Metadata
+        );
+        assert_eq!(
+            "".parse::<AuditLevel>().unwrap_or_default(),
+            AuditLevel::Metadata
+        );
     }
 
     #[test]
@@ -439,6 +527,40 @@ mod tests {
     fn truncate_string_truncates_to_max_len() {
         let s = "abcdef".to_string();
         assert_eq!(truncate_string(s, 4), "abcd".to_string());
+        assert_eq!(truncate_string("café ☕".to_string(), 4), "caf");
+        assert_eq!(truncate_string("café ☕".to_string(), 8), "café ");
+    }
+
+    #[test]
+    fn detail_policy_removes_metadata_and_samples_when_logging_is_reduced() {
+        let event = http_event(HttpAuditEvent {
+            tenant_id: "t1".into(),
+            actor: AuditActor::default(),
+            action: "mcp.payload_limit_exceeded",
+            http_method: "POST",
+            http_route: "/{profile_id}/mcp",
+            status_code: 413,
+            ok: false,
+            elapsed: Duration::from_millis(3),
+            meta: json!({"limit":128, "sample":"sensitive sample", "sampleTruncated":true}),
+            error: Some(AuditError::new("payload_limit_exceeded", "details")),
+        });
+        let mut payload = event.clone();
+        assert!(apply_detail_level(&mut payload, AuditLevel::Payload));
+        assert_eq!(payload.meta, event.meta);
+        // Recheck a previously collected payload against a stricter current policy.
+        assert!(apply_detail_level(&mut payload, AuditLevel::Metadata));
+        assert_eq!(payload.meta, json!({"limit":128}));
+        assert_eq!(payload.error_message.as_deref(), Some("details"));
+        assert!(apply_detail_level(&mut payload, AuditLevel::Summary));
+        assert_eq!(payload.meta, json!({}));
+        assert_eq!(payload.error_message, None);
+        assert_eq!(
+            payload.error_kind.as_deref(),
+            Some("payload_limit_exceeded")
+        );
+        assert_eq!(payload.duration_ms, Some(3));
+        assert!(!apply_detail_level(&mut payload, AuditLevel::Off));
     }
 
     #[test]

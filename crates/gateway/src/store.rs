@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 use subtle::{Choice, ConstantTimeEq};
+use unrelated_gateway_api::audit::{ProfileAuditSettings, ProfileAuditSettingsResponse};
 use unrelated_http_tools::config::AuthConfig;
 use unrelated_http_tools::config::HttpServerConfig;
 use unrelated_openapi_tools::config::ApiServerConfig;
@@ -854,6 +855,7 @@ pub struct AuditStatsFilter {
     pub api_key_id: Option<String>,
     pub tool_ref: Option<String>,
     pub limit: i64,
+    pub offset: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1222,12 +1224,18 @@ pub trait AdminStore: Send + Sync {
         settings: &TenantAuditSettings,
     ) -> anyhow::Result<()>;
 
-    async fn get_profile_audit_settings(&self, profile_id: &str) -> anyhow::Result<Option<Value>>;
+    async fn get_profile_audit_settings(
+        &self,
+        tenant_id: &str,
+        profile_id: &str,
+    ) -> anyhow::Result<Option<ProfileAuditSettingsResponse>>;
 
     async fn put_profile_audit_settings(
         &self,
+        tenant_id: &str,
         profile_id: &str,
-        audit_settings: Value,
+        audit_settings: ProfileAuditSettings,
+        expected_revision: Option<i64>,
     ) -> anyhow::Result<()>;
 
     async fn list_audit_events(

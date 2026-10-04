@@ -1,5 +1,9 @@
 import { tenantRoutes, bffRoute } from "@/src/lib/gatewayRoutes";
-import { createProfileUpdater } from "./profile-updates";
+import {
+  createProfileUpdater,
+  createProfileWriteQueue,
+  type ProfileRevision,
+} from "./profile-updates";
 import { tenantFetchJson } from "@/src/lib/tenantFetch";
 import type {
   ApiKeyMetadata,
@@ -10,6 +14,8 @@ import type {
   ToolCallStatsByApiKeyResponse,
   ToolCallStatsByToolResponse,
   Profile,
+  ProfileAuditSettings,
+  ProfileAuditSettingsResponse,
   ToolSourceSummary,
 } from "@/src/lib/types";
 
@@ -302,7 +308,30 @@ async function putProfile(id: string, body: unknown): Promise<unknown> {
   });
 }
 
-export const updateProfile = createProfileUpdater({ read: getProfile, write: putProfile });
+const profileWriteQueue = createProfileWriteQueue({ read: getProfile });
+export const updateProfile = createProfileUpdater({
+  read: getProfile,
+  write: putProfile,
+  queue: profileWriteQueue,
+});
+
+export async function getProfileAuditSettings(id: string): Promise<ProfileAuditSettingsResponse> {
+  return tenantFetchJson(bffRoute(tenantRoutes.PROFILE_AUDIT(id)), { cache: "no-store" });
+}
+
+export function updateProfileAuditSettings(
+  profile: ProfileRevision,
+  settings: ProfileAuditSettings,
+): Promise<void> {
+  const auditSettings = structuredClone(settings);
+  return profileWriteQueue(profile, (current) =>
+    tenantFetchJson(bffRoute(tenantRoutes.PROFILE_AUDIT(profile.id)), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ auditSettings, expectedRevision: current.revision }),
+    }),
+  );
+}
 
 export async function deleteProfile(id: string): Promise<void> {
   await tenantFetchJson(bffRoute(tenantRoutes.PROFILE(id)), { method: "DELETE" });
@@ -495,8 +524,10 @@ export async function toolCallStatsByTool(params: {
   apiKeyId?: string;
   toolRef?: string;
   limit?: number;
+  offset?: number;
 }): Promise<ToolCallStatsByToolResponse> {
   const sp = new URLSearchParams();
+  if (params.offset != null) sp.set("offset", String(params.offset));
   if (params.fromUnixSecs != null) sp.set("fromUnixSecs", String(params.fromUnixSecs));
   if (params.toUnixSecs != null) sp.set("toUnixSecs", String(params.toUnixSecs));
   if (params.profileId) sp.set("profileId", params.profileId);
@@ -517,8 +548,10 @@ export async function toolCallStatsByApiKey(params: {
   apiKeyId?: string;
   toolRef?: string;
   limit?: number;
+  offset?: number;
 }): Promise<ToolCallStatsByApiKeyResponse> {
   const sp = new URLSearchParams();
+  if (params.offset != null) sp.set("offset", String(params.offset));
   if (params.fromUnixSecs != null) sp.set("fromUnixSecs", String(params.fromUnixSecs));
   if (params.toUnixSecs != null) sp.set("toUnixSecs", String(params.toUnixSecs));
   if (params.profileId) sp.set("profileId", params.profileId);

@@ -169,7 +169,17 @@ export type CreateApiKeyResponse = {
 export type TenantAuditSettings = {
   enabled: boolean;
   retentionDays: number;
-  defaultLevel: "off" | "summary" | "metadata" | "payload" | string;
+  defaultLevel: AuditLevel;
+};
+
+export type AuditLevel = "off" | "summary" | "metadata" | "payload";
+export type ProfileAuditSettings = { level?: AuditLevel | null };
+export type ProfileAuditSettingsResponse = {
+  revision: number;
+  auditSettings: ProfileAuditSettings;
+  tenantSettings: TenantAuditSettings;
+  effectiveLevel: AuditLevel;
+  hasUnrecognizedSettings: boolean;
 };
 
 export type TenantTransportLimitsSettings = TransportLimitsSettings;

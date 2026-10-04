@@ -126,6 +126,7 @@ impl InvalidationDispatcher {
             }
             LocalInvalidationAction::Profile { profile_id } => {
                 self.tools_cache.invalidate_profile(&profile_id);
+                self.audit.invalidate_profile_settings_cache(&profile_id);
             }
             LocalInvalidationAction::Upstream { upstream_id } => {
                 self.endpoint_cache.invalidate_upstream(&upstream_id);
@@ -212,6 +213,7 @@ mod tests {
     #[derive(Default)]
     struct TestAuditSink {
         invalidated_tenants: Mutex<Vec<String>>,
+        invalidated_profiles: Mutex<Vec<String>>,
     }
 
     #[async_trait]
@@ -224,6 +226,12 @@ mod tests {
 
         fn invalidate_tenant_settings_cache(&self, tenant_id: &str) {
             self.invalidated_tenants.lock().push(tenant_id.to_string());
+        }
+
+        fn invalidate_profile_settings_cache(&self, profile_id: &str) {
+            self.invalidated_profiles
+                .lock()
+                .push(profile_id.to_string());
         }
     }
 
@@ -347,6 +355,10 @@ mod tests {
         assert_eq!(
             audit.invalidated_tenants.lock().as_slice(),
             &["tenant-1".to_string()]
+        );
+        assert_eq!(
+            audit.invalidated_profiles.lock().as_slice(),
+            &["profile-1".to_string()]
         );
     }
 }

@@ -378,6 +378,8 @@ struct AuditStatsQuery {
     tool_ref: Option<String>,
     #[serde(default)]
     limit: Option<i64>,
+    #[serde(default)]
+    offset: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -399,16 +401,12 @@ struct AuditCleanupResponse {
     deleted: u64,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProfileAuditSettingsResponse {
-    audit_settings: serde_json::Value,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PutProfileAuditSettingsRequest {
     audit_settings: serde_json::Value,
+    #[serde(default)]
+    expected_revision: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]

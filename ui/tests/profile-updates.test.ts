@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createProfileUpdater } from "../src/lib/profile-updates";
+import { createProfileUpdater, createProfileWriteQueue } from "../src/lib/profile-updates";
 import { defaultMcpSettings } from "../src/lib/mcpSettings";
 import type { Profile } from "../src/lib/types";
 
@@ -135,4 +135,39 @@ test("a race after reading is rejected without an automatic retry", async () => 
   });
   await assert.rejects(update(profile(), { name: "Draft" }), /Reload the profile/);
   assert.equal(writes, 1);
+});
+
+test("audit and general profile writes share revisions without overwriting each other", async () => {
+  let stored = profile();
+  let auditLevel = "metadata";
+  const read = async () => structuredClone(stored);
+  const queue = createProfileWriteQueue({ read });
+  const update = createProfileUpdater({
+    read,
+    queue,
+    write: async (_id, body) => {
+      assert.equal(body.expectedRevision, stored.revision);
+      stored = { ...stored, ...body, revision: stored.revision + 1 };
+    },
+  });
+  const draft = profile();
+  await Promise.all([
+    queue(draft, async (current) => {
+      assert.equal(current.revision, stored.revision);
+      auditLevel = "summary";
+      stored.revision += 1;
+    }),
+    update(draft, { name: "Renamed" }),
+  ]);
+  assert.equal(auditLevel, "summary");
+  assert.equal(stored.name, "Renamed");
+  assert.equal(stored.revision, 3);
+  stored.revision += 1; // A different browser changes the profile.
+  await assert.rejects(
+    queue(draft, async () => {
+      auditLevel = "off";
+    }),
+    /Reload the profile/,
+  );
+  assert.equal(auditLevel, "summary");
 });

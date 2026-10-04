@@ -20,6 +20,7 @@ import type {
 } from "@/src/lib/types";
 import { useAutosave } from "@/src/lib/useAutosave";
 import { SaveStatus } from "@/components/ui/save-status";
+import { ProfileAuditCard } from "./profile-audit-card";
 import {
   INTERACTIVE_REQUEST_METHODS,
   allowsServerRequest,
@@ -211,6 +212,7 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
 
   return (
     <div className="space-y-6">
+      {profile && <ProfileAuditCard key={profile.id} profile={profile} />}
       <SectionCard
         title="Security"
         subtitle="Control what the Gateway advertises upstream and what upstream interactive requests are allowed through."

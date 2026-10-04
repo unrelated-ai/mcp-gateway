@@ -5,25 +5,23 @@ export type ProfileUpdate =
   | Partial<Omit<PutProfileBody, "expectedRevision">>
   | ((current: Profile) => Partial<Omit<PutProfileBody, "expectedRevision">>);
 
-/** Serialize edits from every panel in this browser, without sending stale fields.
- * The Gateway expects a complete PUT, so read the current profile inside the queue.
- * Rebase only across successful writes from this queue. External changes require
- * a reload; the database also checks the revision atomically at commit time.
+export type ProfileRevision = Pick<Profile, "id" | "revision">;
+export type ProfileWriteQueue = (
+  profile: ProfileRevision,
+  write: (current: Profile) => Promise<unknown>,
+) => Promise<void>;
+
+/** All profile endpoints share one revision history and write queue. External
+ * changes require a reload; successful local writes can rebase later drafts.
  */
-export function createProfileUpdater({
+export function createProfileWriteQueue({
   read,
-  write,
 }: {
   read: (id: string) => Promise<Profile>;
-  write: (id: string, body: PutProfileBody) => Promise<unknown>;
-}) {
+}): ProfileWriteQueue {
   const pending = new Map<string, Promise<void>>();
   const ownRevisions = new Map<string, number>();
-
-  return (profile: Profile, changes: ProfileUpdate): Promise<void> => {
-    const { id, revision } = profile;
-    // Capture the submitted draft, including explicit nulls, before it is queued.
-    const patch = typeof changes === "function" ? changes : structuredClone(changes);
+  return ({ id, revision }, write) => {
     const operation = (pending.get(id) ?? Promise.resolve()).then(async () => {
       const current = await read(id);
       let expected = revision;
@@ -37,20 +35,33 @@ export function createProfileUpdater({
           "Profile changed in another window. Reload the profile before saving again.",
         );
       }
-      await write(
-        id,
-        buildPutProfileBody(current, typeof patch === "function" ? patch(current) : patch),
-      );
+      await write(current);
       ownRevisions.set(`${id}:${current.revision}`, current.revision + 1);
-      // Bound history; very old drafts require a reload.
       if (ownRevisions.size > 128) ownRevisions.delete(ownRevisions.keys().next().value!);
     });
-    // A rejected edit must not prevent a later edit or an explicit retry.
     const tail = operation.catch(() => {});
     pending.set(id, tail);
     void tail.then(() => {
       if (pending.get(id) === tail) pending.delete(id);
     });
     return operation;
+  };
+}
+
+export function createProfileUpdater({
+  read,
+  write,
+  queue = createProfileWriteQueue({ read }),
+}: {
+  read: (id: string) => Promise<Profile>;
+  write: (id: string, body: PutProfileBody) => Promise<unknown>;
+  queue?: ProfileWriteQueue;
+}) {
+  return (profile: Profile, changes: ProfileUpdate): Promise<void> => {
+    const { id } = profile;
+    const patch = typeof changes === "function" ? changes : structuredClone(changes);
+    return queue(profile, (current) =>
+      write(id, buildPutProfileBody(current, typeof patch === "function" ? patch(current) : patch)),
+    );
   };
 }

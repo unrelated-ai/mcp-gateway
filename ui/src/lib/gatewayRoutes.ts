@@ -28,6 +28,7 @@ export const tenantRoutes = {
   API_KEYS: "/tenant/v1/api-keys",
   API_KEY: (api_key_id: string) => `/tenant/v1/api-keys/${segment(api_key_id)}`,
   AUDIT_SETTINGS: "/tenant/v1/audit/settings",
+  PROFILE_AUDIT: (id: string) => `/tenant/v1/profiles/${segment(id)}/audit/settings`,
   TRANSPORT_LIMITS: "/tenant/v1/transport/limits",
   AUDIT_EVENTS: "/tenant/v1/audit/events",
   AUDIT_BY_TOOL: "/tenant/v1/audit/analytics/tool-calls/by-tool",

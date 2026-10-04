@@ -264,48 +264,73 @@ where id = $1
 
     pub(super) async fn admin_get_profile_audit_settings(
         &self,
+        tenant_id: &str,
         profile_id: &str,
-    ) -> anyhow::Result<Option<Value>> {
-        let profile_id = Uuid::parse_str(profile_id)
-            .map_err(|_| anyhow::anyhow!("invalid profile id (expected UUID)"))?;
-
+    ) -> anyhow::Result<Option<ProfileAuditSettingsResponse>> {
+        let profile_id = Uuid::parse_str(profile_id)?;
         let row = sqlx::query(
             r"
-select audit_settings
-from profiles
-where id = $1
+select p.audit_settings, p.revision, t.audit_enabled, t.audit_default_level, t.audit_retention_days
+from profiles p
+join tenants t on t.id = p.tenant_id
+where p.id = $1 and p.tenant_id = $2
 ",
         )
         .bind(profile_id)
+        .bind(tenant_id)
         .fetch_optional(&self.pool)
         .await?;
-
-        Ok(row.map(|r| r.try_get("audit_settings")).transpose()?)
+        let Some(row) = row else { return Ok(None) };
+        let parsed = serde_json::from_value::<ProfileAuditSettings>(row.try_get("audit_settings")?);
+        let has_unrecognized_settings = parsed.is_err();
+        let audit_settings = parsed.unwrap_or_default();
+        let tenant_settings = unrelated_gateway_api::audit::TenantAuditDefaults {
+            enabled: row.try_get("audit_enabled")?,
+            default_level: row
+                .try_get::<String, _>("audit_default_level")?
+                .parse()
+                .unwrap_or_default(),
+            retention_days: row.try_get("audit_retention_days")?,
+        };
+        Ok(Some(ProfileAuditSettingsResponse {
+            audit_settings,
+            revision: row.try_get("revision")?,
+            effective_level: audit_settings
+                .effective_level(tenant_settings.enabled, tenant_settings.default_level),
+            tenant_settings,
+            has_unrecognized_settings,
+        }))
     }
 
     pub(super) async fn admin_put_profile_audit_settings(
         &self,
+        tenant_id: &str,
         profile_id: &str,
-        audit_settings: Value,
+        audit_settings: ProfileAuditSettings,
+        expected_revision: Option<i64>,
     ) -> anyhow::Result<()> {
-        let profile_id = Uuid::parse_str(profile_id)
-            .map_err(|_| anyhow::anyhow!("invalid profile id (expected UUID)"))?;
-
+        let profile_id = Uuid::parse_str(profile_id)?;
         let res = sqlx::query(
             r"
 update profiles
-set audit_settings = $2
-where id = $1
+set audit_settings = $3, updated_at = now()
+where id = $1 and tenant_id = $2 and ($4::bigint is null or revision = $4)
 ",
         )
         .bind(profile_id)
-        .bind(audit_settings)
+        .bind(tenant_id)
+        .bind(serde_json::to_value(audit_settings)?)
+        .bind(expected_revision)
         .execute(&self.pool)
         .await?;
-
         if res.rows_affected() == 0 {
-            anyhow::bail!("profile not found");
+            return Err(crate::store::ProfileRevisionConflict.into());
         }
+        self.emit_invalidation_events_best_effort(vec![
+            pg_invalidation::InvalidationEvent::Profile {
+                profile_id: profile_id.to_string(),
+            },
+        ]);
         Ok(())
     }
 }

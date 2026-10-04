@@ -14,7 +14,9 @@ axum = ["dep:axum"]
 http.workspace = true
 percent-encoding.workspace = true
 thiserror.workspace = true
+serde.workspace = true
 axum = { workspace = true, optional = true }
 
 [dev-dependencies]
+serde_json.workspace = true
 url.workspace = true

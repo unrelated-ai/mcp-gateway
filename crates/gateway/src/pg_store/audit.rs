@@ -205,8 +205,10 @@ where tenant_id =
                 .push("::double precision)");
         }
 
-        qb.push(" group by tool_ref order by total desc limit ")
-            .push_bind(filter.limit);
+        qb.push(" group by tool_ref order by total desc, tool_ref asc limit ")
+            .push_bind(filter.limit)
+            .push(" offset ")
+            .push_bind(filter.offset);
 
         let rows = qb.build().fetch_all(&self.pool).await?;
         let mut out = Vec::with_capacity(rows.len());

@@ -1,3 +1,4 @@
+use unrelated_gateway_api::audit::{ProfileAuditSettings, ProfileAuditSettingsResponse};
 mod audit;
 mod deployments;
 mod identity;
@@ -705,17 +706,29 @@ impl AdminStore for PostgresStore {
             .await
     }
 
-    async fn get_profile_audit_settings(&self, profile_id: &str) -> anyhow::Result<Option<Value>> {
-        self.admin_get_profile_audit_settings(profile_id).await
+    async fn get_profile_audit_settings(
+        &self,
+        tenant_id: &str,
+        profile_id: &str,
+    ) -> anyhow::Result<Option<ProfileAuditSettingsResponse>> {
+        self.admin_get_profile_audit_settings(tenant_id, profile_id)
+            .await
     }
 
     async fn put_profile_audit_settings(
         &self,
+        tenant_id: &str,
         profile_id: &str,
-        audit_settings: Value,
+        audit_settings: ProfileAuditSettings,
+        expected_revision: Option<i64>,
     ) -> anyhow::Result<()> {
-        self.admin_put_profile_audit_settings(profile_id, audit_settings)
-            .await
+        self.admin_put_profile_audit_settings(
+            tenant_id,
+            profile_id,
+            audit_settings,
+            expected_revision,
+        )
+        .await
     }
 
     async fn list_audit_events(

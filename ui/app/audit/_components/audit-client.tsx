@@ -2,9 +2,10 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   Badge,
+  Button,
   CopyButton,
   Drawer,
   Select,
@@ -28,6 +29,9 @@ import type {
   ToolCallStatsByApiKey,
   ToolCallStatsByTool,
 } from "@/src/lib/types";
+
+const PAGE_SIZE = 100;
+type TimeRange = "1h" | "24h" | "7d" | "30d" | "all";
 
 type Tab = "events" | "analytics";
 
@@ -144,15 +148,15 @@ export function AuditClient({ initialProfileId }: { initialProfileId?: string })
   const [tab, setTab] = useState<Tab>("events");
   const [profileId, setProfileId] = useState<string>(initialProfileId ?? "all");
   const [outcome, setOutcome] = useState<"all" | "ok" | "error">("all");
-  const [range, setRange] = useState<"1h" | "24h" | "7d">("24h");
+  const [range, setRange] = useState<TimeRange>("24h");
   const [selectedEvent, setSelectedEvent] = useState<AuditEventRow | null>(null);
 
-  const fromUnixSecs = useMemo(() => {
-    const now = nowUnixSecs();
-    if (range === "1h") return now - 60 * 60;
-    if (range === "7d") return now - 7 * 24 * 60 * 60;
-    return now - 24 * 60 * 60;
-  }, [range]);
+  const [toUnixSecs, setToUnixSecs] = useState(nowUnixSecs);
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const fromUnixSecs =
+    range === "all"
+      ? undefined
+      : toUnixSecs - { "1h": 3600, "24h": 86400, "7d": 604800, "30d": 2592000 }[range];
 
   const profilesQuery = useQuery({
     queryKey: ["auditProfiles"],
@@ -165,43 +169,33 @@ export function AuditClient({ initialProfileId }: { initialProfileId?: string })
   const effectiveProfileId = profileId === "all" ? undefined : profileId;
   const okFilter = outcome === "all" ? undefined : outcome === "ok";
 
-  const eventsQuery = useQuery({
-    queryKey: ["auditEvents", { fromUnixSecs, profileId: effectiveProfileId, ok: okFilter }],
-    queryFn: async () => {
-      const res = await listAuditEvents({
-        fromUnixSecs,
-        profileId: effectiveProfileId,
-        ok: okFilter,
-        limit: 200,
-      });
-      return res.events;
-    },
+  const filters = { fromUnixSecs, toUnixSecs, profileId: effectiveProfileId };
+  const eventsQuery = useInfiniteQuery({
+    queryKey: ["auditEvents", { ...filters, ok: okFilter }, refreshVersion],
+    initialPageParam: undefined as number | undefined,
+    queryFn: async ({ pageParam }) =>
+      (await listAuditEvents({ ...filters, ok: okFilter, beforeId: pageParam, limit: PAGE_SIZE }))
+        .events,
+    getNextPageParam: (lastPage) =>
+      lastPage.length === PAGE_SIZE ? lastPage.at(-1)?.id : undefined,
     enabled: tab === "events",
   });
-
-  const statsByToolQuery = useQuery({
-    queryKey: ["auditStatsByTool", { fromUnixSecs, profileId: effectiveProfileId }],
-    queryFn: async () => {
-      const res = await toolCallStatsByTool({
-        fromUnixSecs,
-        profileId: effectiveProfileId,
-        limit: 100,
-      });
-      return res.items;
-    },
+  const statsByToolQuery = useInfiniteQuery({
+    queryKey: ["auditStatsByTool", filters, refreshVersion],
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) =>
+      (await toolCallStatsByTool({ ...filters, offset: pageParam, limit: PAGE_SIZE })).items,
+    getNextPageParam: (lastPage, pages) =>
+      lastPage.length === PAGE_SIZE ? pages.length * PAGE_SIZE : undefined,
     enabled: tab === "analytics",
   });
-
-  const statsByApiKeyQuery = useQuery({
-    queryKey: ["auditStatsByApiKey", { fromUnixSecs, profileId: effectiveProfileId }],
-    queryFn: async () => {
-      const res = await toolCallStatsByApiKey({
-        fromUnixSecs,
-        profileId: effectiveProfileId,
-        limit: 100,
-      });
-      return res.items;
-    },
+  const statsByApiKeyQuery = useInfiniteQuery({
+    queryKey: ["auditStatsByApiKey", filters, refreshVersion],
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) =>
+      (await toolCallStatsByApiKey({ ...filters, offset: pageParam, limit: PAGE_SIZE })).items,
+    getNextPageParam: (lastPage, pages) =>
+      lastPage.length === PAGE_SIZE ? pages.length * PAGE_SIZE : undefined,
     enabled: tab === "analytics",
   });
 
@@ -216,11 +210,16 @@ export function AuditClient({ initialProfileId }: { initialProfileId?: string })
             <Select
               aria-label="Time range"
               value={range}
-              onChange={(e) => setRange(e.target.value as "1h" | "24h" | "7d")}
+              onChange={(e) => {
+                setRange(e.target.value as TimeRange);
+                setToUnixSecs(nowUnixSecs());
+              }}
             >
               <option value="1h">Last 1h</option>
               <option value="24h">Last 24h</option>
               <option value="7d">Last 7d</option>
+              <option value="30d">Last 30d</option>
+              <option value="all">All retained events</option>
             </Select>
 
             <Select
@@ -236,30 +235,59 @@ export function AuditClient({ initialProfileId }: { initialProfileId?: string })
               ))}
             </Select>
 
-            <Select
-              aria-label="Outcome"
-              value={outcome}
-              onChange={(e) => setOutcome(e.target.value as "all" | "ok" | "error")}
+            {tab === "events" && (
+              <Select
+                aria-label="Outcome"
+                value={outcome}
+                onChange={(e) => setOutcome(e.target.value as "all" | "ok" | "error")}
+              >
+                <option value="all">All outcomes</option>
+                <option value="ok">OK only</option>
+                <option value="error">Errors only</option>
+              </Select>
+            )}
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setToUnixSecs(nowUnixSecs());
+                setRefreshVersion((value) => value + 1);
+              }}
             >
-              <option value="all">All outcomes</option>
-              <option value="ok">OK only</option>
-              <option value="error">Errors only</option>
-            </Select>
+              Refresh audit
+            </Button>
           </div>
         </div>
 
+        {profilesQuery.isError && (
+          <div role="alert" className="text-sm text-danger">
+            Profiles could not be loaded.{" "}
+            <Button size="sm" onClick={() => void profilesQuery.refetch()}>
+              Retry profiles
+            </Button>
+          </div>
+        )}
+        <p className="text-xs text-faint">
+          Results use a fixed time window. Refresh audit to include newer events.
+        </p>
         {tab === "events" ? (
-          <EventsTable
-            profiles={profilesQuery.data ?? []}
-            events={eventsQuery.data ?? []}
-            loading={eventsQuery.isPending}
-            onSelect={(e) => setSelectedEvent(e)}
-          />
+          <>
+            <EventsTable
+              profiles={profilesQuery.data ?? []}
+              events={eventsQuery.data?.pages.flat() ?? []}
+              loading={eventsQuery.isPending}
+              failed={eventsQuery.isError && !eventsQuery.data}
+              onSelect={(e) => setSelectedEvent(e)}
+            />
+            <PageFeedback query={eventsQuery} label="events" />
+          </>
         ) : (
           <AnalyticsView
-            byTool={statsByToolQuery.data ?? []}
-            byApiKey={statsByApiKeyQuery.data ?? []}
-            loading={statsByToolQuery.isPending || statsByApiKeyQuery.isPending}
+            byTool={statsByToolQuery.data?.pages.flat() ?? []}
+            byApiKey={statsByApiKeyQuery.data?.pages.flat() ?? []}
+            toolReady={statsByToolQuery.isSuccess || !!statsByToolQuery.data}
+            keyReady={statsByApiKeyQuery.isSuccess || !!statsByApiKeyQuery.data}
+            toolFooter={<PageFeedback query={statsByToolQuery} label="tools" />}
+            keyFooter={<PageFeedback query={statsByApiKeyQuery} label="API keys" />}
           />
         )}
 
@@ -277,11 +305,13 @@ function EventsTable({
   profiles,
   events,
   loading,
+  failed,
   onSelect,
 }: {
   profiles: Profile[];
   events: AuditEventRow[];
   loading: boolean;
+  failed: boolean;
   onSelect: (ev: AuditEventRow) => void;
 }) {
   const profileNameById = useMemo(() => {
@@ -311,7 +341,11 @@ function EventsTable({
           {events.length === 0 ? (
             <tr>
               <TD className="py-6 text-muted" colSpan={6}>
-                No events found for current filters.
+                {loading
+                  ? "Loading events…"
+                  : failed
+                    ? "Events could not be loaded."
+                    : "No events found for current filters."}
               </TD>
             </tr>
           ) : (
@@ -489,18 +523,23 @@ function DetailBlock({
 function AnalyticsView({
   byTool,
   byApiKey,
-  loading,
+  toolReady,
+  keyReady,
+  toolFooter,
+  keyFooter,
 }: {
   byTool: ToolCallStatsByTool[];
   byApiKey: ToolCallStatsByApiKey[];
-  loading: boolean;
+  toolReady: boolean;
+  keyReady: boolean;
+  toolFooter: ReactNode;
+  keyFooter: ReactNode;
 }) {
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
       <div className="overflow-hidden rounded-lg border border-edge bg-surface">
         <div className="flex items-center justify-between border-b border-edge px-5 py-3.5">
           <div className="eyebrow">Tool calls by tool</div>
-          {loading ? <div className="text-xs text-faint">Loading…</div> : null}
         </div>
         <Table>
           <THead>
@@ -516,7 +555,7 @@ function AnalyticsView({
             {byTool.length === 0 ? (
               <tr>
                 <TD className="py-6 text-muted" colSpan={5}>
-                  No data.
+                  {toolReady ? "No data." : "Tool analytics are not yet available."}
                 </TD>
               </tr>
             ) : (
@@ -532,12 +571,12 @@ function AnalyticsView({
             )}
           </TBody>
         </Table>
+        {toolFooter}
       </div>
 
       <div className="overflow-hidden rounded-lg border border-edge bg-surface">
         <div className="flex items-center justify-between border-b border-edge px-5 py-3.5">
           <div className="eyebrow">Tool calls by API key</div>
-          {loading ? <div className="text-xs text-faint">Loading…</div> : null}
         </div>
         <Table>
           <THead>
@@ -553,7 +592,7 @@ function AnalyticsView({
             {byApiKey.length === 0 ? (
               <tr>
                 <TD className="py-6 text-muted" colSpan={5}>
-                  No data.
+                  {keyReady ? "No data." : "API key analytics are not yet available."}
                 </TD>
               </tr>
             ) : (
@@ -569,7 +608,59 @@ function AnalyticsView({
             )}
           </TBody>
         </Table>
+        {keyFooter}
       </div>
+    </div>
+  );
+}
+
+function PageFeedback({
+  query,
+  label,
+}: {
+  label: string;
+  query: {
+    isPending: boolean;
+    isFetching: boolean;
+    isError: boolean;
+    isFetchNextPageError: boolean;
+    error: Error | null;
+    hasNextPage: boolean;
+    fetchNextPage: () => Promise<unknown>;
+    refetch: () => Promise<unknown>;
+  };
+}) {
+  return (
+    <div className="p-4 space-y-2">
+      {query.isError && (
+        <div role="alert" className="text-sm text-danger">
+          Could not load {label}: {query.error?.message}{" "}
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={query.isFetching}
+            onClick={() =>
+              void (query.isFetchNextPageError ? query.fetchNextPage() : query.refetch())
+            }
+          >
+            Retry {label}
+          </Button>
+        </div>
+      )}
+      {query.isPending && (
+        <p role="status" className="text-sm text-muted">
+          Loading {label}…
+        </p>
+      )}
+      {query.hasNextPage && !query.isError && (
+        <Button
+          variant="secondary"
+          loading={query.isFetching}
+          onClick={() => void query.fetchNextPage()}
+        >
+          Load more {label}
+        </Button>
+      )}
     </div>
   );
 }

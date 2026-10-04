@@ -128,12 +128,12 @@ struct PayloadLimitExceededAudit<'a> {
 }
 
 async fn record_payload_limit_exceeded(audit: &dyn AuditSink, a: PayloadLimitExceededAudit<'_>) {
+    let profile_uuid = Uuid::parse_str(a.profile_id).ok();
     let include_sample = matches!(
-        audit.tenant_default_level(a.tenant_id).await,
+        audit.profile_level(a.tenant_id, profile_uuid).await,
         crate::audit::AuditLevel::Payload
     );
 
-    let profile_uuid = Uuid::parse_str(a.profile_id).ok();
     let mut meta = serde_json::Map::new();
     meta.insert("direction".to_string(), serde_json::json!(a.direction));
     meta.insert("metric".to_string(), serde_json::json!(a.metric));
