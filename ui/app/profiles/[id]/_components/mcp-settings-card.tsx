@@ -82,7 +82,7 @@ export function McpSettingsCard({ profile }: { profile: Profile | null }) {
 
   const buildNext = useCallback(
     (nextEnabledCaps: Set<McpCapability>): McpProfileSettings => {
-      // Keep other (currently-hidden) MCP settings intact for now.
+      // Each settings panel owns only the fields it edits.
       return normalizeMcpSettings({
         ...initial,
         modernProtocol,

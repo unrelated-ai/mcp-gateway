@@ -671,6 +671,12 @@ export default function ProfileDetailPage() {
 
             {authDraft.mode === "oauth" ? (
               <div className="space-y-2">
+                <Callout tone="info" title="Grant access before connecting">
+                  A Gateway operator must authorize the login identity (issuer and subject) for this
+                  tenant or profile through the Admin API or CLI. Enabling OAuth and signing in do
+                  not grant access on their own. The access token must also include every required
+                  scope below.
+                </Callout>
                 <Input
                   label="Required scopes"
                   value={authDraft.requiredScopes.join(" ")}

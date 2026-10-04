@@ -81,6 +81,10 @@ Shape:
 - `mcp.notifications.allow`: list of notification method strings (non-empty ⇒ allowlist)
 - `mcp.notifications.deny`: list of notification method strings (denylist)
 
+A nonempty allowlist takes precedence over the denylist. With an empty allowlist, all
+methods except denied ones are permitted. The Web UI exposes both lists under
+**Profile → MCP settings → Advanced MCP settings**.
+
 Examples:
 
 - `notifications/message`

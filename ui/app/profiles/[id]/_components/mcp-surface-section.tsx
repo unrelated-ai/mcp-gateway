@@ -6,6 +6,7 @@ import { Button, Callout, SectionCard } from "@/components/ui";
 import { CatalogSection } from "@/components/sources/catalog-section";
 import { CatalogTransformEditor } from "./catalog-transform-editor";
 import { McpSettingsCard } from "./mcp-settings-card";
+import { McpAdvancedCard } from "./mcp-advanced-card";
 
 export function McpSurfaceSection({
   profile,
@@ -23,6 +24,7 @@ export function McpSurfaceSection({
   return (
     <div className="space-y-6">
       <McpSettingsCard key={profile ? profile.id : "loading"} profile={profile} />
+      {profile && <McpAdvancedCard key={profile.id} profile={profile} />}
 
       <SectionCard title="Tasks">
         <p className="text-sm text-muted">

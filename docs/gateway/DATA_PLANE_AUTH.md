@@ -180,6 +180,10 @@ Semantics:
 - **Rate limit**: fixed window per minute per `{api_key_id, profile_id}`.
 - **Quota**: a per `{api_key_id, profile_id}` remaining counter, decremented on _attempted_ `tools/call`.
   - If quotas are enabled after a key already exists, the key’s per-profile quota is initialized on its first `tools/call`.
+  - Changing the initial quota does not refill existing balances. Disabling and re-enabling quota enforcement preserves the balance.
+  - Quota is consumed before the rate-limit check, so rate-limited attempts also consume quota.
+
+The Web UI exposes these settings under **Profile → Security → Tool-call limits**.
 
 ### Responses
 

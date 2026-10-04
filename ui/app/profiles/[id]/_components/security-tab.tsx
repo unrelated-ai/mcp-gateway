@@ -20,6 +20,7 @@ import type {
 } from "@/src/lib/types";
 import { useAutosave } from "@/src/lib/useAutosave";
 import { SaveStatus } from "@/components/ui/save-status";
+import { ToolCallLimitsCard } from "./tool-call-limits-card";
 import { ProfileAuditCard } from "./profile-audit-card";
 import {
   INTERACTIVE_REQUEST_METHODS,
@@ -212,6 +213,7 @@ export function SecurityTab({ profile }: { profile: Profile | null }) {
 
   return (
     <div className="space-y-6">
+      {profile && <ToolCallLimitsCard key={profile.id} profile={profile} />}
       {profile && <ProfileAuditCard key={profile.id} profile={profile} />}
       <SectionCard
         title="Security"
