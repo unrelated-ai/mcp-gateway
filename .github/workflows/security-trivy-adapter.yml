@@ -16,3 +16,4 @@ jobs:
       image_ref: local/unrelated-mcp-adapter:pr
       dockerfile: Dockerfile
       context: .
+      adapter_http_smoke: true

@@ -31,9 +31,10 @@ Published images:
 - `ghcr.io/unrelated-ai/mcp-gateway-migrator`
 - `ghcr.io/unrelated-ai/mcp-gateway-ui`
 
-The Rust runtime images use statically linked Rust binaries: the Adapter image is `scratch`, while
-the Gateway and operator images add Alpine CA certificates. The migrator image contains `dbmate`,
-database clients, and migrations. The Web UI image contains the Next.js standalone Node runtime.
+The Rust runtime images use statically linked Rust binaries. The Adapter image uses `scratch`
+with a CA certificate bundle; the Gateway and operator images use Alpine with CA certificates.
+The migrator image contains `dbmate`, database clients, and migrations. The Web UI
+image contains the Next.js standalone Node runtime.
 
 ## Release guards
 
