@@ -62,8 +62,10 @@ Common uses include:
 
 This branch includes OAuth resource-server support, the `unrelated` client CLI with
 compact tool discovery, and stateful/sessionless upstream interoperability. The
-published quickstart below remains on the current release. See the
-[v1 upgrade guide](docs/gateway/V1_UPGRADE.md) before deploying a v1 build.
+published quickstart below remains on the current release.
+
+> **Upgrading from 0.x:** The [v1 migration guide](docs/gateway/V1_UPGRADE.md)
+> covers configuration changes, database migration, and rollback for existing installations.
 
 ## Try it locally
 
