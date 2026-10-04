@@ -20,6 +20,11 @@ on:
         required: false
         default: ""
         type: string
+      adapter_http_smoke:
+        description: "Verify that the Adapter image starts with an HTTP source"
+        required: false
+        default: false
+        type: boolean
       severity:
         description: "Trivy severity filter"
         required: false
@@ -62,6 +67,41 @@ jobs:
       - name: Build image (selected target)
         if: ${{ inputs.docker_target != '' }}
         run: docker build -f "${{ inputs.dockerfile }}" --target "${{ inputs.docker_target }}" -t "${{ inputs.image_ref }}" "${{ inputs.context }}"
+
+      - name: Start Adapter with an HTTP source
+        if: inputs.adapter_http_smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "${RUNNER_TEMP}/adapter-http.yaml" <<'EOF'
+          servers:
+            smoke:
+              type: http
+              baseUrl: http://127.0.0.1:1
+              tools:
+                ping:
+                  method: GET
+                  path: /ping
+                  response:
+                    mode: json
+          EOF
+          container="adapter-http-smoke-${GITHUB_RUN_ID}-$$"
+          trap 'docker logs "$container" || true; docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          docker run -d --name "$container" -p 127.0.0.1::8080 \
+            -e UNRELATED_CONFIG=/config/http.yaml \
+            -v "${RUNNER_TEMP}/adapter-http.yaml:/config/http.yaml:ro,z" \
+            "${{ inputs.image_ref }}"
+          address="$(docker port "$container" 8080/tcp)"
+          for attempt in {1..20}; do
+            if curl -fsS --max-time 2 "http://${address}/health/all" >/dev/null 2>&1; then
+              exit 0
+            fi
+            if [[ "$(docker inspect --format '{{.State.Running}}' "$container")" != true ]]; then
+              exit 1
+            fi
+            sleep 1
+          done
+          exit 1
 
       - name: Trivy scan
         shell: bash

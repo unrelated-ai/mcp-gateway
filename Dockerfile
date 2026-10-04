@@ -218,6 +218,7 @@ FROM scratch AS runtime
 ARG TARGET=x86_64-unknown-linux-musl
 
 WORKDIR /app
+COPY --from=runtime-base /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /config /config
 COPY --from=builder /app/target/${TARGET}/release/unrelated-mcp-adapter /app/unrelated-mcp-adapter
 

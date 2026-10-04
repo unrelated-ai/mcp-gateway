@@ -1,5 +1,15 @@
 # Changelog
 
+## Adapter 1.0.1
+
+- Included CA certificates in the minimal Adapter image. HTTP and OpenAPI sources
+  can now initialize their HTTP clients and verify HTTPS servers without mounting
+  a certificate bundle separately.
+- Added a packaged-image startup check for HTTP sources to catch missing runtime
+  prerequisites before release.
+- MCP clients now receive the Adapter's name and version instead of the SDK's
+  default implementation metadata.
+
 ## 1.0.0
 
 Gateway, Adapter, Web UI, Operator, migrator, both CLIs, and Helm packages now
