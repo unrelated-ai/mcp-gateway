@@ -7,6 +7,8 @@
   a certificate bundle separately.
 - Added a packaged-image startup check for HTTP sources to catch missing runtime
   prerequisites before release.
+- MCP clients now receive the Adapter's name and version instead of the SDK's
+  default implementation metadata.
 
 ## 1.0.0
 
