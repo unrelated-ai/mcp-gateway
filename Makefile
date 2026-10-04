@@ -505,8 +505,9 @@ helm-validate:
 	helm template unrelated-mcp-gateway-ui deploy/helm/unrelated-mcp-gateway-ui --set gateway.dataBase=http://localhost:27100 >/dev/null
 	helm template unrelated-mcp-gateway-stack deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml >/dev/null
 	helm template unrelated-mcp-gateway-stack deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token >/dev/null
-	helm upgrade --install unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway-stack --namespace mcp-gateway --create-namespace --dry-run --debug -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml >/dev/null
-	helm upgrade --install unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway-stack --namespace mcp-gateway --create-namespace --dry-run --debug -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token >/dev/null
+	# Render upgrade-only branches without contacting the current Kubernetes context.
+	helm template unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway-stack --namespace mcp-gateway --is-upgrade -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml >/dev/null
+	helm template unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway-stack --namespace mcp-gateway --is-upgrade -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token >/dev/null
 
 ## Validate Helm charts if helm exists (skip otherwise)
 helm-validate-optional:
