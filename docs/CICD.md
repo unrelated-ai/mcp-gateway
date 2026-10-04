@@ -73,6 +73,7 @@ On `gateway-v*` tags, the release workflow publishes:
   - `unrelated-gateway-admin-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz.sha256`
 - User-facing `unrelated` CLI archives and checksums for Linux and macOS, on
   x86-64 and ARM64. Linux archives use the GNU target; macOS archives use Darwin.
+  Each runner verifies native credential storage before uploading its archive.
 - All Helm charts, with their dependencies bundled, plus the quickstart Compose
   file and shared image defaults. `deployment-SHA256SUMS` covers these files.
 

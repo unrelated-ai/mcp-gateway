@@ -112,6 +112,39 @@ jobs:
           set -euo pipefail
           cargo build --release -p "${{ inputs.cargo_pkg }}" --bin "${{ inputs.binary_name }}" --target "${{ inputs.target }}"
 
+      - name: Smoke-test native binary
+        shell: bash
+        run: target/${{ inputs.target }}/release/${{ inputs.binary_name }} --help >/dev/null
+
+      - name: Install Linux credential-store services
+        if: runner.os == 'Linux' && inputs.cargo_pkg == 'unrelated-cli'
+        run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring
+
+      - name: Verify native CLI credential storage
+        if: inputs.cargo_pkg == 'unrelated-cli'
+        shell: bash
+        env:
+          RELEASE_CLI: ${{ github.workspace }}/target/${{ inputs.target }}/release/${{ inputs.binary_name }}
+        run: |
+          set -euo pipefail
+          unset UNRELATED_TOKEN
+          export XDG_CONFIG_HOME="${RUNNER_TEMP}/release-cli-config"
+          export XDG_CACHE_HOME="${RUNNER_TEMP}/release-cli-cache"
+          credential_smoke() {
+            set -euo pipefail
+            "${RELEASE_CLI}" context add release-smoke --url http://127.0.0.1:1/mcp --auth api-key
+            printf '%s\n' 'synthetic-release-smoke-key' | "${RELEASE_CLI}" --context release-smoke auth login
+            "${RELEASE_CLI}" --context release-smoke --json auth status | jq -e '.authenticated == true'
+            "${RELEASE_CLI}" --context release-smoke auth logout
+            "${RELEASE_CLI}" --context release-smoke --json auth status | jq -e '.authenticated == false'
+          }
+          export -f credential_smoke
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            dbus-run-session -- bash -c 'printf "%s\n" "release-smoke" | gnome-keyring-daemon --unlock; credential_smoke'
+          else
+            credential_smoke
+          fi
+
       - name: Package
         shell: bash
         run: |
