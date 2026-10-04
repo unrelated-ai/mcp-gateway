@@ -2,10 +2,10 @@ apiVersion: v2
 name: unrelated-mcp-postgres
 description: Optional bundled Postgres for MCP Gateway Helm deployments.
 type: application
-version: 0.2.0
+version: 1.0.0
 appVersion: "16"
 dependencies:
   - name: unrelated-mcp-images
-    version: 0.1.0
+    version: 1.0.0
     repository: file://../unrelated-mcp-images
     alias: images

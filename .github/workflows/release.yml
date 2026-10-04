@@ -122,6 +122,55 @@ jobs:
       runner: ${{ matrix.runner }}
       target: ${{ matrix.target }}
 
+  deployment_packages:
+    # Standalone Helm packages and quickstart files accompany the Gateway release.
+    if: startsWith(github.ref, 'refs/tags/gateway-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v5.0.1
+
+      - name: Validate and package deployment files
+        id: deployment_meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#gateway-v}"
+          if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "prerelease=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "prerelease=true" >> "${GITHUB_OUTPUT}"
+          fi
+          make helm-validate
+          mkdir -p dist
+          for chart in deploy/helm/*; do
+            chart_version="$(helm show chart "${chart}" | awk '/^version:/ {print $2}')"
+            if [[ "${chart_version}" != "${version}" ]]; then
+              echo "Release guard failed: ${chart} has version ${chart_version}; expected ${version}."
+              exit 1
+            fi
+            helm package "${chart}" --destination dist
+          done
+          cp docker-compose.quickstart.yml dist/mcp-gateway-compose.yml
+          cp deploy/images.env dist/mcp-gateway-images.env
+          (cd dist && sha256sum *.tgz *.yml *.env > deployment-SHA256SUMS)
+
+      - name: Upload deployment packages
+        uses: softprops/action-gh-release@v3.0.3
+        with:
+          tag_name: ${{ github.ref_name }}
+          prerelease: ${{ steps.deployment_meta.outputs.prerelease == 'true' }}
+          files: |
+            dist/*.tgz
+            dist/*.yml
+            dist/*.env
+            dist/deployment-SHA256SUMS
+
   mcp_adapter_binaries:
     # Adapter release assets: adapter-vX.Y.Z
     if: startsWith(github.ref, 'refs/tags/adapter-v')

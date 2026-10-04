@@ -38,7 +38,7 @@ builders so reserved characters remain within their path segment. The UI uses
 
 Shared Rust versions live in `[workspace.dependencies]`; member crates add only
 their required features. Dependabot groups weekly Cargo/npm/Go/Actions updates
-against `feat/version_one_zero`. Check the compatibility constraints in
+against `main`. Check the compatibility constraints in
 [version maintenance](docs/development/VERSIONS.md#compatibility-constraints)
 before changing dependency majors.
 

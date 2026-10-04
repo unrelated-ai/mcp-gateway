@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.0.0
+
+Gateway, Adapter, Web UI, Operator, migrator, both CLIs, and Helm packages now
+share the `1.0.0` release version.
+
+- Added OAuth resource-server support and the `unrelated` CLI for tool discovery,
+  authenticated calls, and compact MCP access.
+- Expanded MCP interoperability with native discovery, resource templates,
+  subscriptions, continuations, and task routing while retaining legacy clients.
+- Added resource and prompt policies, prompt aliases and argument defaults,
+  profile connection checks, and controls for quotas and notification filters.
+- Made profile audit policies effective, with tenant inheritance and improved
+  audit browsing and pagination.
+- Protected profile and source edits against concurrent changes, preserving
+  unsaved drafts and providing conflict recovery.
+- Improved managed deployment reconciliation and endpoint cleanup, and shared
+  infrastructure image defaults across Compose and Helm.
+- Updated RMCP to `3.5.0`, refreshed runtime dependencies, and retained outbound
+  DNS rebinding protections.
+
+Existing installations should follow the [v1 migration guide](docs/gateway/V1_UPGRADE.md)
+for database migrations, authentication changes, and rollback requirements.
+The PostgreSQL image remains on version 16; upgrading PostgreSQL is a separate step.
+
+Release tags: `gateway-v1.0.0`, `adapter-v1.0.0`, and `ui-v1.0.0`.
+
 ## 2026-09-15
 
 ### Outbound HTTP security (Gateway `0.13.4`)

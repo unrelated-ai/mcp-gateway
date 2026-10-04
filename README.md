@@ -58,11 +58,10 @@ Common uses include:
 - Put authentication, quotas, timeouts, retries, and audit logging in front of MCP tools.
 - Isolate teams or projects without deploying a separate gateway for each one.
 
-## Upcoming v1
+## Version 1.0
 
-This branch includes OAuth resource-server support, the `unrelated` client CLI with
-compact tool discovery, and stateful/sessionless upstream interoperability. The
-published quickstart below remains on the current release.
+Version 1.0 includes OAuth resource-server support, the `unrelated` client CLI with
+compact tool discovery, and stateful/sessionless upstream interoperability.
 
 > **Upgrading from 0.x:** The [v1 migration guide](docs/gateway/V1_UPGRADE.md)
 > covers configuration changes, database migration, and rollback for existing installations.
@@ -77,15 +76,15 @@ The quickest path uses published Docker images and does not require cloning this
 
 ```bash
 curl -fsSL -o mcp-gateway-compose.yml \
-  https://raw.githubusercontent.com/unrelated-ai/mcp-gateway/feat/version_one_zero/docker-compose.quickstart.yml
+  https://raw.githubusercontent.com/unrelated-ai/mcp-gateway/gateway-v1.0.0/docker-compose.quickstart.yml
 curl -fsSL -o mcp-gateway-images.env \
-  https://raw.githubusercontent.com/unrelated-ai/mcp-gateway/feat/version_one_zero/deploy/images.env
+  https://raw.githubusercontent.com/unrelated-ai/mcp-gateway/gateway-v1.0.0/deploy/images.env
 ```
 
 2. Start the Gateway and Web UI:
 
 ```bash
-GATEWAY_VERSION=0.13.4 UI_VERSION=0.9.2 \
+GATEWAY_VERSION=1.0.0 UI_VERSION=1.0.0 \
   docker compose --env-file mcp-gateway-images.env -f mcp-gateway-compose.yml up -d
 ```
 
