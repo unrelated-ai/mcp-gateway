@@ -75,7 +75,7 @@ export default function NewProfileWizardPage() {
         description: description ? description : undefined,
         enabled: true,
         allowPartialUpstreams: draft.allowPartialUpstreams,
-        dataPlaneAuth: { mode: "apiKeyEveryRequest", acceptXApiKey: false },
+        dataPlaneAuth: { mode: "apiKey", acceptXApiKey: false },
         upstreams: normalizeIdList(draft.upstreams),
         sources: normalizeIdList(draft.sources),
       });

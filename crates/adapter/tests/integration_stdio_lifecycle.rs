@@ -121,3 +121,71 @@ async fn stdio_lifecycle_per_call_spawns_new_process_for_each_call() -> anyhow::
 
     Ok(())
 }
+
+#[tokio::test]
+async fn templates_route_after_expansion_and_roots_changes_stay_in_their_session()
+-> anyhow::Result<()> {
+    let config = write_stdio_config("per_session")?;
+    let port = pick_unused_port()?;
+    let _adapter = KillOnDrop(spawn_adapter(config.path(), port)?);
+    let base_url = format!("http://127.0.0.1:{port}");
+    wait_http_ok(&format!("{base_url}/health"), Duration::from_secs(10)).await?;
+    let first = McpStreamableHttpSession::connect(&base_url).await?;
+    let second = McpStreamableHttpSession::connect(&base_url).await?;
+    whoami_instance_id(&first).await?;
+    whoami_instance_id(&second).await?;
+    let templates = first
+        .request(
+            2,
+            "resources/templates/list",
+            json!({}),
+            Duration::from_secs(5),
+        )
+        .await?;
+    let template = templates["result"]["resourceTemplates"][0]["uriTemplate"]
+        .as_str()
+        .context("resource template")?;
+    let expanded = template.replace("{id}", "hello");
+    let resource = first
+        .request(
+            3,
+            "resources/read",
+            json!({"uri":expanded}),
+            Duration::from_secs(5),
+        )
+        .await?;
+    assert_eq!(
+        resource["result"]["contents"][0]["text"],
+        "template resource"
+    );
+    first.notify("notifications/roots/list_changed").await?;
+    // Notification delivery is asynchronous; poll within a bounded deadline.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let response = first
+                .request(
+                    4,
+                    "tools/call",
+                    json!({"name":"whoami","arguments":{}}),
+                    Duration::from_secs(2),
+                )
+                .await?;
+            if tool_call_body_json(&response)?["rootsChanges"] == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+    let response = second
+        .request(
+            5,
+            "tools/call",
+            json!({"name":"whoami","arguments":{}}),
+            Duration::from_secs(5),
+        )
+        .await?;
+    assert_eq!(tool_call_body_json(&response)?["rootsChanges"], 0);
+    Ok(())
+}

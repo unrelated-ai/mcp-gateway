@@ -310,7 +310,7 @@ fn prompts_contract_hash(prompts: &[Prompt]) -> String {
     hex::encode(sha2::Sha256::digest(serialized.as_bytes()))
 }
 
-fn canonicalize_json(v: &Value) -> Value {
+pub(crate) fn canonicalize_json(v: &Value) -> Value {
     match v {
         Value::Object(map) => {
             let mut keys: Vec<_> = map.keys().cloned().collect();
@@ -333,7 +333,7 @@ mod tests {
     use super::{
         ContractEvent, ContractKind, ContractTracker, resources_contract_hash, tools_contract_hash,
     };
-    use rmcp::model::{Annotated, JsonObject, Prompt, PromptArgument, RawResource, Resource, Tool};
+    use rmcp::model::{JsonObject, Prompt, PromptArgument, Resource, Tool};
     use std::sync::Arc;
     use tokio::sync::broadcast::error::TryRecvError;
 
@@ -342,7 +342,7 @@ mod tests {
     }
 
     fn resource(uri: &str, name: &str) -> Resource {
-        Annotated::new(RawResource::new(uri.to_string(), name.to_string()), None)
+        Resource::new(uri, name)
     }
 
     #[test]

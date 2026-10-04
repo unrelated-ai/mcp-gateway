@@ -8,7 +8,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { CheckCircleIconBold, CheckIcon, ExclamationIcon, UnlockIcon } from "@/components/icons";
 import { Button, CopyBlock, Modal } from "@/components/ui";
 import {
-  decodeTenantTokenPayload,
+  validateTenantSession,
   establishTenantSession,
   type TenantTokenPayloadV1,
 } from "@/src/lib/tenant-session";
@@ -50,33 +50,24 @@ export function UnlockTenantCard() {
     defaultValues: { token: "" },
   });
 
-  const handleValidate = handleSubmit((values) => {
+  const handleValidate = handleSubmit(async (values) => {
     setIsValidating(true);
     setTokenInfo(null);
     clearErrors("token");
 
-    // v0 validation: local decode only.
-    setTimeout(() => {
-      try {
-        const payload = decodeTenantTokenPayload(values.token);
-        const now = Math.floor(Date.now() / 1000);
-        if (payload.exp_unix_secs <= now) {
-          throw new Error(
-            `Token expired (${new Date(payload.exp_unix_secs * 1000).toLocaleString()}). Issue a new token and try again.`,
-          );
-        }
-        const expires_at = new Date(payload.exp_unix_secs * 1000).toISOString();
-        setTokenInfo({ payload, expires_at });
-      } catch (e) {
-        setTokenInfo(null);
-        setError("token", {
-          type: "validate",
-          message: e instanceof Error ? e.message : "Invalid token",
-        });
-      } finally {
-        setIsValidating(false);
-      }
-    }, 250);
+    try {
+      const payload = await validateTenantSession(values.token);
+      const expires_at = new Date(payload.exp_unix_secs * 1000).toISOString();
+      setTokenInfo({ payload, expires_at });
+    } catch (e) {
+      setTokenInfo(null);
+      setError("token", {
+        type: "validate",
+        message: e instanceof Error ? e.message : "Invalid token",
+      });
+    } finally {
+      setIsValidating(false);
+    }
   });
 
   const handleUnlock = async () => {
@@ -92,6 +83,7 @@ export function UnlockTenantCard() {
           : null;
       router.replace(safeNextPath(next));
     } catch (e) {
+      setTokenInfo(null);
       setError("token", {
         type: "validate",
         message: e instanceof Error ? e.message : "Failed to unlock tenant session",
@@ -113,6 +105,7 @@ export function UnlockTenantCard() {
 
         <textarea
           aria-label="Tenant token"
+          disabled={isValidating || isUnlocking}
           {...register("token", {
             onChange: (event) => {
               setTokenDraft(event.target.value);
@@ -135,7 +128,7 @@ export function UnlockTenantCard() {
           <div className="mt-3 flex items-start gap-2 rounded-lg border border-danger/25 bg-danger/5 p-3 text-sm">
             <ExclamationIcon className="mt-0.5 size-5 shrink-0 text-danger" />
             <div className="min-w-0">
-              <div className="font-medium text-danger">Token invalid</div>
+              <div className="font-medium text-danger">Token validation failed</div>
               <div className="mt-0.5 whitespace-pre-wrap break-words text-xs text-muted">
                 {errors.token.message}
               </div>
@@ -146,7 +139,7 @@ export function UnlockTenantCard() {
         <Button
           variant="secondary"
           onClick={handleValidate}
-          disabled={!tokenDraft.trim()}
+          disabled={!tokenDraft.trim() || isUnlocking}
           loading={isValidating}
           className="mt-4 w-full"
           size="lg"
@@ -216,7 +209,7 @@ function ResetDbHelpModal({ open, onClose }: { open: boolean; onClose: () => voi
         <CopyBlock
           label="Docker Compose (equivalent)"
           language="bash"
-          value={`docker compose --profile manual run --rm gateway_db_reset\ndocker compose up -d --build`}
+          value={`docker compose --env-file deploy/images.env --profile manual run --rm gateway_db_reset\ndocker compose --env-file deploy/images.env up -d --build`}
         />
 
         <p className="text-xs text-faint">

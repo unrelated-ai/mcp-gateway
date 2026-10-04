@@ -5,6 +5,7 @@ export const qk = {
 
   profiles: () => ["profiles"] as const,
   profile: (id: string) => ["profiles", id] as const,
+  profileAuditSettings: (id: string) => ["profiles", id, "auditSettings"] as const,
   profileSurface: (id: string) => ["profiles", id, "surface"] as const,
 
   upstreams: () => ["upstreams"] as const,

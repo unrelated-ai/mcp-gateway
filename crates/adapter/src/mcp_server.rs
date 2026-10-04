@@ -3,19 +3,24 @@
 //! This module implements the MCP server using the official rmcp SDK,
 //! providing dynamic tool routing to our backends (stdio and `OpenAPI`).
 
+// SEP-2577 keeps logging wire-compatible during its deprecation window. The adapter continues
+// proxying it so existing MCP clients do not lose functionality during an SDK-only upgrade.
+#![allow(deprecated)]
+
 use crate::aggregator::Aggregator;
 use crate::contracts::ContractNotifier;
 use crate::supervisor::BackendManager;
 use axum::http::request::Parts;
 use parking_lot::RwLock;
+use rmcp::transport::common::http_header::HEADER_SESSION_ID;
 use rmcp::{
     ErrorData as McpError, ServerHandler,
     model::{
-        AnnotateAble, CallToolRequestParams, CallToolResult, CompleteRequestParams, CompleteResult,
-        Content, GetPromptRequestParams, GetPromptResult, Implementation, ListPromptsResult,
-        ListResourcesResult, ListToolsResult, PaginatedRequestParams, Prompt, ProtocolVersion,
-        RawResource, ReadResourceRequestParams, ReadResourceResult, Reference, Resource,
-        ServerCapabilities, ServerInfo, SetLevelRequestParams, SubscribeRequestParams, Tool,
+        CallToolRequestParams, CallToolResponse, CallToolResult, CompleteRequestParams,
+        CompleteResult, ContentBlock, GetPromptRequestParams, GetPromptResponse, Implementation,
+        ListPromptsResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams, Prompt,
+        ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse, Reference, Resource,
+        ServerCapabilities, ServerConfig, SetLevelRequestParams, SubscribeRequestParams, Tool,
         UnsubscribeRequestParams,
     },
     service::{RequestContext, RoleServer},
@@ -30,17 +35,17 @@ fn mcp_session_id_from_context(context: &RequestContext<RoleServer>) -> Option<&
     context
         .extensions
         .get::<Parts>()
-        .and_then(|parts| parts.headers.get("mcp-session-id"))
+        .and_then(|parts| parts.headers.get(HEADER_SESSION_ID))
         .and_then(|h| h.to_str().ok())
 }
 
-fn timeout_budget_from_meta(meta: &rmcp::model::Meta) -> Option<Duration> {
+fn timeout_budget_from_meta(meta: &rmcp::model::RequestMetaObject) -> Option<Duration> {
     let unrelated = meta.get("unrelated").and_then(Value::as_object)?;
     let timeout_ms = unrelated.get("timeoutMs").and_then(Value::as_u64)?;
     if timeout_ms == 0 {
         return None;
     }
-    let cap_ms = crate::timeouts::tool_call_timeout_cap_secs().saturating_mul(1000);
+    let cap_ms = crate::timeouts::tool_call_timeout_max_secs().saturating_mul(1000);
     let timeout_ms = timeout_ms.min(cap_ms);
     Some(Duration::from_millis(timeout_ms))
 }
@@ -52,7 +57,7 @@ mod tests {
 
     #[test]
     fn timeout_budget_from_meta_parses_and_clamps() {
-        let mut meta = rmcp::model::Meta::default();
+        let mut meta = rmcp::model::RequestMetaObject::default();
         assert!(timeout_budget_from_meta(&meta).is_none());
 
         meta.insert("unrelated".to_string(), json!({ "timeoutMs": 0 }));
@@ -64,7 +69,7 @@ mod tests {
             Some(Duration::from_millis(1234))
         );
 
-        let cap_ms = crate::timeouts::tool_call_timeout_cap_secs().saturating_mul(1000);
+        let cap_ms = crate::timeouts::tool_call_timeout_max_secs().saturating_mul(1000);
         meta.insert(
             "unrelated".to_string(),
             json!({ "timeoutMs": cap_ms + 10_000 }),
@@ -109,8 +114,22 @@ impl AdapterMcpServer {
     }
 }
 
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "Keep logging and catalog access deferred until handler futures are polled"
+)]
 impl ServerHandler for AdapterMcpServer {
-    fn get_info(&self) -> ServerInfo {
+    fn supported_protocol_versions(&self) -> std::borrow::Cow<'static, [ProtocolVersion]> {
+        // Per-session backends and notifications currently implement the legacy lifecycle.
+        std::borrow::Cow::Borrowed(&[
+            ProtocolVersion::V_2024_11_05,
+            ProtocolVersion::V_2025_03_26,
+            ProtocolVersion::V_2025_06_18,
+            ProtocolVersion::V_2025_11_25,
+        ])
+    }
+
+    fn get_info(&self) -> ServerConfig {
         let capabilities = ServerCapabilities::builder()
             .enable_logging()
             .enable_completions()
@@ -122,8 +141,8 @@ impl ServerHandler for AdapterMcpServer {
             .enable_prompts()
             .enable_prompts_list_changed()
             .build();
-        ServerInfo::new(capabilities)
-            .with_protocol_version(ProtocolVersion::V_2024_11_05)
+        ServerConfig::new(capabilities)
+            .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
             .with_server_info(Implementation::from_build_env())
             .with_instructions("MCP adapter that bridges stdio MCP servers and OpenAPI backends.")
     }
@@ -176,6 +195,12 @@ impl ServerHandler for AdapterMcpServer {
                     ));
                 };
                 (server, Reference::for_resource(original_uri))
+            }
+            _ => {
+                return Err(McpError::invalid_params(
+                    "Unsupported completion reference type",
+                    None,
+                ));
             }
         };
         request.r#ref = rewritten_ref;
@@ -372,7 +397,7 @@ impl ServerHandler for AdapterMcpServer {
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<CallToolResponse, McpError> {
         let session_id = mcp_session_id_from_context(&context);
         if let Some(id) = session_id {
             self.contracts.observe_peer(id, context.peer.clone());
@@ -435,7 +460,7 @@ impl ServerHandler for AdapterMcpServer {
                     elapsed = ?start.elapsed(),
                     "tools/call ok"
                 );
-                Ok(result)
+                Ok(result.into())
             }
             Err(e) => {
                 tracing::warn!(
@@ -448,9 +473,7 @@ impl ServerHandler for AdapterMcpServer {
                     elapsed = ?start.elapsed(),
                     "tools/call failed"
                 );
-                Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Error: {e}"
-                ))]))
+                Ok(CallToolResult::error(vec![ContentBlock::text(format!("Error: {e}"))]).into())
             }
         }
     }
@@ -460,7 +483,7 @@ impl ServerHandler for AdapterMcpServer {
         &self,
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, McpError> {
+    ) -> Result<ReadResourceResponse, McpError> {
         let session_id = mcp_session_id_from_context(&context);
         if let Some(id) = session_id {
             self.contracts.observe_peer(id, context.peer.clone());
@@ -524,10 +547,56 @@ impl ServerHandler for AdapterMcpServer {
             elapsed = ?start.elapsed(),
             "resources/read ok"
         );
-        Ok(result)
+        Ok(result.into())
     }
 
     /// List resources from all backends.
+    async fn on_roots_list_changed(&self, context: rmcp::service::NotificationContext<RoleServer>) {
+        let session_id = context
+            .extensions
+            .get::<Parts>()
+            .and_then(|parts| parts.headers.get(HEADER_SESSION_ID))
+            .and_then(|value| value.to_str().ok());
+        if let Some(id) = session_id {
+            self.contracts.observe_peer(id, context.peer.clone());
+        }
+        for backend in self.backend_manager.get_all_backends() {
+            if let Err(error) = backend.roots_list_changed(session_id).await {
+                tracing::warn!(backend = backend.name(), %error, "roots notification failed");
+            }
+        }
+    }
+
+    async fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ListResourceTemplatesResult, McpError> {
+        let session_id = mcp_session_id_from_context(&context);
+        if let Some(id) = session_id {
+            self.contracts.observe_peer(id, context.peer.clone());
+        }
+        let mut templates = Vec::new();
+        for backend in self.backend_manager.get_all_backends() {
+            let mut items = backend
+                .list_resource_templates(session_id)
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            for item in &mut items {
+                item.uri_template = unrelated_mcp_support::resource_template_uri(
+                    backend.name(),
+                    &item.uri_template,
+                );
+            }
+            templates.extend(items);
+        }
+        templates.sort_by(|a, b| a.uri_template.cmp(&b.uri_template));
+        Ok(rmcp::model::ListResourceTemplatesResult {
+            resource_templates: templates,
+            ..Default::default()
+        })
+    }
+
     async fn list_resources(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -543,11 +612,11 @@ impl ServerHandler for AdapterMcpServer {
         let resource_list: Vec<Resource> = resources
             .iter()
             .map(|(exposed_uri, mapping)| {
-                let mut raw = RawResource::new(exposed_uri.clone(), mapping.name.clone());
-                raw.description.clone_from(&mapping.description);
-                raw.mime_type.clone_from(&mapping.mime_type);
-                raw.size = mapping.size;
-                raw.no_annotation()
+                let mut resource = Resource::new(exposed_uri.clone(), mapping.name.clone());
+                resource.description.clone_from(&mapping.description);
+                resource.mime_type.clone_from(&mapping.mime_type);
+                resource.size = mapping.size;
+                resource
             })
             .collect();
 
@@ -570,7 +639,7 @@ impl ServerHandler for AdapterMcpServer {
         &self,
         request: GetPromptRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<GetPromptResult, McpError> {
+    ) -> Result<GetPromptResponse, McpError> {
         let session_id = mcp_session_id_from_context(&context);
         if let Some(id) = session_id {
             self.contracts.observe_peer(id, context.peer.clone());
@@ -635,7 +704,7 @@ impl ServerHandler for AdapterMcpServer {
             elapsed = ?start.elapsed(),
             "prompts/get ok"
         );
-        Ok(result)
+        Ok(result.into())
     }
 
     /// List prompts from all backends.

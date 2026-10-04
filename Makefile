@@ -25,7 +25,7 @@
         kind-local-deploy kind-local-refresh kind-local-reset \
         up down logs status \
         inspector \
-        ci ci-quick test-ci qa-release-gates \
+        ci ci-quick test-ci test-gateway-contracts test-v1-journey test-v1-upgrade test-ui-e2e bench-v1 qa-release-gates \
         helm-validate helm-validate-optional \
         crd-sync crd-sync-check \
         hooks-install bench help
@@ -117,10 +117,15 @@ test-integration-adapter:
 	cargo test -p unrelated-mcp-adapter --tests -- --nocapture --test-threads=1 && \
 	cargo test -p unrelated-mcp-adapter --tests -- --ignored --nocapture --test-threads=1
 
-## Run gateway integration tests only (requires Docker)
+## Run gateway integration tests (Docker; includes real Adapter and CLI binaries)
+# Historical-release and release-profile benchmarks have their own explicit targets.
 test-integration-gateway:
+	cargo build -p unrelated-mcp-adapter -p unrelated-cli --bins
 	cargo test -p unrelated-mcp-gateway --tests -- --nocapture --test-threads=1 && \
-	cargo test -p unrelated-mcp-gateway --tests -- --ignored --nocapture --test-threads=1
+	cargo test -p unrelated-mcp-gateway --tests -- --ignored --nocapture --test-threads=1 \
+	  --skip benchmark_upstream_scaling \
+	  --skip standalone_ui_fixture \
+	  --skip public_0131_database_upgrades_with_existing_profiles_keys_and_sessions
 
 ## Cross-milestone OSS release gates (gateway + operator + UI + compatibility)
 qa-release-gates:
@@ -129,7 +134,8 @@ qa-release-gates:
 	cargo test -p unrelated-mcp-gateway --test integration_mode1_config -- --nocapture --test-threads=1
 	cargo check -p unrelated-mcp-gateway-operator
 	cargo test -p unrelated-mcp-gateway-operator
-	cd ui && npm run lint && npm run test && npm run build
+	cd ui && npm run lint && npm run test
+	$(MAKE) test-ui-e2e
 	$(MAKE) helm-validate-optional
 
 # =============================================================================
@@ -353,6 +359,8 @@ kind-local-load-images: kind-local-load-managed-mcp-images
 ## Deploy Helm stack to kind with local images (dev profile)
 kind-local-deploy:
 	kubectl create namespace $(KIND_NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
+	helm dependency build deploy/helm/unrelated-mcp-postgres
+	helm dependency build deploy/helm/unrelated-mcp-gateway-managed-fixtures
 	helm dependency build deploy/helm/unrelated-mcp-gateway
 	helm dependency build deploy/helm/unrelated-mcp-gateway-stack
 	helm upgrade --install $(KIND_RELEASE_NAME) deploy/helm/unrelated-mcp-gateway-stack \
@@ -394,23 +402,23 @@ kind-local-reset:
 
 ## Start services with docker-compose
 up:
-	docker compose up -d --build
+	docker compose --env-file deploy/images.env up -d --build
 
 ## Reset the docker-compose Postgres DB (deletes all tenants/config; for onboarding testing)
 up-reset:
-	docker compose --profile manual run --rm gateway_db_reset
+	docker compose --env-file deploy/images.env --profile manual run --rm gateway_db_reset
 
 ## Stop services with docker-compose
 down:
-	docker compose down
+	docker compose --env-file deploy/images.env down
 
 ## View docker-compose logs
 logs:
-	docker compose logs -f
+	docker compose --env-file deploy/images.env logs -f
 
 ## Show docker-compose status
 status:
-	docker compose ps
+	docker compose --env-file deploy/images.env ps
 
 # =============================================================================
 # MCP Inspector
@@ -430,9 +438,43 @@ ci: fmt-check clippy crd-sync-check test-ci
 ## Fast CI for PRs (check + test-unit)
 ci-quick: check fmt-check test-unit
 
-## CI test command (mirrors .github/workflows/ci.yml)
+## Default CI tests (PostgreSQL contracts run separately via test-gateway-contracts)
 test-ci:
 	cargo test --workspace --all-targets
+
+## Gateway PostgreSQL and cross-replica contracts (requires Docker)
+test-gateway-contracts:
+	cargo test -p unrelated-mcp-gateway \
+	  --test integration_mode3_limits \
+	  --test integration_mode3_pg \
+	  --test integration_pg_fanout_notifications \
+	  --test integration_profile_audit \
+	  -- --ignored --nocapture --test-threads=1
+
+## Real CLI, compact proxy, Adapter and sessionless rmcp acceptance tests
+# Build sibling binaries explicitly: Cargo does not build other packages' binaries
+# just because their libraries are test dependencies.
+test-v1-journey:
+	cargo build -p unrelated-mcp-adapter -p unrelated-cli --bins
+	cargo test -p unrelated-mcp-gateway --test integration_v1_journey -- --ignored --nocapture --test-threads=1
+
+## Rehearse the public 0.13.1 migration (Docker + MCP_GATEWAY_0131_BIN)
+test-v1-upgrade:
+	cargo build -p unrelated-mcp-adapter -p unrelated-cli --bins
+	cargo test -p unrelated-mcp-gateway --test integration_v1_upgrade -- --ignored --nocapture
+
+## Standalone browser acceptance suite (Docker + installed Playwright Chromium)
+test-ui-e2e:
+	cargo build -p unrelated-mcp-adapter -p unrelated-cli --bins
+	cargo test -p unrelated-mcp-gateway --test integration_ui_fixture --no-run
+	cd ui && npm run build && npm run test:e2e
+
+## Mode 3 latency, PostgreSQL statement count and RSS benchmark (Linux + Docker)
+BENCH_OUTPUT ?= $(CURDIR)/output/benchmarks/v1.json
+BENCH_SAMPLES ?= 10
+bench-v1:
+	MCP_V1_BENCH_OUTPUT="$(BENCH_OUTPUT)" MCP_V1_BENCH_SAMPLES="$(BENCH_SAMPLES)" \
+	  cargo test --release -p unrelated-mcp-gateway --test benchmark_v1 -- --ignored --nocapture
 
 ## Sync canonical operator CRD into Helm chart copy
 crd-sync:
@@ -449,6 +491,8 @@ crd-sync-check:
 ## Validate Helm charts (deps + lint + render smoke)
 helm-validate:
 	@command -v helm >/dev/null 2>&1 || { echo "ERROR: helm is not installed"; exit 1; }
+	helm dependency build deploy/helm/unrelated-mcp-postgres
+	helm dependency build deploy/helm/unrelated-mcp-gateway-managed-fixtures
 	helm dependency build deploy/helm/unrelated-mcp-gateway
 	helm dependency build deploy/helm/unrelated-mcp-gateway-stack
 	helm lint deploy/helm/unrelated-mcp-postgres
@@ -461,8 +505,9 @@ helm-validate:
 	helm template unrelated-mcp-gateway-ui deploy/helm/unrelated-mcp-gateway-ui --set gateway.dataBase=http://localhost:27100 >/dev/null
 	helm template unrelated-mcp-gateway-stack deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml >/dev/null
 	helm template unrelated-mcp-gateway-stack deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token >/dev/null
-	helm upgrade --install unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway-stack --namespace mcp-gateway --create-namespace --dry-run --debug -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml >/dev/null
-	helm upgrade --install unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway-stack --namespace mcp-gateway --create-namespace --dry-run --debug -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token >/dev/null
+	# Render upgrade-only branches without contacting the current Kubernetes context.
+	helm template unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway-stack --namespace mcp-gateway --is-upgrade -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml >/dev/null
+	helm template unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway-stack --namespace mcp-gateway --is-upgrade -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token >/dev/null
 
 ## Validate Helm charts if helm exists (skip otherwise)
 helm-validate-optional:
@@ -509,6 +554,7 @@ help:
 	@echo "  test-cli             Run gateway CLI tests"
 	@echo "  test-integration     Run integration tests (requires Docker)"
 	@echo "  qa-release-gates     Run OSS release gate suite (gateway/operator/ui)"
+	@echo "  test-ui-e2e          Run standalone UI browser tests against disposable services"
 	@echo ""
 	@echo "Code Quality:"
 	@echo "  fmt            Format code"

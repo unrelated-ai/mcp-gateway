@@ -1,6 +1,6 @@
 [package]
 name = "unrelated-mcp-gateway"
-version = "0.13.4"
+version = "1.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -8,48 +8,54 @@ repository.workspace = true
 description = "MCP Gateway (beta): authn/z + tenancy + policy + transforms"
 
 [dependencies]
-tokio = { version = "1", features = ["full", "signal"] }
-tokio-util = "0.7"
-axum = { version = "0.8", features = ["macros"] }
-clap = { version = "4", features = ["derive", "env"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-serde = { version = "1", features = ["derive"] }
-serde_yaml = "0.9"
-serde_json = "1"
-anyhow = "1"
-async-trait = "0.1"
-futures = "0.3"
-rmcp = { version = "1.7.0", features = ["client", "transport-streamable-http-client-reqwest", "elicitation"] }
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
-jsonwebtoken = "10.3.0"
-base64 = "0.22"
-hmac = "0.13.0"
-sha2 = "0.11.0"
-subtle = "2.6.1"
-hex = "0.4"
-uuid = { version = "1", features = ["v4"] }
-sse-stream = "0.2"
-sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid"] }
-parking_lot = "0.12"
+unrelated-gateway-api = { path = "../gateway-api", features = ["axum"] }
+unrelated-mcp-support = { path = "../mcp-support" }
+tokio = { workspace = true, features = ["full", "signal"] }
+tokio-util = { workspace = true }
+axum = { workspace = true, features = ["macros"] }
+clap = { workspace = true, features = ["derive", "env"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+serde = { workspace = true, features = ["derive"] }
+serde-saphyr = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+async-stream = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest", "elicitation"] }
+reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
+jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
+base64 = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+subtle = { workspace = true }
+hex = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+# RMCP exposes these types publicly; keep its 0.2 ABI until RMCP migrates.
+sse-stream = { workspace = true }
+sqlx = { workspace = true, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "json"] }
+parking_lot = { workspace = true }
 unrelated-http-tools = { path = "../http-tools" }
 unrelated-openapi-tools = { path = "../openapi-tools" }
 unrelated-tool-transforms = { path = "../tool-transforms" }
 unrelated-env = { path = "../env" }
-rusty_paseto = "0.9.0"
-time = { version = "0.3", features = ["formatting"] }
-jsonschema = "0.46.5"
-strsim = "0.11.1"
-chacha20poly1305 = "0.10.1"
-getrandom = "0.4.2"
-zeroize = "1.8.2"
+rusty_paseto = { workspace = true }
+time = { workspace = true, features = ["formatting", "parsing"] }
+jsonschema = { workspace = true, default-features = true }
+strsim = { workspace = true }
+chacha20poly1305 = { workspace = true }
+getrandom = { workspace = true }
+zeroize = { workspace = true }
 
 [[bin]]
 name = "unrelated-mcp-gateway"
 path = "src/main.rs"
 
 [dev-dependencies]
-rsa = { version = "0.9.10", features = ["pem"] }
-tempfile = "3"
-testcontainers = "0.27.3"
+rsa = { workspace = true, features = ["pem"] }
+tempfile = { workspace = true }
+testcontainers = { workspace = true }
 unrelated-test-support = { path = "../test-support" }
+unrelated-cli = { path = "../unrelated-cli" }

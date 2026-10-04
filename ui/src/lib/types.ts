@@ -1,13 +1,9 @@
-export type DataPlaneAuthMode =
-  | "disabled"
-  | "apiKeyInitializeOnly"
-  | "apiKeyEveryRequest"
-  | "jwtEveryRequest";
+export type DataPlaneAuthMode = "disabled" | "apiKey" | "oauth";
 
-export type DataPlaneAuthSettings = {
-  mode: DataPlaneAuthMode;
-  acceptXApiKey: boolean;
-};
+export type DataPlaneAuthSettings =
+  | { mode: "disabled" }
+  | { mode: "apiKey"; acceptXApiKey: boolean }
+  | { mode: "oauth"; requiredScopes: string[] };
 
 export type DataPlaneLimitsSettings = {
   rateLimitEnabled: boolean;
@@ -107,6 +103,7 @@ export type McpSecuritySettings = {
 };
 
 export type McpProfileSettings = {
+  modernProtocol: boolean;
   capabilities: McpCapabilitiesPolicy;
   notifications: McpNotificationFilter;
   namespacing: McpNamespacing;
@@ -115,6 +112,7 @@ export type McpProfileSettings = {
 
 // NOTE: For v0 design work, we intentionally keep advanced fields loosely typed.
 export type Profile = {
+  revision: number;
   id: string;
   name: string;
   description?: string | null;
@@ -171,7 +169,17 @@ export type CreateApiKeyResponse = {
 export type TenantAuditSettings = {
   enabled: boolean;
   retentionDays: number;
-  defaultLevel: "off" | "summary" | "metadata" | "payload" | string;
+  defaultLevel: AuditLevel;
+};
+
+export type AuditLevel = "off" | "summary" | "metadata" | "payload";
+export type ProfileAuditSettings = { level?: AuditLevel | null };
+export type ProfileAuditSettingsResponse = {
+  revision: number;
+  auditSettings: ProfileAuditSettings;
+  tenantSettings: TenantAuditSettings;
+  effectiveLevel: AuditLevel;
+  hasUnrecognizedSettings: boolean;
 };
 
 export type TenantTransportLimitsSettings = TransportLimitsSettings;

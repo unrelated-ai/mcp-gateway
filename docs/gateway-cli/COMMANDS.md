@@ -85,7 +85,7 @@ These configure **OIDC principal bindings** (issuer + subject) that authorize JW
 - `--data-plane-auth-mode`: `disabled` | `api-key-initialize-only` | `api-key-every-request` | `jwt-every-request`
 - `--accept-x-api-key true|false`
 
-On `profiles put`, these settings are merged with the existing profile when provided (so you can update just one field).
+On `profiles put`, these settings are merged with the existing profile when provided (allowing updates to individual fields).
 
 ### Profile `dataPlaneLimits` settings (Mode 3)
 
@@ -138,7 +138,7 @@ Tool allowlisting is **optional**:
 
 ### Tool transforms
 
-You can attach a transform pipeline to a profile (stored as `profiles.transforms` in Mode 3).
+Profiles support transform pipelines (stored as `profiles.transforms` in Mode 3).
 
 - `--transforms-json <json>`: inline JSON
 - `--transforms-file <path>`: JSON file
@@ -167,7 +167,7 @@ caller-provided values for them are discarded.
 
 ### MCP settings (`mcp`)
 
-You can override per-profile MCP proxy behavior (capabilities allow/deny, notification filters, ID namespacing) by passing a `mcp` settings object.
+Pass a `mcp` settings object to configure profile capabilities, notification filters, and ID namespacing.
 
 - `--mcp-json <json>`: inline JSON object
 - `--mcp-file <path>`: JSON file containing the object

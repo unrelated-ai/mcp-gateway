@@ -8,21 +8,21 @@ repository.workspace = true
 description = "Shared HTTP tool DSL + runtime for Unrelated MCP (used by adapter and gateway)"
 
 [dependencies]
-anyhow = "1"
-thiserror = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 unrelated-env = { path = "../env" }
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
-url = "2"
-parking_lot = "0.12"
-openapiv3 = "2"
-rmcp = { version = "1.7.0" }
-tokio = { version = "1", features = ["net"] }
-tracing = "0.1"
-base64 = "0.22.1"
-mime = "0.3.17"
+reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
+url = { workspace = true }
+parking_lot = { workspace = true }
+openapiv3 = { workspace = true }
+rmcp = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
+tracing = { workspace = true }
+base64 = { workspace = true }
+mime = { workspace = true }
 
 [dev-dependencies]
-axum = { version = "0.8", features = ["macros"] }
-tokio = { version = "1", features = ["full"] }
+axum = { workspace = true, features = ["macros"] }
+tokio = { workspace = true, features = ["full"] }

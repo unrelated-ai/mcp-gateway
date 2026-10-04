@@ -1,3 +1,6 @@
+use crate::catalog::{
+    DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, OPENAPI_PROBE_ENABLED, OPENAPI_PROBE_TIMEOUT,
+};
 use crate::store::{Store, ToolSourceKind, ToolSourceSpec};
 use anyhow::Context as _;
 use parking_lot::RwLock;
@@ -50,29 +53,12 @@ impl TenantCatalog {
             inner: Arc::new(TenantCatalogInner {
                 cache: RwLock::new(HashMap::new()),
                 safety,
-                default_timeout: Duration::from_secs(30),
-                startup_timeout: Duration::from_secs(30),
-                openapi_probe_enabled: true,
-                openapi_probe_timeout: Duration::from_secs(5),
+                default_timeout: DEFAULT_CALL_TIMEOUT,
+                startup_timeout: DEFAULT_STARTUP_TIMEOUT,
+                openapi_probe_enabled: OPENAPI_PROBE_ENABLED,
+                openapi_probe_timeout: OPENAPI_PROBE_TIMEOUT,
             }),
         }
-    }
-
-    /// Check whether a tenant-owned local source exists and is enabled.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the store access fails or a stored spec is invalid.
-    pub async fn has_tool_source(
-        &self,
-        store: &dyn Store,
-        tenant_id: &str,
-        source_id: &str,
-    ) -> anyhow::Result<bool> {
-        Ok(store
-            .get_tenant_tool_source(tenant_id, source_id)
-            .await?
-            .is_some_and(|s| s.enabled))
     }
 
     /// List tools for a tenant-owned local source.
@@ -432,6 +418,7 @@ mod tests {
         });
         let store = FakeStore::default();
         store.set_source(crate::store::TenantToolSource {
+            revision: 1,
             id: "protected".into(),
             kind: ToolSourceKind::Openapi,
             enabled: true,
@@ -510,6 +497,7 @@ mod tests {
         };
 
         store.set_source(crate::store::TenantToolSource {
+            revision: 1,
             id: "s1".to_string(),
             kind: crate::store::ToolSourceKind::Http,
             enabled: true,
@@ -551,6 +539,7 @@ mod tests {
 
         // v0: tool_a + tool_b
         store.set_source(crate::store::TenantToolSource {
+            revision: 1,
             id: "s1".to_string(),
             kind: crate::store::ToolSourceKind::Http,
             enabled: true,
@@ -594,6 +583,7 @@ mod tests {
 
         // v1: drop tool_b
         store.set_source(crate::store::TenantToolSource {
+            revision: 1,
             id: "s1".to_string(),
             kind: crate::store::ToolSourceKind::Http,
             enabled: true,

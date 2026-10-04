@@ -5,9 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Shared tool surface transforms (renames/defaults) for Unrelated MCP (adapter + gateway)"
+description = "Shared MCP surface transforms for Unrelated MCP"
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-anyhow = "1"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+rmcp = { workspace = true }
+regex = { workspace = true }

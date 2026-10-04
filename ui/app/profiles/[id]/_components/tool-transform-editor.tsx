@@ -4,71 +4,25 @@ import { useState } from "react";
 import type { ProfileSurface } from "@/src/lib/tenantApi";
 import { Button, Callout, Input, SectionCard, Textarea, Toggle } from "@/components/ui";
 
-// NOTE: `ui/src/lib/types.ts` defines `Profile.transforms` as `unknown`. We keep the
-// editor typed, but accept/emit `unknown`-compatible shapes.
-export type ParamOverride = {
-  rename?: string;
-  default?: unknown;
-  visible?: boolean;
-  treatNullAsMissing?: boolean;
-};
-
-export type ToolOverride = {
-  rename?: string;
-  description?: string;
-  params?: Record<string, ParamOverride>;
-};
-
-export type TransformPipeline = {
-  toolOverrides: Record<string, ToolOverride>;
-};
-
-export function normalizePipeline(input: unknown): TransformPipeline {
-  const obj = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
-  const toolOverrides =
-    (typeof obj.toolOverrides === "object" && obj.toolOverrides !== null
-      ? (obj.toolOverrides as Record<string, ToolOverride>)
-      : {}) ?? {};
-
-  return { toolOverrides: { ...toolOverrides } };
-}
-
-export function stableStringifyPipeline(p: TransformPipeline): string {
-  const toolKeys = Object.keys(p.toolOverrides ?? {}).sort();
-  const stable: TransformPipeline = { toolOverrides: {} };
-  for (const k of toolKeys) {
-    const ov = p.toolOverrides[k] ?? {};
-    const paramsRaw = ov.params ?? {};
-    const paramKeys = Object.keys(paramsRaw).sort();
-    const params: Record<string, ParamOverride> = {};
-    for (const pk of paramKeys) {
-      const po = paramsRaw[pk] ?? {};
-      params[pk] = {
-        rename: po.rename,
-        default: "default" in po ? po.default : undefined,
-        visible: po.visible,
-        treatNullAsMissing: po.treatNullAsMissing,
-      };
-    }
-    stable.toolOverrides[k] = {
-      rename: ov.rename,
-      description: ov.description,
-      params: paramKeys.length > 0 ? params : undefined,
-    };
-  }
-  return JSON.stringify(stable);
-}
+import {
+  type ParamOverride,
+  type ToolOverride,
+  type TransformPipeline,
+} from "@/src/lib/surface-transforms";
+export { normalizePipeline, type TransformPipeline } from "@/src/lib/surface-transforms";
 
 export function ToolTransformEditor({
   tool,
   pipeline,
   onCommitPipeline,
+  onDirty,
   toolsPending,
   enabled,
 }: {
   tool: ProfileSurface["allTools"][number];
   pipeline: TransformPipeline;
   onCommitPipeline: (next: TransformPipeline) => void;
+  onDirty: () => void;
   toolsPending: boolean;
   enabled: boolean;
 }) {
@@ -167,7 +121,7 @@ export function ToolTransformEditor({
       return;
     }
 
-    const next: TransformPipeline = { toolOverrides: { ...pipeline.toolOverrides } };
+    const next: TransformPipeline = { ...pipeline, toolOverrides: { ...pipeline.toolOverrides } };
     const curr: ToolOverride = { ...(next.toolOverrides[tool.originalName] ?? {}) };
 
     // Tool rename
@@ -225,6 +179,7 @@ export function ToolTransformEditor({
           onChange={(e) => {
             setError(null);
             setRenameTool(e.target.value);
+            onDirty();
           }}
           onBlur={commit}
           onKeyDown={(e) => {
@@ -245,6 +200,7 @@ export function ToolTransformEditor({
           onChange={(e) => {
             setError(null);
             setDescriptionText(e.target.value);
+            onDirty();
             setDescriptionTouched(true);
             setClearDescriptionOverride(false);
           }}
@@ -313,6 +269,7 @@ export function ToolTransformEditor({
                   value={row.rename}
                   onChange={(e) => {
                     setError(null);
+                    onDirty();
                     setParamRows((rows) =>
                       rows.map((r) => (r.name === row.name ? { ...r, rename: e.target.value } : r)),
                     );
@@ -347,6 +304,7 @@ export function ToolTransformEditor({
                 value={row.defaultText}
                 onChange={(e) => {
                   setError(null);
+                  onDirty();
                   setParamRows((rows) =>
                     rows.map((r) =>
                       r.name === row.name ? { ...r, defaultText: e.target.value } : r,

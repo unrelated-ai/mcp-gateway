@@ -82,7 +82,7 @@ pub struct ResourceMapping {
     pub mime_type: Option<String>,
     /// Size in bytes (if known)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub size: Option<u32>,
+    pub size: Option<u64>,
 }
 
 /// Mapping information for a prompt.
@@ -368,6 +368,9 @@ impl Aggregator {
     /// Route a resource read to the correct server.
     /// Returns (`server_name`, `original_uri`) or None if not found.
     pub fn route_resource(&self, uri: &str) -> Option<(String, String)> {
+        if let Some(route) = unrelated_mcp_support::parse_resource_template_uri(uri) {
+            return Some(route);
+        }
         let registry = self.resources.read();
         registry
             .get(uri)
@@ -582,6 +585,7 @@ mod tests {
                     ..Default::default()
                 },
             )]),
+            ..Default::default()
         };
 
         agg.register_tools(
@@ -620,6 +624,7 @@ mod tests {
                     ..Default::default()
                 },
             )]),
+            ..Default::default()
         };
 
         agg.register_tools(

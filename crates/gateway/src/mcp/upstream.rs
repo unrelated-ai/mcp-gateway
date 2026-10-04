@@ -4,17 +4,27 @@ use crate::session_token::{TokenPayloadV1, UpstreamSessionBinding};
 use crate::store::{UpstreamClientCapabilitiesMode, UpstreamSecurityPolicy};
 use axum::{Json, http::StatusCode, response::IntoResponse as _, response::Response};
 use base64::Engine as _;
-use futures::StreamExt as _;
+use futures::{FutureExt as _, StreamExt as _};
+use reqwest::header::HeaderValue;
+use rmcp::model::{JsonRpcResponse, ServerJsonRpcMessage};
+use rmcp::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
 use rmcp::{
     model::{ClientJsonRpcMessage, ClientRequest, JsonRpcRequest, JsonRpcVersion2_0, ServerResult},
     transport::streamable_http_client::StreamableHttpPostResponse,
 };
 use std::collections::{HashMap, HashSet};
 use unrelated_http_tools::config::AuthConfig;
+use unrelated_mcp_support::headers::{CLIENT_CAPABILITIES_META, CLIENT_INFO_META};
 use uuid::Uuid;
 
 pub(super) const HOP_HEADER: &str = "x-unrelated-gateway-hop";
 pub(super) const MAX_HOPS: u32 = 8;
+
+pub(super) struct UpstreamHandshake {
+    pub session_id: Option<String>,
+    pub protocol_version: String,
+    pub capabilities: rmcp::model::ServerCapabilities,
+}
 
 pub(super) async fn upstream_initialize(
     http: &crate::outbound_safety::UpstreamHttpClients,
@@ -22,7 +32,7 @@ pub(super) async fn upstream_initialize(
     init_message: &ClientJsonRpcMessage,
     headers: &reqwest::header::HeaderMap,
     network_class: crate::store::UpstreamNetworkClass,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<UpstreamHandshake> {
     if let Err(err) =
         crate::outbound_safety::check_upstream_scheme_policy_for_class(network_class, mcp_url)
     {
@@ -44,8 +54,20 @@ pub(super) async fn upstream_initialize(
         headers,
     )
     .await?;
-    let (_msg, session_id) = resp.expect_initialized::<reqwest::Error>().await?;
-    let session_id = session_id.ok_or_else(|| anyhow::anyhow!("missing upstream session id"))?;
+    let (msg, session_id) = resp.expect_initialized::<reqwest::Error>().await?;
+    let ServerJsonRpcMessage::Response(JsonRpcResponse {
+        result: ServerResult::InitializeResult(result),
+        ..
+    }) = msg
+    else {
+        anyhow::bail!("upstream did not return an initialize result");
+    };
+    let protocol_version = result.protocol_version.to_string();
+    let mut headers = headers.clone();
+    headers.insert(
+        HEADER_MCP_PROTOCOL_VERSION,
+        HeaderValue::from_str(&protocol_version)?,
+    );
 
     // MCP handshake: client must send `notifications/initialized` after `initialize`.
     // Some upstream servers (including our adapter) treat the session as invalid until this occurs.
@@ -58,8 +80,8 @@ pub(super) async fn upstream_initialize(
         http,
         mcp_url.to_string().into(),
         initialized,
-        Some(session_id.clone().into()),
-        headers,
+        session_id.clone().map(Into::into),
+        &headers,
     )
     .await?
     {
@@ -71,7 +93,66 @@ pub(super) async fn upstream_initialize(
         }
     }
 
-    Ok(session_id)
+    Ok(UpstreamHandshake {
+        session_id,
+        protocol_version,
+        capabilities: result.capabilities,
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("The upstream did not confirm native MCP support")]
+pub(super) struct NativeProtocolMismatch;
+
+pub(super) async fn discover_server(
+    http: &crate::outbound_safety::UpstreamHttpClients,
+    url: &str,
+    headers: &reqwest::header::HeaderMap,
+    class: crate::store::UpstreamNetworkClass,
+) -> anyhow::Result<rmcp::model::DiscoverResult> {
+    use unrelated_mcp_support::headers::VERSION;
+    crate::outbound_safety::check_upstream_scheme_policy_for_class(class, url)
+        .map_err(anyhow::Error::msg)?;
+    let safety = crate::outbound_safety::gateway_outbound_http_safety_for_class(class);
+    crate::outbound_safety::check_url_allowed(&safety, url)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let mut headers = headers.clone();
+    headers.insert(
+        HEADER_MCP_PROTOCOL_VERSION,
+        HeaderValue::from_static(VERSION),
+    );
+    let response = streamable_http::post_value(
+        http.for_class(class), url.to_owned().into(),
+        serde_json::json!({"jsonrpc":"2.0","id":new_internal_request_id(),"method":"server/discover"}),
+        None, &headers, None,
+    ).await?;
+    match read_first_response(response).await? {
+        ServerResult::DiscoverResult(result)
+            if result
+                .supported_versions
+                .iter()
+                .any(|v| v.as_str() == VERSION) =>
+        {
+            Ok(result)
+        }
+        _ => Err(NativeProtocolMismatch.into()),
+    }
+}
+
+/// Headers for a request after initialization, including the upstream's negotiated version.
+pub(super) fn build_bound_upstream_headers(
+    binding: &UpstreamSessionBinding,
+    auth: Option<&unrelated_http_tools::config::AuthConfig>,
+    hop: u32,
+) -> reqwest::header::HeaderMap {
+    let mut headers = build_upstream_headers(auth, hop);
+    if let Some(version) = binding.protocol_version.as_deref()
+        && let Ok(value) = HeaderValue::from_str(version)
+    {
+        headers.insert(HEADER_MCP_PROTOCOL_VERSION, value);
+    }
+    headers
 }
 
 pub(super) fn build_upstream_headers(
@@ -191,6 +272,33 @@ pub(super) fn rewrite_upstream_initialize_message(
     msg
 }
 
+/// Apply the same upstream privacy policy to per-request metadata as initialization.
+pub(super) fn rewrite_request_metadata(
+    body: &mut serde_json::Value,
+    policy: &UpstreamSecurityPolicy,
+) {
+    let meta = &body["params"]["_meta"];
+    if meta
+        .get(unrelated_mcp_support::headers::VERSION_META)
+        .is_none()
+    {
+        return;
+    }
+    let initialize = serde_json::json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{
+        "protocolVersion":rmcp::model::ProtocolVersion::V_2025_11_25,
+        "clientInfo":meta[CLIENT_INFO_META],
+        "capabilities":meta[CLIENT_CAPABILITIES_META]
+    }});
+    if let Ok(initialize) = serde_json::from_value(initialize) {
+        let rewritten = rewrite_upstream_initialize_message(&initialize, policy);
+        if let Ok(rewritten) = serde_json::to_value(rewritten) {
+            body["params"]["_meta"][CLIENT_INFO_META] = rewritten["params"]["clientInfo"].clone();
+            body["params"]["_meta"][CLIENT_CAPABILITIES_META] =
+                rewritten["params"]["capabilities"].clone();
+        }
+    }
+}
+
 pub(super) async fn proxy_to_single_upstream(
     state: &McpState,
     profile_id: &str,
@@ -219,14 +327,29 @@ pub(super) async fn proxy_to_single_upstream(
     };
 
     let endpoint_url = apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
-    let headers = build_upstream_headers(endpoint.auth.as_ref(), hop + 1);
+    let headers = build_bound_upstream_headers(binding, endpoint.auth.as_ref(), hop + 1);
 
-    let resp = streamable_http::post_message(
+    let mut body = serde_json::to_value(message)
+        .map_err(|e| super::internal_error_response("serialize request")(e.into()))?;
+    if binding.protocol_version.as_deref() == Some(unrelated_mcp_support::headers::VERSION)
+        && let Some(profile) = state
+            .store
+            .get_profile(profile_id)
+            .await
+            .map_err(super::internal_error_response("load profile policy"))?
+    {
+        rewrite_request_metadata(
+            &mut body,
+            &profile.mcp.security.effective_upstream_policy(upstream_id),
+        );
+    }
+    let resp = streamable_http::post_value(
         state.http.for_class(endpoint.network_class),
         endpoint_url.into(),
-        message,
-        Some(binding.session.clone().into()),
+        body,
+        binding.session.clone().map(Into::into),
         &headers,
+        None,
     )
     .await
     .map_err(|e| {
@@ -251,16 +374,16 @@ pub(super) async fn proxy_to_single_upstream(
     })
 }
 
-pub(super) async fn resolve_endpoint_url(
+pub(super) async fn resolve_endpoint(
     state: &McpState,
     _profile_id: &str,
     binding: &UpstreamSessionBinding,
-) -> Result<Option<String>, Response> {
+) -> Result<Option<crate::endpoint_cache::UpstreamEndpoint>, Response> {
     if let Some(ep) = state
         .endpoint_cache
         .get(&binding.upstream, &binding.endpoint)
     {
-        return Ok(Some(ep.url));
+        return Ok(Some(ep));
     }
 
     let upstream = state
@@ -308,28 +431,12 @@ pub(super) async fn resolve_endpoint_url(
             },
         );
     }
-    let url = endpoints.get(&binding.endpoint).map(|e| e.url.clone());
+    let endpoint = endpoints.get(&binding.endpoint).cloned();
     state
         .endpoint_cache
         .put(binding.upstream.clone(), endpoints);
-    Ok(url)
-}
-
-pub(super) async fn resolve_endpoint(
-    state: &McpState,
-    profile_id: &str,
-    binding: &UpstreamSessionBinding,
-) -> Result<Option<crate::endpoint_cache::UpstreamEndpoint>, Response> {
-    if let Some(ep) = state
-        .endpoint_cache
-        .get(&binding.upstream, &binding.endpoint)
-    {
-        return Ok(Some(ep));
-    }
-    let _ = resolve_endpoint_url(state, profile_id, binding).await?;
-    Ok(state
-        .endpoint_cache
-        .get(&binding.upstream, &binding.endpoint))
+    // The cache may expire or evict this entry immediately; return the loaded value directly.
+    Ok(endpoint)
 }
 
 #[derive(Clone, Copy)]
@@ -338,7 +445,6 @@ struct ListAllUpstreamsCtx<'a> {
     profile_id: &'a str,
     payload: &'a TokenPayloadV1,
     request_failed_message: &'static str,
-    transport_failed_message: &'static str,
     hop: u32,
 }
 
@@ -346,10 +452,11 @@ async fn list_all_upstreams<T, FBuild, FExtract>(
     ctx: ListAllUpstreamsCtx<'_>,
     build_request: FBuild,
     extract: FExtract,
-) -> Result<Vec<(String, T)>, Response>
+) -> Result<Vec<(String, Vec<T>)>, Response>
 where
-    FBuild: Fn() -> ClientJsonRpcMessage,
-    FExtract: Fn(ServerResult) -> Option<T>,
+    T: Send,
+    FBuild: Fn() -> ClientJsonRpcMessage + Sync,
+    FExtract: Fn(ServerResult) -> Option<(Vec<T>, Option<String>)> + Sync,
 {
     if ctx.hop >= MAX_HOPS {
         return Err((
@@ -358,47 +465,73 @@ where
         )
             .into_response());
     }
-    let mut out = Vec::new();
-    for binding in &ctx.payload.bindings {
-        let Some(endpoint) = resolve_endpoint(ctx.state, ctx.profile_id, binding).await? else {
-            continue;
-        };
-        let endpoint_url = apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
-        let headers = build_upstream_headers(endpoint.auth.as_ref(), ctx.hop + 1);
-        let request = build_request();
-        match streamable_http::post_message(
-            ctx.state.http.for_class(endpoint.network_class),
-            endpoint_url.into(),
-            request,
-            Some(binding.session.clone().into()),
-            &headers,
-        )
-        .await
-        {
-            Ok(resp) => match read_first_response(resp).await {
-                Ok(result) => {
-                    if let Some(v) = extract(result) {
-                        out.push((binding.upstream.clone(), v));
+    let profile = if ctx.payload.request_meta.is_some() {
+        ctx.state.store.get_profile(ctx.profile_id).await.map_err(
+            super::internal_error_response("load upstream privacy policy"),
+        )?
+    } else {
+        None
+    };
+    let profile = &profile;
+    let build_request = &build_request;
+    let extract = &extract;
+    let results = super::aggregation::AggregationPolicy::from_env().collect(
+        ctx.payload.bindings.iter().map(|binding| async move {
+            let Some(endpoint) = resolve_endpoint(ctx.state, ctx.profile_id, binding).await? else {
+                return Ok(None);
+            };
+            let endpoint_url = apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
+            let headers = build_bound_upstream_headers(binding, endpoint.auth.as_ref(), ctx.hop + 1);
+            let result = super::catalog_pages::collect(|cursor| {
+                let mut request = serde_json::to_value(build_request()).expect("serializable request");
+                if let Some(cursor) = cursor {
+                    request["params"] = serde_json::json!({"cursor": cursor});
+                }
+                if let Some(meta) = &ctx.payload.request_meta {
+                    request["params"]["_meta"] = meta.clone();
+                    if let Some(profile) = &profile {
+                        rewrite_request_metadata(&mut request, &profile.mcp.security.effective_upstream_policy(&binding.upstream));
                     }
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        upstream_id = %binding.upstream,
-                        error = %e,
-                        "{}", ctx.request_failed_message
-                    );
+                let url = endpoint_url.clone();
+                let headers = &headers;
+                async move {
+                    let response = streamable_http::post_value(
+                        ctx.state.http.for_class(endpoint.network_class), url.into(), request,
+                        binding.session.clone().map(Into::into), headers, None,
+                    ).await?;
+                    read_first_response(response).await
                 }
-            },
-            Err(e) => {
-                tracing::warn!(
-                    upstream_id = %binding.upstream,
-                    error = %e,
-                    "{}", ctx.transport_failed_message
-                );
+            }, &extract).await;
+            match result {
+                Ok(items) => Ok(Some((binding.upstream.clone(), items))),
+                Err(error) if error.is::<super::catalog_pages::CatalogLimit>() =>
+                    Err((StatusCode::BAD_GATEWAY, error.to_string()).into_response()),
+                Err(error) => {
+                    tracing::warn!(upstream_id = %binding.upstream, %error, "{}", ctx.request_failed_message);
+                    Ok(None)
+                }
+            }
+        }.boxed()).collect(),
+    ).await;
+    let mut out = Vec::new();
+    for (binding, result) in ctx.payload.bindings.iter().zip(results) {
+        match result {
+            Ok(Ok(Some(value))) => out.push(value),
+            Ok(Ok(None)) => {}
+            Ok(Err(response)) => return Err(response),
+            Err(_) => {
+                tracing::warn!(upstream_id = %binding.upstream, "upstream list request timed out");
             }
         }
     }
     Ok(out)
+}
+
+// Catalog reads also run while a notification stream opens. Each request needs
+// its own ID on a shared upstream session, including across Gateway replicas.
+fn new_internal_request_id() -> rmcp::model::RequestId {
+    rmcp::model::RequestId::String(format!("gateway:{}", Uuid::new_v4()).into())
 }
 
 pub(super) async fn list_tools_all_upstreams(
@@ -413,13 +546,12 @@ pub(super) async fn list_tools_all_upstreams(
             profile_id,
             payload,
             request_failed_message: "tools/list failed",
-            transport_failed_message: "tools/list transport failed",
             hop,
         },
         || {
             ClientJsonRpcMessage::Request(JsonRpcRequest {
                 jsonrpc: JsonRpcVersion2_0,
-                id: rmcp::model::RequestId::Number(1),
+                id: new_internal_request_id(),
                 request: ClientRequest::ListToolsRequest(rmcp::model::ListToolsRequest {
                     method: rmcp::model::ListToolsRequestMethod,
                     params: None,
@@ -428,7 +560,7 @@ pub(super) async fn list_tools_all_upstreams(
             })
         },
         |result| match result {
-            ServerResult::ListToolsResult(r) => Some(r.tools),
+            ServerResult::ListToolsResult(r) => Some((r.tools, r.next_cursor)),
             _ => None,
         },
     )
@@ -447,13 +579,12 @@ pub(super) async fn list_resources_all_upstreams(
             profile_id,
             payload,
             request_failed_message: "resources/list failed",
-            transport_failed_message: "resources/list transport failed",
             hop,
         },
         || {
             ClientJsonRpcMessage::Request(JsonRpcRequest {
                 jsonrpc: JsonRpcVersion2_0,
-                id: rmcp::model::RequestId::Number(1),
+                id: new_internal_request_id(),
                 request: ClientRequest::ListResourcesRequest(rmcp::model::ListResourcesRequest {
                     method: rmcp::model::ListResourcesRequestMethod,
                     params: None,
@@ -462,7 +593,44 @@ pub(super) async fn list_resources_all_upstreams(
             })
         },
         |result| match result {
-            ServerResult::ListResourcesResult(r) => Some(r.resources),
+            ServerResult::ListResourcesResult(r) => Some((r.resources, r.next_cursor)),
+            _ => None,
+        },
+    )
+    .await
+}
+
+pub(super) async fn list_resource_templates_all_upstreams(
+    state: &McpState,
+    profile_id: &str,
+    payload: &TokenPayloadV1,
+    hop: u32,
+) -> Result<Vec<(String, Vec<rmcp::model::ResourceTemplate>)>, Response> {
+    list_all_upstreams(
+        ListAllUpstreamsCtx {
+            state,
+            profile_id,
+            payload,
+            request_failed_message: "resources/templates/list failed",
+            hop,
+        },
+        || {
+            ClientJsonRpcMessage::Request(JsonRpcRequest {
+                jsonrpc: JsonRpcVersion2_0,
+                id: new_internal_request_id(),
+                request: ClientRequest::ListResourceTemplatesRequest(
+                    rmcp::model::ListResourceTemplatesRequest {
+                        method: rmcp::model::ListResourceTemplatesRequestMethod,
+                        params: None,
+                        extensions: rmcp::model::Extensions::default(),
+                    },
+                ),
+            })
+        },
+        |result| match result {
+            ServerResult::ListResourceTemplatesResult(r) => {
+                Some((r.resource_templates, r.next_cursor))
+            }
             _ => None,
         },
     )
@@ -481,13 +649,12 @@ pub(super) async fn list_prompts_all_upstreams(
             profile_id,
             payload,
             request_failed_message: "prompts/list failed",
-            transport_failed_message: "prompts/list transport failed",
             hop,
         },
         || {
             ClientJsonRpcMessage::Request(JsonRpcRequest {
                 jsonrpc: JsonRpcVersion2_0,
-                id: rmcp::model::RequestId::Number(1),
+                id: new_internal_request_id(),
                 request: ClientRequest::ListPromptsRequest(rmcp::model::ListPromptsRequest {
                     method: rmcp::model::ListPromptsRequestMethod,
                     params: None,
@@ -496,7 +663,7 @@ pub(super) async fn list_prompts_all_upstreams(
             })
         },
         |result| match result {
-            ServerResult::ListPromptsResult(r) => Some(r.prompts),
+            ServerResult::ListPromptsResult(r) => Some((r.prompts, r.next_cursor)),
             _ => None,
         },
     )

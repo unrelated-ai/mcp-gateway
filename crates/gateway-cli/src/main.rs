@@ -281,20 +281,16 @@ enum ProfilesCommand {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum DataPlaneAuthModeArg {
     Disabled,
-    ApiKeyInitializeOnly,
-    ApiKeyEveryRequest,
-    JwtEveryRequest,
+    ApiKey,
+    OAuth,
 }
 
 impl From<DataPlaneAuthModeArg> for api::DataPlaneAuthMode {
     fn from(v: DataPlaneAuthModeArg) -> Self {
         match v {
             DataPlaneAuthModeArg::Disabled => api::DataPlaneAuthMode::Disabled,
-            DataPlaneAuthModeArg::ApiKeyInitializeOnly => {
-                api::DataPlaneAuthMode::ApiKeyInitializeOnly
-            }
-            DataPlaneAuthModeArg::ApiKeyEveryRequest => api::DataPlaneAuthMode::ApiKeyEveryRequest,
-            DataPlaneAuthModeArg::JwtEveryRequest => api::DataPlaneAuthMode::JwtEveryRequest,
+            DataPlaneAuthModeArg::ApiKey => api::DataPlaneAuthMode::ApiKey,
+            DataPlaneAuthModeArg::OAuth => api::DataPlaneAuthMode::OAuth,
         }
     }
 }
@@ -307,6 +303,9 @@ struct ProfileAuthArgs {
     /// Whether to accept `x-api-key` as an alias for `Authorization: Bearer ...` (Mode 3).
     #[arg(long)]
     accept_x_api_key: Option<bool>,
+    /// OAuth scope required by the profile (repeatable; defaults to mcp:access).
+    #[arg(long = "oauth-required-scope")]
+    oauth_required_scopes: Vec<String>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1263,8 +1262,10 @@ async fn handle_profiles_list(api: api::ApiClient, json: bool) -> anyhow::Result
         );
         println!("    tools: {}", p.tools.join(", ").dimmed());
         println!(
-            "    dataPlaneAuth: {:?}  acceptXApiKey={}",
-            p.data_plane_auth.mode, p.data_plane_auth.accept_x_api_key
+            "    dataPlaneAuth: {:?}  acceptXApiKey={}  requiredScopes={}",
+            p.data_plane_auth.mode(),
+            p.data_plane_auth.accept_x_api_key(),
+            p.data_plane_auth.required_scopes().join(",")
         );
         println!(
             "    dataPlaneLimits: rateLimit={} quota={}",
@@ -1324,8 +1325,10 @@ async fn handle_profiles_get(
     );
     println!("  tools: {}", p.tools.join(", "));
     println!(
-        "  dataPlaneAuth: {:?}  acceptXApiKey={}",
-        p.data_plane_auth.mode, p.data_plane_auth.accept_x_api_key
+        "  dataPlaneAuth: {:?}  acceptXApiKey={}  requiredScopes={}",
+        p.data_plane_auth.mode(),
+        p.data_plane_auth.accept_x_api_key(),
+        p.data_plane_auth.required_scopes().join(",")
     );
     println!(
         "  dataPlaneLimits: rateLimitEnabled={} rateLimitToolCallsPerMinute={:?} quotaEnabled={} quotaToolCalls={:?}",
@@ -1358,7 +1361,7 @@ async fn handle_profiles_create(
     let mcp = parse_mcp_settings(args.mcp_json.as_deref(), args.mcp_file.as_ref())
         .context("parse mcp settings")?;
 
-    let data_plane_auth = build_data_plane_auth_for_create(&args.data_plane_auth);
+    let data_plane_auth = build_data_plane_auth_for_create(&args.data_plane_auth)?;
     let data_plane_limits = build_data_plane_limits_for_create(&args.data_plane_limits)?;
 
     let resp = api
@@ -1600,6 +1603,7 @@ fn read_json_body(
 fn profile_settings_are_overridden(args: &ProfilePutArgs) -> bool {
     args.data_plane_auth.data_plane_auth_mode.is_some()
         || args.data_plane_auth.accept_x_api_key.is_some()
+        || !args.data_plane_auth.oauth_required_scopes.is_empty()
         || args.data_plane_limits.rate_limit_enabled.is_some()
         || args
             .data_plane_limits
@@ -1609,36 +1613,96 @@ fn profile_settings_are_overridden(args: &ProfilePutArgs) -> bool {
         || args.data_plane_limits.quota_tool_calls.is_some()
 }
 
-fn build_data_plane_auth_for_create(args: &ProfileAuthArgs) -> Option<api::DataPlaneAuthSettings> {
-    if args.data_plane_auth_mode.is_none() && args.accept_x_api_key.is_none() {
-        return None;
+fn build_data_plane_auth_for_create(
+    args: &ProfileAuthArgs,
+) -> anyhow::Result<Option<api::DataPlaneAuthSettings>> {
+    if args.data_plane_auth_mode.is_none()
+        && args.accept_x_api_key.is_none()
+        && args.oauth_required_scopes.is_empty()
+    {
+        return Ok(None);
     }
-    Some(api::DataPlaneAuthSettings {
-        mode: args
-            .data_plane_auth_mode
-            .unwrap_or(DataPlaneAuthModeArg::ApiKeyInitializeOnly)
-            .into(),
-        accept_x_api_key: args.accept_x_api_key.unwrap_or(false),
-    })
+    let mode = args
+        .data_plane_auth_mode
+        .unwrap_or(if args.oauth_required_scopes.is_empty() {
+            DataPlaneAuthModeArg::ApiKey
+        } else {
+            DataPlaneAuthModeArg::OAuth
+        });
+    validate_profile_auth_args(mode, args)?;
+    Ok(Some(match mode {
+        DataPlaneAuthModeArg::Disabled => api::DataPlaneAuthSettings::Disabled,
+        DataPlaneAuthModeArg::ApiKey => api::DataPlaneAuthSettings::ApiKey {
+            accept_x_api_key: args.accept_x_api_key.unwrap_or(false),
+        },
+        DataPlaneAuthModeArg::OAuth => api::DataPlaneAuthSettings::OAuth {
+            required_scopes: if args.oauth_required_scopes.is_empty() {
+                vec!["mcp:access".to_string()]
+            } else {
+                args.oauth_required_scopes.clone()
+            },
+        },
+    }))
 }
 
 fn build_data_plane_auth_for_put(
     existing: Option<&api::Profile>,
     args: &ProfileAuthArgs,
 ) -> anyhow::Result<Option<api::DataPlaneAuthSettings>> {
-    if args.data_plane_auth_mode.is_none() && args.accept_x_api_key.is_none() {
+    if args.data_plane_auth_mode.is_none()
+        && args.accept_x_api_key.is_none()
+        && args.oauth_required_scopes.is_empty()
+    {
         return Ok(None);
     }
     let existing =
         existing.ok_or_else(|| anyhow::anyhow!("load profile before overriding auth"))?;
-    Ok(Some(api::DataPlaneAuthSettings {
-        mode: args
-            .data_plane_auth_mode
-            .map_or(existing.data_plane_auth.mode, Into::into),
-        accept_x_api_key: args
-            .accept_x_api_key
-            .unwrap_or(existing.data_plane_auth.accept_x_api_key),
+    let mode_arg = args.data_plane_auth_mode.unwrap_or_else(|| {
+        if args.oauth_required_scopes.is_empty() {
+            match existing.data_plane_auth.mode() {
+                api::DataPlaneAuthMode::Disabled => DataPlaneAuthModeArg::Disabled,
+                api::DataPlaneAuthMode::ApiKey => DataPlaneAuthModeArg::ApiKey,
+                api::DataPlaneAuthMode::OAuth => DataPlaneAuthModeArg::OAuth,
+            }
+        } else {
+            DataPlaneAuthModeArg::OAuth
+        }
+    });
+    validate_profile_auth_args(mode_arg, args)?;
+    let mode: api::DataPlaneAuthMode = mode_arg.into();
+    Ok(Some(match mode {
+        api::DataPlaneAuthMode::Disabled => api::DataPlaneAuthSettings::Disabled,
+        api::DataPlaneAuthMode::ApiKey => api::DataPlaneAuthSettings::ApiKey {
+            accept_x_api_key: args
+                .accept_x_api_key
+                .unwrap_or(existing.data_plane_auth.accept_x_api_key()),
+        },
+        api::DataPlaneAuthMode::OAuth => api::DataPlaneAuthSettings::OAuth {
+            required_scopes: if args.oauth_required_scopes.is_empty() {
+                let existing = existing.data_plane_auth.required_scopes();
+                if existing.is_empty() {
+                    vec!["mcp:access".to_string()]
+                } else {
+                    existing.to_vec()
+                }
+            } else {
+                args.oauth_required_scopes.clone()
+            },
+        },
     }))
+}
+
+fn validate_profile_auth_args(
+    mode: DataPlaneAuthModeArg,
+    args: &ProfileAuthArgs,
+) -> anyhow::Result<()> {
+    if args.accept_x_api_key.is_some() && !matches!(mode, DataPlaneAuthModeArg::ApiKey) {
+        anyhow::bail!("--accept-x-api-key is valid only with --data-plane-auth-mode api-key");
+    }
+    if !args.oauth_required_scopes.is_empty() && !matches!(mode, DataPlaneAuthModeArg::OAuth) {
+        anyhow::bail!("--oauth-required-scope is valid only with --data-plane-auth-mode oauth");
+    }
+    Ok(())
 }
 
 fn validate_limits(l: &api::DataPlaneLimitsSettings) -> anyhow::Result<()> {

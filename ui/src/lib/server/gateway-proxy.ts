@@ -2,13 +2,14 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { TENANT_TOKEN_COOKIE } from "@/src/lib/tenant-session";
 
-const GATEWAY_TIMEOUT_MS = 15_000;
-
-export function gatewayAdminBase(): string | null {
-  const base = process.env.GATEWAY_ADMIN_BASE;
-  if (!base) return null;
-  return base.replace(/\/+$/, "");
-}
+import {
+  gatewayAdminBase,
+  gatewayErrorResponse,
+  gatewayJsonResponse,
+  GatewayHttpError,
+  requestGateway,
+} from "./gateway-http";
+export { gatewayAdminBase, GATEWAY_TIMEOUT_MS } from "./gateway-http";
 
 export async function tenantAuthHeader(): Promise<string | null> {
   const cookieStore = await cookies();
@@ -29,13 +30,15 @@ function isCrossSite(req: Request): boolean {
 }
 
 export interface ProxyTenantOptions {
-  /** Gateway path, e.g. `/tenant/v1/profiles/${encodeURIComponent(id)}`. */
+  /** Gateway path, e.g. tenantRoutes.PROFILE(id). */
   path: string;
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   /** Forward the incoming request body as JSON (default: true for non-GET). */
   forwardBody?: boolean;
   /** Query string (without leading `?`) appended to the gateway URL. */
   search?: string;
+  /** Preserve create/accepted status codes; require valid JSON on success. */
+  preserveSuccessStatus?: boolean;
 }
 
 /**
@@ -50,14 +53,11 @@ export interface ProxyTenantOptions {
  */
 export async function proxyTenantRequest(
   req: Request,
-  { path, method = "GET", forwardBody, search }: ProxyTenantOptions,
-): Promise<NextResponse> {
+  { path, method = "GET", forwardBody, search, preserveSuccessStatus }: ProxyTenantOptions,
+): Promise<Response> {
   const base = gatewayAdminBase();
   if (!base) {
-    return NextResponse.json(
-      { ok: false, error: "GATEWAY_ADMIN_BASE is not set" },
-      { status: 500 },
-    );
+    return gatewayErrorResponse(new GatewayHttpError(500, "GATEWAY_ADMIN_BASE is not set"));
   }
   const auth = await tenantAuthHeader();
   if (!auth) {
@@ -75,36 +75,17 @@ export async function proxyTenantRequest(
     headers["Content-Type"] = "application/json";
   }
 
-  let res: Response;
   try {
-    res = await fetch(`${base}${path}${search ? `?${search}` : ""}`, {
+    const reply = await requestGateway(path + (search ? `?${search}` : ""), {
       method,
-      cache: "no-store",
       headers,
       body,
-      signal: AbortSignal.timeout(GATEWAY_TIMEOUT_MS),
     });
-  } catch (e) {
-    const timedOut = e instanceof Error && e.name === "TimeoutError";
-    return NextResponse.json(
-      { ok: false, error: timedOut ? "gateway request timed out" : "gateway unreachable" },
-      { status: 504 },
-    );
-  }
-
-  const text = await res.text();
-  if (!res.ok) {
-    return NextResponse.json({ ok: false, status: res.status, body: text }, { status: 502 });
-  }
-  try {
-    return NextResponse.json(JSON.parse(text) as unknown);
-  } catch {
-    if (method === "GET") {
-      return NextResponse.json(
-        { ok: false, error: "invalid JSON from gateway", body: text },
-        { status: 502 },
-      );
-    }
-    return NextResponse.json({ ok: true });
+    return gatewayJsonResponse(reply, {
+      preserveSuccessStatus,
+      allowNonJsonSuccess: method !== "GET" && !preserveSuccessStatus,
+    });
+  } catch (error) {
+    return gatewayErrorResponse(error);
   }
 }

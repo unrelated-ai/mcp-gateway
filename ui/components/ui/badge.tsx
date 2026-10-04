@@ -51,15 +51,14 @@ export function StatusBadge({ enabled, className = "" }: StatusBadgeProps) {
 }
 
 interface AuthModeBadgeProps {
-  mode: "disabled" | "apiKeyInitializeOnly" | "apiKeyEveryRequest" | "jwtEveryRequest";
+  mode: "disabled" | "apiKey" | "oauth";
   className?: string;
 }
 
 const authModeLabels: Record<AuthModeBadgeProps["mode"], { label: string; tone: Tone }> = {
   disabled: { label: "No auth", tone: "warn" },
-  apiKeyInitializeOnly: { label: "API key (init)", tone: "info" },
-  apiKeyEveryRequest: { label: "API key (all)", tone: "info" },
-  jwtEveryRequest: { label: "JWT", tone: "accent" },
+  apiKey: { label: "API key", tone: "info" },
+  oauth: { label: "OAuth", tone: "accent" },
 };
 
 export function AuthModeBadge({ mode, className = "" }: AuthModeBadgeProps) {

@@ -108,13 +108,19 @@ Managed MCP requires both:
 - topology metadata `operator-oss`
 - managed backend enforcement mode `k8s` with healthy reconciler heartbeat
 
-Check Gateway topology:
+Check Gateway topology through a local port forward:
 
 ```bash
-kubectl -n mcp-gateway run status-check --image=curlimages/curl:8.12.1 --rm -i --restart=Never --command -- sh -c 'curl -sS http://unrelated-mcp-gateway-admin:4001/status'
+kubectl -n mcp-gateway port-forward svc/unrelated-mcp-gateway-admin 4001:4001
 ```
 
-You should see:
+In another terminal:
+
+```bash
+curl -sS http://127.0.0.1:4001/status
+```
+
+Expected output:
 
 - `"topology":"operator-oss"`
 - `"managedMcp":{"backendMode":"k8s","reconcilerHealthy":true,"acceptingRequests":true,...}`

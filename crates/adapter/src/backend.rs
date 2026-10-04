@@ -96,7 +96,7 @@ pub struct ResourceInfo {
     /// Optional MIME type
     pub mime_type: Option<String>,
     /// Optional size (bytes)
-    pub size: Option<u32>,
+    pub size: Option<u64>,
 }
 
 /// Information about a prompt provided by a backend.
@@ -172,6 +172,18 @@ pub trait Backend: Send + Sync {
 
     /// List all resources provided by this backend.
     async fn list_resources(&self) -> Result<Vec<ResourceInfo>>;
+
+    async fn list_resource_templates(
+        &self,
+        _session_id: Option<&str>,
+    ) -> Result<Vec<rmcp::model::ResourceTemplate>> {
+        Ok(Vec::new())
+    }
+
+    /// Notify only the process owned by this downstream session, if it exists.
+    async fn roots_list_changed(&self, _session_id: Option<&str>) -> Result<()> {
+        Ok(())
+    }
 
     /// Read a resource by URI.
     async fn read_resource(

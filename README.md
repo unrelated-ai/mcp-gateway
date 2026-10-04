@@ -2,7 +2,7 @@
 
 # MCP Gateway
 
-**Give AI applications safe access to the APIs and MCP servers you already run.**
+**Give AI applications safe access to existing APIs and MCP servers.**
 
 Turn REST/OpenAPI services and existing MCP servers into focused, secured MCP
 endpoints—without rebuilding every integration from scratch.
@@ -14,12 +14,12 @@ endpoints—without rebuilding every integration from scratch.
 
 </div>
 
-MCP Gateway sits between your MCP clients and the systems they need to use:
+MCP Gateway sits between MCP clients and the systems they need to use:
 
 - Connect existing **REST APIs**, **OpenAPI services**, and **MCP servers**.
 - Combine tools from multiple systems behind one stable endpoint.
 - Create focused tool surfaces for different teams, environments, or agents.
-- Control access with API keys or OIDC, tool policies, limits, secrets, and audit logging.
+- Control access with API keys or OAuth, tool policies, limits, secrets, and audit logging.
 - Run locally with Docker or deploy to Kubernetes.
 
 ![Profiles in the MCP Gateway Web UI](docs/assets/ui_main_screen.png)
@@ -49,7 +49,7 @@ One deployment can serve a single developer or isolate many teams and environmen
 
 ## When MCP Gateway is useful
 
-Use it when you want to:
+Common uses include:
 
 - Give an MCP client access to an existing API without writing a bespoke MCP server.
 - Publish a local stdio MCP server over streamable HTTP.
@@ -58,34 +58,44 @@ Use it when you want to:
 - Put authentication, quotas, timeouts, retries, and audit logging in front of MCP tools.
 - Isolate teams or projects without deploying a separate gateway for each one.
 
+## Version 1.0
+
+Version 1.0 includes OAuth resource-server support, the `unrelated` client CLI with
+compact tool discovery, and stateful/sessionless upstream interoperability.
+
+> **Upgrading from 0.x:** The [v1 migration guide](docs/gateway/V1_UPGRADE.md)
+> covers configuration changes, database migration, and rollback for existing installations.
+
 ## Try it locally
 
 The quickest path uses published Docker images and does not require cloning this repository.
 
 **Prerequisite:** Docker with Docker Compose.
 
-1. Download the quickstart Compose file:
+1. Download the quickstart Compose file and shared image defaults:
 
 ```bash
 curl -fsSL -o mcp-gateway-compose.yml \
-  https://raw.githubusercontent.com/unrelated-ai/mcp-gateway/main/docker-compose.quickstart.yml
+  https://raw.githubusercontent.com/unrelated-ai/mcp-gateway/gateway-v1.0.0/docker-compose.quickstart.yml
+curl -fsSL -o mcp-gateway-images.env \
+  https://raw.githubusercontent.com/unrelated-ai/mcp-gateway/gateway-v1.0.0/deploy/images.env
 ```
 
 2. Start the Gateway and Web UI:
 
 ```bash
-GATEWAY_VERSION=0.13.4 UI_VERSION=0.9.2 \
-  docker compose -f mcp-gateway-compose.yml up -d
+GATEWAY_VERSION=1.0.0 UI_VERSION=1.0.0 \
+  docker compose --env-file mcp-gateway-images.env -f mcp-gateway-compose.yml up -d
 ```
 
 3. Open [http://127.0.0.1:27102](http://127.0.0.1:27102).
 
-The onboarding flow creates your first tenant and starter profile. From there:
+The onboarding flow creates the first tenant and starter profile. From there:
 
 1. Add an HTTP/OpenAPI or MCP source.
 2. Attach it to a profile.
 3. Create an API key for the profile and save the secret shown once.
-4. Copy the profile endpoint into your MCP client and send the key as
+4. Copy the profile endpoint into an MCP client and send the key as
    `Authorization: Bearer <API_KEY_SECRET>` on every request.
 
 Each profile is available at:
@@ -94,17 +104,17 @@ Each profile is available at:
 http://127.0.0.1:27100/<PROFILE_ID>/mcp
 ```
 
-On first use, the quickstart starts with an empty database so you can connect the systems you
-actually want to expose. The named volume preserves that data across restarts until you remove it.
+The quickstart starts with an empty database. Sources and profiles added through the UI
+persist across restarts in a named volume.
 
 To stop or reset it:
 
 ```bash
-docker compose -f mcp-gateway-compose.yml down
-docker compose -f mcp-gateway-compose.yml down -v # also delete local data
+docker compose --env-file mcp-gateway-images.env -f mcp-gateway-compose.yml down
+docker compose --env-file mcp-gateway-images.env -f mcp-gateway-compose.yml down -v # also delete local data
 ```
 
-## What you get
+## Capabilities
 
 | Area               | Capabilities                                                                        |
 | ------------------ | ----------------------------------------------------------------------------------- |
@@ -145,8 +155,9 @@ provides the public endpoint and shared policy layer.
   streamable HTTP MCP endpoint.
 - **Web UI**: tenant onboarding and management for sources, profiles, keys, secrets, audit, and
   settings.
+- **Client CLI** (`unrelated`): named profile contexts, login, tool search/calls, and a compact stdio MCP proxy.
 - **Admin CLI** (`unrelated-gateway-admin`): operator and automation workflows.
-- **Gateway Operator**: managed MCP deployment support for Kubernetes.
+- **Gateway Operator**: managed MCP deployment support for Kubernetes and Docker.
 
 ## Documentation
 
@@ -161,7 +172,8 @@ provides the public endpoint and shared policy layer.
   - [OpenAPI tools](docs/adapter/config/SERVERS_OPENAPI.md)
   - [stdio MCP servers](docs/adapter/config/SERVERS_STDIO.md)
 - [Web UI](docs/ui/INDEX.md)
-- [Gateway CLI](docs/gateway-cli/INDEX.md)
+- [Client CLI and compact proxy](docs/unrelated-cli/README.md)
+- [Gateway admin CLI](docs/gateway-cli/INDEX.md)
 - [Helm deployment](docs/deploy/HELM.md)
 - [CI/CD and releases](docs/CICD.md)
 - [Workspace layout](docs/WORKSPACE.md)
@@ -207,8 +219,8 @@ Stable releases use `:latest` and `:X.Y.Z` tags. Pre-releases use `:X.Y.Z-rc.N`.
 GitHub Releases also include static Linux Adapter and Gateway admin CLI binaries for
 `x86_64-unknown-linux-musl` under their respective release tags.
 
-The published Adapter image contains a minimal static binary. If your stdio MCP servers require
-Node, Python, or other runtimes, copy that binary into your own runtime image. See the
+The published Adapter image contains a minimal static binary. For stdio MCP servers that require
+Node, Python, or other runtimes, copy that binary into a suitable runtime image. See the
 [stdio server documentation](docs/adapter/config/SERVERS_STDIO.md).
 
 ## Project health

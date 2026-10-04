@@ -1,6 +1,6 @@
 # `servers.<name>: { type: http }` (manual HTTP tools)
 
-This backend lets you define tools with a small HTTP DSL (no OpenAPI needed).
+This backend defines tools using HTTP request templates without an OpenAPI specification.
 
 Source of truth:
 
@@ -101,7 +101,7 @@ responseTransforms:
 - **Type**: string (e.g. `GET`, `POST`)
 - **Notes**:
   - The value is parsed as an HTTP method token (so **extension/custom methods** like `NOPE` can still be accepted).
-  - If you provide a method value that is not a valid HTTP token (e.g. contains whitespace), startup fails during tool generation.
+  - If a method value is not a valid HTTP token (e.g. contains whitespace), startup fails during tool generation.
   - Upstreams may reject unknown methods (e.g. `405 Method Not Allowed`).
 
 ### `path`

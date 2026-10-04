@@ -1,0 +1,5 @@
+apiVersion: v2
+name: unrelated-mcp-images
+description: Shared infrastructure image defaults for MCP deployments.
+type: library
+version: 1.0.0

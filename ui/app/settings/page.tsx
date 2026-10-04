@@ -1,14 +1,23 @@
 "use client";
+import { AUDIT_LEVELS } from "@/src/lib/auditSettings";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  BYTES_PER_MIB,
+  DEFAULT_MAX_POST_BODY_BYTES,
+  DEFAULT_MAX_SSE_EVENT_BYTES,
+  TRANSPORT_LIMIT_PRESETS_MIB,
+} from "@/src/lib/transportLimits";
+
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, ConfirmModal, CopyButton, Input, Select } from "@/components/ui";
 import { SectionCard, Toggle } from "@/components/ui";
 import { qk } from "@/src/lib/queryKeys";
 import { getTenantExpFromCookies, lockTenantSession } from "@/src/lib/tenant-session";
 import { LockIcon } from "@/components/icons";
-import { GATEWAY_DATA_BASE, UI_VERSION } from "@/src/lib/env";
+import { UI_VERSION } from "@/src/lib/env";
+import { useRuntimeConfig } from "@/src/lib/runtime-config";
 import { useToastStore } from "@/src/lib/toast-store";
 import { useMutation } from "@tanstack/react-query";
 import {
@@ -17,7 +26,11 @@ import {
   putTenantAuditSettings,
   putTenantTransportLimits,
 } from "@/src/lib/tenantApi";
-import type { TenantAuditSettings, TenantTransportLimitsSettings } from "@/src/lib/types";
+import type {
+  AuditLevel,
+  TenantAuditSettings,
+  TenantTransportLimitsSettings,
+} from "@/src/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -30,8 +43,9 @@ type GatewayStatusResponse =
         uptimeSecs?: number;
         configLoaded?: boolean;
         profileCount?: number;
-        oidcConfigured?: boolean;
-        oidcIssuer?: string;
+        oauthConfigured?: boolean;
+        oauthIssuer?: string;
+        publicDataBaseUrl?: string;
       };
     }
   | { ok: false; error?: string; status?: number };
@@ -45,12 +59,22 @@ function parsePositiveIntegerInput(raw: string): number | null {
   return normalized;
 }
 
+// Unlocking or locking the session navigates to a new page. Read the cookie only
+// after hydration so the initial browser render matches the server snapshot.
+const subscribeToSession = () => () => {};
+const serverSessionExpiry = () => null;
+
 export default function SettingsPage() {
+  const queryClient = useQueryClient();
   const [showConfirmLock, setShowConfirmLock] = useState(false);
   const toast = useToastStore((s) => s.push);
-  const dataBase = GATEWAY_DATA_BASE;
+  const { gatewayDataBase: dataBase } = useRuntimeConfig();
   const uiVersion = UI_VERSION;
-  const exp = getTenantExpFromCookies();
+  const exp = useSyncExternalStore(
+    subscribeToSession,
+    getTenantExpFromCookies,
+    serverSessionExpiry,
+  );
   const expHuman = exp ? new Date(exp * 1000).toLocaleString() : "unknown";
   const gatewayStatusQuery = useQuery({
     queryKey: qk.gatewayStatus(),
@@ -92,10 +116,7 @@ export default function SettingsPage() {
 
   const [auditEnabledDraft, setAuditEnabledDraft] = useState<boolean | null>(null);
   const [auditRetentionDaysDraft, setAuditRetentionDaysDraft] = useState<number | null>(null);
-  const [auditDefaultLevelDraft, setAuditDefaultLevelDraft] = useState<string | null>(null);
-
-  const DEFAULT_MAX_POST_BODY_BYTES = 4 * 1024 * 1024;
-  const DEFAULT_MAX_SSE_EVENT_BYTES = 8 * 1024 * 1024;
+  const [auditDefaultLevelDraft, setAuditDefaultLevelDraft] = useState<AuditLevel | null>(null);
 
   const [maxPostBodyBytesDraft, setMaxPostBodyBytesDraft] = useState<number | null>(null);
   const [maxSseEventBytesDraft, setMaxSseEventBytesDraft] = useState<number | null>(null);
@@ -134,6 +155,7 @@ export default function SettingsPage() {
     },
     onSuccess: async () => {
       await auditSettingsQuery.refetch();
+      await queryClient.invalidateQueries({ queryKey: qk.profiles() });
     },
     onError: (e) => {
       toast({
@@ -202,7 +224,7 @@ export default function SettingsPage() {
       maxJsonObjectKeys: effectiveTransportLimits.maxJsonObjectKeys ?? null,
       maxJsonStringBytes: effectiveTransportLimits.maxJsonStringBytes ?? null,
     };
-  }, [DEFAULT_MAX_POST_BODY_BYTES, DEFAULT_MAX_SSE_EVENT_BYTES, effectiveTransportLimits]);
+  }, [effectiveTransportLimits]);
 
   // Autosave: debounce changes and only send when settings differ from the last known server value.
   const debounceRef = useRef<number | null>(null);
@@ -296,8 +318,8 @@ export default function SettingsPage() {
                 label="Default detail level"
                 description={
                   <>
-                    Default capture level for this tenant. Keep this at <code>metadata</code> unless
-                    you really need more.
+                    Default for profile activity and configuration changes. Profiles can override
+                    their activity level. Choosing Off disables logging across the tenant.
                   </>
                 }
                 right={
@@ -305,12 +327,13 @@ export default function SettingsPage() {
                     <Select
                       aria-label="Default detail level"
                       value={draftDefaultLevel}
-                      onChange={(e) => setAuditDefaultLevelDraft(e.target.value)}
+                      onChange={(e) => setAuditDefaultLevelDraft(e.target.value as AuditLevel)}
                     >
-                      <option value="off">off</option>
-                      <option value="summary">summary</option>
-                      <option value="metadata">metadata</option>
-                      <option value="payload">payload</option>
+                      {AUDIT_LEVELS.map((level) => (
+                        <option key={level.value} value={level.value}>
+                          {level.label}
+                        </option>
+                      ))}
                     </Select>
                   </div>
                 }
@@ -368,15 +391,15 @@ export default function SettingsPage() {
                     Limits downstream JSON-RPC request bodies on{" "}
                     <code>POST /&#123;profile_id&#125;/mcp</code>. Default is{" "}
                     <code>{DEFAULT_MAX_POST_BODY_BYTES}</code> (~
-                    {Math.round((DEFAULT_MAX_POST_BODY_BYTES / 1024 / 1024) * 10) / 10} MiB) unless
-                    overridden.
+                    {Math.round((DEFAULT_MAX_POST_BODY_BYTES / BYTES_PER_MIB) * 10) / 10} MiB)
+                    unless overridden.
                   </>
                 }
                 right={
                   <div className="flex flex-col items-end gap-2">
                     <div className="flex flex-wrap justify-end gap-2">
-                      {[1, 4, 8, 16, 32].map((mib) => {
-                        const bytes = mib * 1024 * 1024;
+                      {TRANSPORT_LIMIT_PRESETS_MIB.map((mib) => {
+                        const bytes = mib * BYTES_PER_MIB;
                         const active = draftMaxPostBodyBytes === bytes;
                         return (
                           <Button
@@ -418,15 +441,15 @@ export default function SettingsPage() {
                   <>
                     Limits a single SSE <code>data:</code> payload from upstream servers. Default is{" "}
                     <code>{DEFAULT_MAX_SSE_EVENT_BYTES}</code> (~
-                    {Math.round((DEFAULT_MAX_SSE_EVENT_BYTES / 1024 / 1024) * 10) / 10} MiB) unless
-                    overridden.
+                    {Math.round((DEFAULT_MAX_SSE_EVENT_BYTES / BYTES_PER_MIB) * 10) / 10} MiB)
+                    unless overridden.
                   </>
                 }
                 right={
                   <div className="flex flex-col items-end gap-2">
                     <div className="flex flex-wrap justify-end gap-2">
-                      {[1, 4, 8, 16, 32].map((mib) => {
-                        const bytes = mib * 1024 * 1024;
+                      {TRANSPORT_LIMIT_PRESETS_MIB.map((mib) => {
+                        const bytes = mib * BYTES_PER_MIB;
                         const active = draftMaxSseEventBytes === bytes;
                         return (
                           <Button

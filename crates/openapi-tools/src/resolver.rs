@@ -386,7 +386,7 @@ impl<'a> OpenApiResolver<'a> {
         };
 
         let parsed: Value = serde_json::from_str(&content)
-            .or_else(|_| serde_yaml::from_str(&content))
+            .or_else(|_| serde_saphyr::from_str(&content))
             .map_err(|e| {
                 OpenApiToolsError::OpenApi(format!(
                     "Failed to parse referenced document {}: {e}",
@@ -416,7 +416,7 @@ paths:
   /pet:
     $ref: "http://127.0.0.1:8080/openapi.yaml#/paths/~1pet"
 "#;
-        let spec: OpenAPI = serde_yaml::from_str(spec_yaml).expect("parse spec");
+        let spec: OpenAPI = serde_saphyr::from_str(spec_yaml).expect("parse spec");
         let root_doc = DocId::parse("inline-root.yaml").expect("root doc id");
         let client = Client::new();
         let safety = OutboundHttpSafety::gateway_default();

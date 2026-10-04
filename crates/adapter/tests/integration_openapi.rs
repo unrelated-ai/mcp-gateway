@@ -1,3 +1,4 @@
+use unrelated_test_support::images;
 mod common;
 mod common_mcp;
 
@@ -16,7 +17,7 @@ use common_mcp::{McpStreamableHttpSession, tool_call_body_json};
 #[ignore = "requires Docker (testcontainers)"]
 #[allow(clippy::too_many_lines)]
 async fn openapi_roundtrip_add_pet_and_get_pet() -> anyhow::Result<()> {
-    let petstore = GenericImage::new("swaggerapi/petstore3", "latest")
+    let petstore = GenericImage::new(images::PETSTORE.name, images::PETSTORE.tag)
         .with_exposed_port(8080.tcp())
         .start()
         .await

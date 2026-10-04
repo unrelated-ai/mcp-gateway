@@ -42,6 +42,10 @@ impl McpStreamableHttpSession {
 
         let init_msg = read_first_event_stream_json_message(init_resp).await?;
         anyhow::ensure!(init_msg.get("id") == Some(&json!(0)), "unexpected init id");
+        anyhow::ensure!(
+            init_msg["result"]["protocolVersion"] == "2024-11-05",
+            "legacy protocol negotiation changed"
+        );
 
         // notifications/initialized
         let initialized_resp = post_mcp(
@@ -90,6 +94,19 @@ impl McpStreamableHttpSession {
             .context("timeout waiting for event-stream response")??;
 
         Ok(msg)
+    }
+
+    #[allow(dead_code)]
+    pub async fn notify(&self, method: &str) -> anyhow::Result<()> {
+        let response = post_mcp(
+            &self.client,
+            &self.base_url,
+            Some(&self.session_id),
+            json!({"jsonrpc":"2.0","method":method}),
+        )
+        .await?;
+        anyhow::ensure!(response.status().as_u16() == 202, "notification rejected");
+        Ok(())
     }
 }
 

@@ -89,7 +89,8 @@ pub(super) fn parse_proxied_request_id(
             let (rest, sig_b64) = rest.rsplit_once('.')?;
             let (upstream_id, original_b64) = rest.rsplit_once('.')?;
             (upstream_id.to_string(), original_b64, sig_b64)
-        } else if let Some(rest) = s.strip_prefix(&format!("{PROXIED_REQUEST_ID_PREFIX_V2}.")) {
+        } else {
+            let rest = s.strip_prefix(&format!("{PROXIED_REQUEST_ID_PREFIX_V2}."))?;
             // Opaque v2: unrelated.proxy2.<b64(upstream)>.<b64(original)>.<b64(sig)>
             let (upstream_b64, rest) = rest.split_once('.')?;
             let (original_b64, sig_b64) = rest.split_once('.')?;
@@ -98,8 +99,6 @@ pub(super) fn parse_proxied_request_id(
                 .ok()?;
             let upstream_id = String::from_utf8(upstream_bytes).ok()?;
             (upstream_id, original_b64, sig_b64)
-        } else {
-            return None;
         };
 
         let sig_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -129,7 +128,8 @@ pub(super) fn parse_proxied_request_id(
             // Readable: unrelated.proxy.r.<upstream_id>.<b64(original)>
             let (upstream_id, original_b64) = rest.rsplit_once('.')?;
             (upstream_id.to_string(), original_b64)
-        } else if let Some(rest) = s.strip_prefix(&format!("{PROXIED_REQUEST_ID_PREFIX}.")) {
+        } else {
+            let rest = s.strip_prefix(&format!("{PROXIED_REQUEST_ID_PREFIX}."))?;
             // Opaque: unrelated.proxy.<b64(upstream)>.<b64(original)>
             let (upstream_b64, original_b64) = rest.split_once('.')?;
             let upstream_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -137,8 +137,6 @@ pub(super) fn parse_proxied_request_id(
                 .ok()?;
             let upstream_id = String::from_utf8(upstream_bytes).ok()?;
             (upstream_id, original_b64)
-        } else {
-            return None;
         };
 
     let original_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD

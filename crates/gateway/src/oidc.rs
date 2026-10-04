@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 
 const MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
-/// OIDC/JWT validator for protecting the Gateway data plane.
+/// RS256 JWT validator shared by data-plane OAuth and control-plane OIDC.
 ///
 /// This is intentionally **generic** and configuration-driven, so Cognito/Entra/Okta/Auth0 are
 /// "just config".
@@ -48,22 +48,6 @@ pub struct OidcConfig {
 }
 
 impl OidcValidator {
-    /// Load OIDC config from env vars.
-    ///
-    /// Enabled when `UNRELATED_GATEWAY_OIDC_ISSUER` is set (non-empty).
-    ///
-    /// Required:
-    /// - `UNRELATED_GATEWAY_OIDC_ISSUER`
-    ///
-    /// Optional:
-    /// - `UNRELATED_GATEWAY_OIDC_AUDIENCE` (comma-separated)
-    /// - `UNRELATED_GATEWAY_OIDC_JWKS_URI` (overrides discovery)
-    /// - `UNRELATED_GATEWAY_OIDC_LEEWAY_SECS` (default: 60)
-    /// - `UNRELATED_GATEWAY_OIDC_JWKS_REFRESH_SECS` (default: 600)
-    pub async fn from_env(http: reqwest::Client) -> anyhow::Result<Option<Self>> {
-        Self::from_env_prefixed(http, "UNRELATED_GATEWAY_OIDC").await
-    }
-
     /// Load OIDC config from env vars using a custom prefix.
     ///
     /// Example: prefix `UNRELATED_GATEWAY_CONTROL_PLANE_OIDC` expects:
@@ -115,7 +99,8 @@ impl OidcValidator {
                 if !v.starts_with("https://") {
                     tracing::warn!(
                         jwks_uri = %v,
-                        "UNRELATED_GATEWAY_OIDC_JWKS_URI is not https; this should only be used for local development"
+                        env_prefix = %prefix,
+                        "configured JWKS URI is not https; this should only be used for local development"
                     );
                 }
                 v
@@ -159,6 +144,22 @@ impl OidcValidator {
     ///
     /// Mode A: must be validated on every data-plane request.
     pub async fn validate(&self, jwt: &str) -> anyhow::Result<serde_json::Value> {
+        self.validate_with_audience(jwt, None).await
+    }
+
+    pub async fn validate_for_audience(
+        &self,
+        jwt: &str,
+        audience: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        self.validate_with_audience(jwt, Some(audience)).await
+    }
+
+    async fn validate_with_audience(
+        &self,
+        jwt: &str,
+        audience: Option<&str>,
+    ) -> anyhow::Result<serde_json::Value> {
         let header = jsonwebtoken::decode_header(jwt).context("decode jwt header")?;
         // `crit` indicates critical JOSE extensions that must be understood by the verifier.
         // `jsonwebtoken::Header` doesn't expose `crit`, so we decode the raw JOSE header.
@@ -175,7 +176,7 @@ impl OidcValidator {
 
         // Fast path: if we have the key, try decode without refreshing.
         if let Some(key) = self.get_key_if_present(kid).await
-            && let Ok(claims) = self.decode_with_key(jwt, &key)
+            && let Ok(claims) = self.decode_with_key(jwt, &key, audience)
         {
             return Ok(claims);
         }
@@ -188,10 +189,15 @@ impl OidcValidator {
             .await
             .ok_or_else(|| anyhow::anyhow!("unknown jwt kid"))?;
 
-        self.decode_with_key(jwt, &key)
+        self.decode_with_key(jwt, &key, audience)
     }
 
-    fn decode_with_key(&self, jwt: &str, key: &DecodingKey) -> anyhow::Result<serde_json::Value> {
+    fn decode_with_key(
+        &self,
+        jwt: &str,
+        key: &DecodingKey,
+        audience: Option<&str>,
+    ) -> anyhow::Result<serde_json::Value> {
         let mut validation = Validation::new(Algorithm::RS256);
         validation.leeway = self.inner.leeway_secs;
         validation.validate_exp = true;
@@ -199,7 +205,9 @@ impl OidcValidator {
 
         // `jsonwebtoken` expects issuer/audience as string sets; the helpers take `&[&str]`.
         validation.set_issuer(&[self.inner.issuer.as_str()]);
-        if !self.inner.audiences.is_empty() {
+        if let Some(audience) = audience {
+            validation.set_audience(&[audience]);
+        } else if !self.inner.audiences.is_empty() {
             let aud: Vec<&str> = self.inner.audiences.iter().map(String::as_str).collect();
             validation.set_audience(&aud);
         }
@@ -257,7 +265,67 @@ impl OidcValidator {
 
 #[derive(Debug, Deserialize)]
 struct OidcDiscovery {
+    issuer: Option<String>,
     jwks_uri: String,
+}
+
+pub(crate) async fn discover_oauth_jwks_uri(
+    http: &reqwest::Client,
+    issuer: &str,
+) -> anyhow::Result<String> {
+    let rfc8414_url = oauth_authorization_server_metadata_url(issuer)?;
+
+    let primary = fetch_discovery(http, rfc8414_url.as_str()).await;
+    let doc = match primary {
+        Ok(doc) => doc,
+        Err(primary_error) => {
+            let oidc_url = format!(
+                "{}/.well-known/openid-configuration",
+                issuer.trim_end_matches('/')
+            );
+            fetch_discovery(http, &oidc_url).await.with_context(|| {
+                format!("RFC 8414 discovery failed ({primary_error:#}); OIDC fallback also failed")
+            })?
+        }
+    };
+    if doc.issuer.as_deref() != Some(issuer) {
+        anyhow::bail!("authorization-server metadata issuer does not exactly match configuration");
+    }
+    validate_discovered_jwks_uri(&doc.jwks_uri)?;
+    Ok(doc.jwks_uri)
+}
+
+fn oauth_authorization_server_metadata_url(issuer: &str) -> anyhow::Result<reqwest::Url> {
+    let issuer_url = reqwest::Url::parse(issuer).context("parse OAuth issuer")?;
+    let suffix = issuer_url.path().trim_start_matches('/');
+    let mut rfc8414_url = issuer_url.clone();
+    let discovery_path = if suffix.is_empty() {
+        "/.well-known/oauth-authorization-server".to_string()
+    } else {
+        format!("/.well-known/oauth-authorization-server/{suffix}")
+    };
+    rfc8414_url.set_path(&discovery_path);
+    Ok(rfc8414_url)
+}
+
+async fn fetch_discovery(http: &reqwest::Client, url: &str) -> anyhow::Result<OidcDiscovery> {
+    http.get(url)
+        .send()
+        .await
+        .with_context(|| format!("GET discovery {url}"))?
+        .error_for_status()
+        .with_context(|| format!("discovery status {url}"))?
+        .json()
+        .await
+        .context("parse discovery json")
+}
+
+fn validate_discovered_jwks_uri(value: &str) -> anyhow::Result<()> {
+    let parsed = reqwest::Url::parse(value).context("parse discovered jwks_uri")?;
+    if parsed.scheme() != "https" {
+        anyhow::bail!("discovery returned non-https jwks_uri");
+    }
+    Ok(())
 }
 
 async fn discover_jwks_uri(http: &reqwest::Client, issuer: &str) -> anyhow::Result<String> {
@@ -275,13 +343,9 @@ async fn discover_jwks_uri(http: &reqwest::Client, issuer: &str) -> anyhow::Resu
         anyhow::bail!("discovery returned empty jwks_uri");
     }
     // Require HTTPS for discovered endpoints. If you really need HTTP (e.g., local dev),
-    // set `UNRELATED_GATEWAY_OIDC_JWKS_URI` explicitly to override discovery.
-    let parsed = reqwest::Url::parse(&doc.jwks_uri).context("parse discovered jwks_uri")?;
-    if parsed.scheme() != "https" {
-        anyhow::bail!(
-            "discovery returned non-https jwks_uri; set UNRELATED_GATEWAY_OIDC_JWKS_URI to override"
-        );
-    }
+    // set the prefixed JWKS URI explicitly to override discovery.
+    validate_discovered_jwks_uri(&doc.jwks_uri)
+        .context("set the configured JWKS URI to override for loopback development")?;
     Ok(doc.jwks_uri)
 }
 
@@ -383,4 +447,25 @@ fn jwt_has_crit_header(jwt: &str) -> anyhow::Result<bool> {
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("invalid jwt header (expected JSON object)"))?;
     Ok(header.contains_key("crit"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rfc8414_discovery_url_inserts_well_known_before_issuer_path() {
+        assert_eq!(
+            oauth_authorization_server_metadata_url("https://login.example.com/tenant")
+                .unwrap()
+                .as_str(),
+            "https://login.example.com/.well-known/oauth-authorization-server/tenant"
+        );
+        assert_eq!(
+            oauth_authorization_server_metadata_url("https://login.example.com")
+                .unwrap()
+                .as_str(),
+            "https://login.example.com/.well-known/oauth-authorization-server"
+        );
+    }
 }

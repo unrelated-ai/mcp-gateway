@@ -1,3 +1,10 @@
+import { tenantRoutes, bffRoute } from "@/src/lib/gatewayRoutes";
+import {
+  createProfileUpdater,
+  createProfileWriteQueue,
+  type ProfileRevision,
+} from "./profile-updates";
+import type { ToolSourceDetail } from "./tool-source-updates";
 import { tenantFetchJson } from "@/src/lib/tenantFetch";
 import type {
   ApiKeyMetadata,
@@ -8,6 +15,8 @@ import type {
   ToolCallStatsByApiKeyResponse,
   ToolCallStatsByToolResponse,
   Profile,
+  ProfileAuditSettings,
+  ProfileAuditSettingsResponse,
   ToolSourceSummary,
 } from "@/src/lib/types";
 
@@ -82,6 +91,9 @@ export type CreateProfileResponse = {
 };
 
 export type ProfileSurface = {
+  allResources?: import("./surface-transforms").CatalogEntry[];
+  allResourceTemplates?: import("./surface-transforms").CatalogEntry[];
+  allPrompts?: import("./surface-transforms").CatalogEntry[];
   profileId: string;
   generatedAtUnix: number;
   sources: {
@@ -105,6 +117,7 @@ export type ProfileSurface = {
     description?: string | null;
   }[];
   resources: { uri: string; name?: string | null }[];
+  resourceTemplates: { uriTemplate: string; name?: string | null; description?: string | null }[];
   prompts: { name: string; description?: string | null }[];
 };
 
@@ -118,13 +131,13 @@ export type OpenApiInspectResponse = {
 export type ValidateSourceIdResponse = { ok: boolean; error?: string | null };
 
 export async function listUpstreams(): Promise<ListUpstreamsResponse> {
-  return await tenantFetchJson<ListUpstreamsResponse>("/api/tenant/upstreams", {
+  return await tenantFetchJson<ListUpstreamsResponse>(bffRoute(tenantRoutes.UPSTREAMS), {
     cache: "no-store",
   });
 }
 
 export async function getUpstream(id: string): Promise<Upstream> {
-  return await tenantFetchJson<Upstream>(`/api/tenant/upstreams/${encodeURIComponent(id)}`, {
+  return await tenantFetchJson<Upstream>(bffRoute(tenantRoutes.UPSTREAM(id)), {
     cache: "no-store",
   });
 }
@@ -142,7 +155,7 @@ export async function putUpstream(
     }[];
   },
 ): Promise<unknown> {
-  return await tenantFetchJson(`/api/tenant/upstreams/${encodeURIComponent(id)}`, {
+  return await tenantFetchJson(bffRoute(tenantRoutes.UPSTREAM(id)), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -154,26 +167,20 @@ export async function patchUpstreamEndpoint(
   endpointId: string,
   body: { enabled?: boolean; lifecycle?: UpstreamEndpointLifecycle },
 ): Promise<unknown> {
-  return await tenantFetchJson(
-    `/api/tenant/upstreams/${encodeURIComponent(upstreamId)}/endpoints/${encodeURIComponent(endpointId)}`,
-    {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    },
-  );
+  return await tenantFetchJson(bffRoute(tenantRoutes.ENDPOINT(upstreamId, endpointId)), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 export async function deleteUpstreamEndpoint(
   upstreamId: string,
   endpointId: string,
 ): Promise<void> {
-  await tenantFetchJson(
-    `/api/tenant/upstreams/${encodeURIComponent(upstreamId)}/endpoints/${encodeURIComponent(endpointId)}`,
-    {
-      method: "DELETE",
-    },
-  );
+  await tenantFetchJson(bffRoute(tenantRoutes.ENDPOINT(upstreamId, endpointId)), {
+    method: "DELETE",
+  });
 }
 
 export async function getUpstreamSessionActivity(
@@ -184,7 +191,7 @@ export async function getUpstreamSessionActivity(
   if (ttlSecs != null) sp.set("ttlSecs", String(ttlSecs));
   const qs = sp.toString();
   return await tenantFetchJson<UpstreamSessionActivity>(
-    `/api/tenant/upstreams/${encodeURIComponent(upstreamId)}/session-activity${qs ? `?${qs}` : ""}`,
+    `${bffRoute(tenantRoutes.UPSTREAM_ACTIVITY(upstreamId))}${qs ? `?${qs}` : ""}`,
     {
       cache: "no-store",
     },
@@ -195,7 +202,7 @@ export async function listManagedMcpDeployables(): Promise<{
   deployables: ManagedMcpDeployable[];
 }> {
   return await tenantFetchJson<{ deployables: ManagedMcpDeployable[] }>(
-    "/api/tenant/managed-mcp/deployables",
+    bffRoute(tenantRoutes.DEPLOYABLES),
     {
       cache: "no-store",
     },
@@ -206,7 +213,7 @@ export async function createManagedMcpDeploymentRequest(
   deployableId: string,
 ): Promise<{ request: ManagedMcpDeploymentRequest }> {
   return await tenantFetchJson<{ request: ManagedMcpDeploymentRequest }>(
-    "/api/tenant/managed-mcp/deployments",
+    bffRoute(tenantRoutes.DEPLOYMENTS),
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -219,7 +226,7 @@ export async function listManagedMcpDeploymentRequests(): Promise<{
   requests: ManagedMcpDeploymentRequest[];
 }> {
   return await tenantFetchJson<{ requests: ManagedMcpDeploymentRequest[] }>(
-    "/api/tenant/managed-mcp/deployments",
+    bffRoute(tenantRoutes.DEPLOYMENTS),
     {
       cache: "no-store",
     },
@@ -230,7 +237,7 @@ export async function getManagedMcpDeploymentRequest(
   requestId: string,
 ): Promise<{ request: ManagedMcpDeploymentRequest }> {
   return await tenantFetchJson<{ request: ManagedMcpDeploymentRequest }>(
-    `/api/tenant/managed-mcp/deployments/${encodeURIComponent(requestId)}`,
+    bffRoute(tenantRoutes.DEPLOYMENT(requestId)),
     {
       cache: "no-store",
     },
@@ -242,7 +249,7 @@ export async function updateManagedMcpDeploymentRequest(
   body: { enabled?: boolean; replicas?: number },
 ): Promise<{ request: ManagedMcpDeploymentRequest }> {
   return await tenantFetchJson<{ request: ManagedMcpDeploymentRequest }>(
-    `/api/tenant/managed-mcp/deployments/${encodeURIComponent(requestId)}`,
+    bffRoute(tenantRoutes.DEPLOYMENT(requestId)),
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -252,10 +259,11 @@ export async function updateManagedMcpDeploymentRequest(
 }
 
 export async function deleteUpstream(id: string): Promise<void> {
-  await tenantFetchJson(`/api/tenant/upstreams/${encodeURIComponent(id)}`, { method: "DELETE" });
+  await tenantFetchJson(bffRoute(tenantRoutes.UPSTREAM(id)), { method: "DELETE" });
 }
 
 export type UpstreamSurface = {
+  resourceTemplates: ProfileSurface["resourceTemplates"];
   upstreamId: string;
   generatedAtUnix: number;
   sources: {
@@ -273,81 +281,112 @@ export type UpstreamSurface = {
 };
 
 export async function probeUpstreamSurface(id: string): Promise<UpstreamSurface> {
-  return await tenantFetchJson<UpstreamSurface>(
-    `/api/tenant/upstreams/${encodeURIComponent(id)}/surface`,
-    {
-      cache: "no-store",
-    },
-  );
+  return await tenantFetchJson<UpstreamSurface>(bffRoute(tenantRoutes.UPSTREAM_SURFACE(id)), {
+    cache: "no-store",
+  });
 }
 
 export async function listProfiles(): Promise<{ profiles: Profile[] }> {
-  return await tenantFetchJson<{ profiles: Profile[] }>("/api/tenant/profiles", {
+  return await tenantFetchJson<{ profiles: Profile[] }>(bffRoute(tenantRoutes.PROFILES), {
     cache: "no-store",
   });
 }
 
 export async function getProfile(id: string): Promise<Profile> {
-  return await tenantFetchJson<Profile>(`/api/tenant/profiles/${encodeURIComponent(id)}`, {
+  return await tenantFetchJson<Profile>(bffRoute(tenantRoutes.PROFILE(id)), {
     cache: "no-store",
   });
 }
 
 export async function createProfile(body: unknown): Promise<CreateProfileResponse> {
-  return await tenantFetchJson<CreateProfileResponse>("/api/tenant/profiles", {
+  return await tenantFetchJson<CreateProfileResponse>(bffRoute(tenantRoutes.PROFILES), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-export async function putProfile(id: string, body: unknown): Promise<unknown> {
-  return await tenantFetchJson(`/api/tenant/profiles/${encodeURIComponent(id)}`, {
+async function putProfile(id: string, body: unknown): Promise<unknown> {
+  return await tenantFetchJson(bffRoute(tenantRoutes.PROFILE(id)), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
+const profileWriteQueue = createProfileWriteQueue({ read: getProfile });
+export const updateProfile = createProfileUpdater({
+  read: getProfile,
+  write: putProfile,
+  queue: profileWriteQueue,
+});
+
+export async function getProfileAuditSettings(id: string): Promise<ProfileAuditSettingsResponse> {
+  return tenantFetchJson(bffRoute(tenantRoutes.PROFILE_AUDIT(id)), { cache: "no-store" });
+}
+
+export function updateProfileAuditSettings(
+  profile: ProfileRevision,
+  settings: ProfileAuditSettings,
+): Promise<void> {
+  const auditSettings = structuredClone(settings);
+  return profileWriteQueue(profile, (current) =>
+    tenantFetchJson(bffRoute(tenantRoutes.PROFILE_AUDIT(profile.id)), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ auditSettings, expectedRevision: current.revision }),
+    }),
+  );
+}
+
 export async function deleteProfile(id: string): Promise<void> {
-  await tenantFetchJson(`/api/tenant/profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
+  await tenantFetchJson(bffRoute(tenantRoutes.PROFILE(id)), { method: "DELETE" });
 }
 
 export async function probeProfileSurface(id: string): Promise<ProfileSurface> {
-  return await tenantFetchJson<ProfileSurface>(
-    `/api/tenant/profiles/${encodeURIComponent(id)}/surface`,
+  return await tenantFetchJson<ProfileSurface>(bffRoute(tenantRoutes.PROFILE_SURFACE(id)), {
+    cache: "no-store",
+  });
+}
+
+export type ConnectionCheck = {
+  sourceId: string;
+  endpointId?: string;
+  status: "passed" | "failed" | "notChecked";
+  message: string;
+  protocolVersion?: string;
+};
+
+export async function checkProfileConnections(id: string): Promise<{ checks: ConnectionCheck[] }> {
+  return tenantFetchJson(bffRoute(tenantRoutes.PROFILE_CONNECTIONS(id)), { method: "POST" });
+}
+
+export async function listToolSources(): Promise<{ sources: ToolSourceSummary[] }> {
+  return await tenantFetchJson<{ sources: ToolSourceSummary[] }>(
+    bffRoute(tenantRoutes.TOOL_SOURCES),
     {
       cache: "no-store",
     },
   );
 }
 
-export async function listToolSources(): Promise<{ sources: ToolSourceSummary[] }> {
-  return await tenantFetchJson<{ sources: ToolSourceSummary[] }>("/api/tenant/tool-sources", {
+export async function getToolSource(id: string): Promise<ToolSourceDetail> {
+  return await tenantFetchJson<ToolSourceDetail>(bffRoute(tenantRoutes.TOOL_SOURCE(id)), {
     cache: "no-store",
   });
-}
-
-export async function getToolSource(
-  id: string,
-): Promise<{ type: string; enabled: boolean; spec?: Record<string, unknown> }> {
-  return await tenantFetchJson<{ type: string; enabled: boolean; spec?: Record<string, unknown> }>(
-    `/api/tenant/tool-sources/${encodeURIComponent(id)}`,
-    { cache: "no-store" },
-  );
 }
 
 export async function listToolSourceTools(
   id: string,
 ): Promise<{ tools: { name: string; description?: string | null }[] }> {
   return await tenantFetchJson<{ tools: { name: string; description?: string | null }[] }>(
-    `/api/tenant/tool-sources/${encodeURIComponent(id)}/tools`,
+    bffRoute(tenantRoutes.TOOL_SOURCE_TOOLS(id)),
     { cache: "no-store" },
   );
 }
 
 export async function putToolSource(id: string, bodyJson: string): Promise<unknown> {
-  return await tenantFetchJson(`/api/tenant/tool-sources/${encodeURIComponent(id)}`, {
+  return await tenantFetchJson(bffRoute(tenantRoutes.TOOL_SOURCE(id)), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: bodyJson,
@@ -355,14 +394,14 @@ export async function putToolSource(id: string, bodyJson: string): Promise<unkno
 }
 
 export async function deleteToolSource(id: string): Promise<void> {
-  await tenantFetchJson(`/api/tenant/tool-sources/${encodeURIComponent(id)}`, { method: "DELETE" });
+  await tenantFetchJson(bffRoute(tenantRoutes.TOOL_SOURCE(id)), { method: "DELETE" });
 }
 
 export async function openapiInspect(
   specUrl: string,
   auth?: AuthConfig,
 ): Promise<OpenApiInspectResponse> {
-  return await tenantFetchJson<OpenApiInspectResponse>("/api/tenant/tool-sources/openapi/inspect", {
+  return await tenantFetchJson<OpenApiInspectResponse>(bffRoute(tenantRoutes.OPENAPI_INSPECT), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ specUrl, auth }),
@@ -370,21 +409,24 @@ export async function openapiInspect(
 }
 
 export async function validateSourceId(id: string): Promise<ValidateSourceIdResponse> {
-  return await tenantFetchJson<ValidateSourceIdResponse>("/api/tenant/tool-sources/validate-id", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id }),
-  });
+  return await tenantFetchJson<ValidateSourceIdResponse>(
+    bffRoute(tenantRoutes.VALIDATE_SOURCE_ID),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    },
+  );
 }
 
 export async function listSecrets(): Promise<{ secrets: { name: string }[] }> {
-  return await tenantFetchJson<{ secrets: { name: string }[] }>("/api/tenant/secrets", {
+  return await tenantFetchJson<{ secrets: { name: string }[] }>(bffRoute(tenantRoutes.SECRETS), {
     cache: "no-store",
   });
 }
 
 export async function createSecret(body: unknown): Promise<unknown> {
-  return await tenantFetchJson("/api/tenant/secrets", {
+  return await tenantFetchJson(bffRoute(tenantRoutes.SECRETS), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -392,19 +434,19 @@ export async function createSecret(body: unknown): Promise<unknown> {
 }
 
 export async function deleteSecret(name: string): Promise<void> {
-  await tenantFetchJson(`/api/tenant/secrets/${encodeURIComponent(name)}`, { method: "DELETE" });
+  await tenantFetchJson(bffRoute(tenantRoutes.SECRET(name)), { method: "DELETE" });
 }
 
 export async function listApiKeys(): Promise<ApiKeyMetadata[]> {
   const json = await tenantFetchJson<{ apiKeys?: ApiKeyMetadata[]; api_keys?: ApiKeyMetadata[] }>(
-    "/api/tenant/api-keys",
+    bffRoute(tenantRoutes.API_KEYS),
     { cache: "no-store" },
   );
   return (json.apiKeys ?? json.api_keys ?? []) as ApiKeyMetadata[];
 }
 
 export async function createApiKey(body: unknown): Promise<CreateApiKeyResponse> {
-  return await tenantFetchJson<CreateApiKeyResponse>("/api/tenant/api-keys", {
+  return await tenantFetchJson<CreateApiKeyResponse>(bffRoute(tenantRoutes.API_KEYS), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -412,17 +454,17 @@ export async function createApiKey(body: unknown): Promise<CreateApiKeyResponse>
 }
 
 export async function revokeApiKey(id: string): Promise<void> {
-  await tenantFetchJson(`/api/tenant/api-keys/${encodeURIComponent(id)}`, { method: "DELETE" });
+  await tenantFetchJson(bffRoute(tenantRoutes.API_KEY(id)), { method: "DELETE" });
 }
 
 export async function getTenantAuditSettings(): Promise<TenantAuditSettings> {
-  return await tenantFetchJson<TenantAuditSettings>("/api/tenant/audit/settings", {
+  return await tenantFetchJson<TenantAuditSettings>(bffRoute(tenantRoutes.AUDIT_SETTINGS), {
     cache: "no-store",
   });
 }
 
 export async function putTenantAuditSettings(body: TenantAuditSettings): Promise<{ ok: boolean }> {
-  return await tenantFetchJson<{ ok: boolean }>("/api/tenant/audit/settings", {
+  return await tenantFetchJson<{ ok: boolean }>(bffRoute(tenantRoutes.AUDIT_SETTINGS), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -430,15 +472,18 @@ export async function putTenantAuditSettings(body: TenantAuditSettings): Promise
 }
 
 export async function getTenantTransportLimits(): Promise<TenantTransportLimitsSettings> {
-  return await tenantFetchJson<TenantTransportLimitsSettings>("/api/tenant/transport/limits", {
-    cache: "no-store",
-  });
+  return await tenantFetchJson<TenantTransportLimitsSettings>(
+    bffRoute(tenantRoutes.TRANSPORT_LIMITS),
+    {
+      cache: "no-store",
+    },
+  );
 }
 
 export async function putTenantTransportLimits(
   body: TenantTransportLimitsSettings,
 ): Promise<{ ok: boolean }> {
-  return await tenantFetchJson<{ ok: boolean }>("/api/tenant/transport/limits", {
+  return await tenantFetchJson<{ ok: boolean }>(bffRoute(tenantRoutes.TRANSPORT_LIMITS), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -468,7 +513,7 @@ export async function listAuditEvents(params: {
   if (params.limit != null) sp.set("limit", String(params.limit));
   const qs = sp.toString();
   return await tenantFetchJson<AuditEventsResponse>(
-    `/api/tenant/audit/events${qs ? `?${qs}` : ""}`,
+    `${bffRoute(tenantRoutes.AUDIT_EVENTS)}${qs ? `?${qs}` : ""}`,
     {
       cache: "no-store",
     },
@@ -482,8 +527,10 @@ export async function toolCallStatsByTool(params: {
   apiKeyId?: string;
   toolRef?: string;
   limit?: number;
+  offset?: number;
 }): Promise<ToolCallStatsByToolResponse> {
   const sp = new URLSearchParams();
+  if (params.offset != null) sp.set("offset", String(params.offset));
   if (params.fromUnixSecs != null) sp.set("fromUnixSecs", String(params.fromUnixSecs));
   if (params.toUnixSecs != null) sp.set("toUnixSecs", String(params.toUnixSecs));
   if (params.profileId) sp.set("profileId", params.profileId);
@@ -492,7 +539,7 @@ export async function toolCallStatsByTool(params: {
   if (params.limit != null) sp.set("limit", String(params.limit));
   const qs = sp.toString();
   return await tenantFetchJson<ToolCallStatsByToolResponse>(
-    `/api/tenant/audit/analytics/tool-calls/by-tool${qs ? `?${qs}` : ""}`,
+    `${bffRoute(tenantRoutes.AUDIT_BY_TOOL)}${qs ? `?${qs}` : ""}`,
     { cache: "no-store" },
   );
 }
@@ -504,8 +551,10 @@ export async function toolCallStatsByApiKey(params: {
   apiKeyId?: string;
   toolRef?: string;
   limit?: number;
+  offset?: number;
 }): Promise<ToolCallStatsByApiKeyResponse> {
   const sp = new URLSearchParams();
+  if (params.offset != null) sp.set("offset", String(params.offset));
   if (params.fromUnixSecs != null) sp.set("fromUnixSecs", String(params.fromUnixSecs));
   if (params.toUnixSecs != null) sp.set("toUnixSecs", String(params.toUnixSecs));
   if (params.profileId) sp.set("profileId", params.profileId);
@@ -514,7 +563,7 @@ export async function toolCallStatsByApiKey(params: {
   if (params.limit != null) sp.set("limit", String(params.limit));
   const qs = sp.toString();
   return await tenantFetchJson<ToolCallStatsByApiKeyResponse>(
-    `/api/tenant/audit/analytics/tool-calls/by-api-key${qs ? `?${qs}` : ""}`,
+    `${bffRoute(tenantRoutes.AUDIT_BY_API_KEY)}${qs ? `?${qs}` : ""}`,
     { cache: "no-store" },
   );
 }

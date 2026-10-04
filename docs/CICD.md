@@ -4,8 +4,9 @@ This repo is a monorepo. CI is generic; releases are tag-driven.
 
 ## Workflows
 
-- **CI**: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (PRs only, no publishing)
+- **CI**: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (PRs, `main` pushes, and manual runs; no publishing)
   - Rust checks: `fmt`, `clippy`, `cargo test`
+  - Gateway PostgreSQL contracts: `make test-gateway-contracts` (Docker; explicitly runs the selected ignored integration tests)
   - Helm checks: `helm dependency build`, `helm lint`, `helm template` (dev/prod/kind-local value combinations)
 - **Release entrypoint**: [`.github/workflows/release.yml`](../.github/workflows/release.yml) (tag pushes only)
 - **Reusable publisher**: [`.github/workflows/docker-release.yml`](../.github/workflows/docker-release.yml) (called from `release.yml`)
@@ -17,7 +18,7 @@ This repo is a monorepo. CI is generic; releases are tag-driven.
 Use these release tags:
 
 - **Adapter**: `adapter-vX.Y.Z` (or `adapter-vX.Y.Z-rc.N`)
-- **Gateway line**: `gateway-vX.Y.Z` (or `gateway-vX.Y.Z-rc.N`) for gateway + migrator + operator + gateway CLI assets
+- **Gateway line**: `gateway-vX.Y.Z` (or `gateway-vX.Y.Z-rc.N`) for Gateway, migrator, Operator, both CLIs, and deployment packages
 - **Web UI**: `ui-vX.Y.Z` (or `ui-vX.Y.Z-rc.N`)
 
 ## Published image + tags
@@ -70,6 +71,11 @@ On `gateway-v*` tags, the release workflow publishes:
 - Gateway admin CLI release assets:
   - `unrelated-gateway-admin-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz`
   - `unrelated-gateway-admin-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz.sha256`
+- User-facing `unrelated` CLI archives and checksums for Linux and macOS, on
+  x86-64 and ARM64. Linux archives use the GNU target; macOS archives use Darwin.
+  Each runner verifies native credential storage before uploading its archive.
+- All Helm charts, with their dependencies bundled, plus the quickstart Compose
+  file and shared image defaults. `deployment-SHA256SUMS` covers these files.
 
 This is a single operator image used for both runtime modes; behavior is selected at runtime via:
 
@@ -101,7 +107,7 @@ Run CI checks locally before tagging:
 make ci
 ```
 
-If you have Docker available and want the full integration coverage:
+Full integration coverage requires Docker:
 
 ```bash
 make test-integration
@@ -128,6 +134,9 @@ git push origin adapter-vX.Y.Z
 - Update `crates/gateway/Cargo.toml` `version = "X.Y.Z"`
 - Update `crates/gateway-cli/Cargo.toml` `version = "X.Y.Z"` (CLI is released with the Gateway tag)
 - Update `crates/gateway-operator/Cargo.toml` `version = "X.Y.Z"` (Operator image is released with the Gateway tag)
+- Update `crates/unrelated-cli/Cargo.toml` `version = "X.Y.Z"`
+- Update the Helm chart and dependency versions, image defaults, and quickstart
+  references; rebuild the chart lockfiles with `helm dependency update`.
 - Update `CHANGELOG.md`
 
 2. Tag and push:

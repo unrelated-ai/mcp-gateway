@@ -6,9 +6,9 @@ use common::pg::{apply_dbmate_migrations, wait_pg_ready};
 use common::{KillOnDrop, spawn_gateway, wait_http_ok};
 use serde_json::{Value, json};
 use std::time::Duration;
+use testcontainers::ImageExt as _;
 use testcontainers::core::IntoContainerPort;
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{GenericImage, ImageExt as _};
 
 const TOKEN: &str = "inspect-fixture-token";
 const ADMIN_TOKEN: &str = "inspect-admin-token";
@@ -34,7 +34,7 @@ async fn post(
 #[ignore = "requires Docker (testcontainers)"]
 #[allow(clippy::too_many_lines)]
 async fn openapi_inspect_authenticates_with_tenant_scoped_secrets() -> anyhow::Result<()> {
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")

@@ -4,9 +4,11 @@
 
 The Gateway is the **public-facing** MCP endpoint for clients.
 
-Today it provides **profile-based MCP proxying + upstream aggregation** and **HA-ready session routing** (stateless session tokens), plus a bearer-token-protected **admin/control plane** (Mode 3 / Postgres).
+It provides **profile-based MCP proxying + upstream aggregation** and **HA-ready session routing** (stateless session tokens), plus a bearer-token-protected **admin/control plane** (Mode 3 / Postgres).
 
-Tenant-facing **data-plane authn/z** is implemented (API keys + OIDC/JWT, configured per profile). Broader policy (audit detail levels, resources/prompts allow/deny) is still evolving.
+Profiles support API-key and OAuth authentication. Audit detail can inherit tenant
+settings or use a profile override. Profiles also control resource and prompt
+availability, metadata, and prompt argument aliases and defaults.
 
 ## Key concepts
 
@@ -44,9 +46,9 @@ Gateway
   - Route/proxy MCP requests to upstream MCP servers, including Adapters
   - Provide cross-profile/session routing and aggregation behaviors
 
-## Authorization forwarding stance (important)
+## Authorization forwarding
 
-We follow MCP security guidance to avoid “confused deputy” risks:
+The Gateway keeps client credentials separate from upstream credentials:
 
 - **Data plane**: the caller’s `Authorization` header (used to authenticate the caller to the Gateway) is **never forwarded** to:
   - upstream MCP servers (Adapters or other MCP servers), or
@@ -79,12 +81,12 @@ These are intentionally separate; topology is not a new runtime mode.
 
 ### Managed deployment enforcement
 
-- `UNRELATED_GATEWAY_TOPOLOGY` tells you **what deployment shape you are running** (`none`, `operator-oss`, `controller-enterprise`). It is informational and shows up in `/status` and UI checks.
+- `UNRELATED_GATEWAY_TOPOLOGY` describes the deployment topology (`none`, `operator-oss`, `controller-enterprise`). It is informational and shows up in `/status` and UI checks.
 - `UNRELATED_MANAGED_MCP_BACKEND_MODE` tells Gateway **whether it should accept managed deployment requests at all**, and for which backend (`none`, `k8s`, `docker`).
 
-Why this split matters: in older behavior, requests could be accepted even when no reconciler was running, then stay `pending` forever. The backend-mode + heartbeat checks prevent that.
+Backend configuration and heartbeat checks prevent requests from remaining pending when no reconciler is available.
 
-Managed deployment request acceptance now uses these settings:
+Managed deployment request acceptance uses these settings:
 
 - `UNRELATED_MANAGED_MCP_BACKEND_MODE`: `none` | `k8s` | `docker`
   - `none`: tenant create/update requests are rejected with `409` (disabled by config)
@@ -96,7 +98,7 @@ Managed deployment request acceptance now uses these settings:
 Reconcilers report liveness via `POST /admin/v1/managed-mcp/reconciler-heartbeat`.
 Gateway exposes current state in `/status` under `managedMcp` (`backendMode`, `reconcilerHealthy`, `acceptingRequests`, etc.) so operators and UI can explain why requests are accepted or rejected.
 
-## Configuration and control plane (current)
+## Configuration and control plane
 
 The Gateway supports two storage/config modes:
 
@@ -110,7 +112,7 @@ Notes:
 - Claim-based RBAC is not implemented (current model is API key + OIDC principal bindings).
 - Audit logging (Mode 3 / Postgres): [`docs/gateway/AUDIT.md`](AUDIT.md).
 
-### Ports (from the start)
+### Listeners
 
 Run the Gateway with two listeners:
 
@@ -119,7 +121,7 @@ Run the Gateway with two listeners:
 
 This makes it easy to expose the data plane publicly while keeping admin/ops private.
 
-### Control plane auth (current)
+### Control plane authentication
 
 - Admin API auth supports two machine-auth paths:
   - Static compatibility token: `Authorization: Bearer <token>` with `UNRELATED_GATEWAY_ADMIN_TOKEN`.
@@ -134,35 +136,35 @@ This makes it easy to expose the data plane publicly while keeping admin/ops pri
     - mutation routes (`POST`/`PUT`/`PATCH`/`DELETE`): `UNRELATED_GATEWAY_CONTROL_PLANE_SCOPE_WRITE` (default `gateway.operator.write`)
 - Tenant API auth (Mode 3): `Authorization: Bearer <tenant_token>` where the tenant token is issued by the admin API (`POST /admin/v1/tenant-tokens`).
 - Data plane auth (implemented):
-  - Per-profile `dataPlaneAuth` policy (Mode 3): `disabled` | `apiKeyInitializeOnly` | `apiKeyEveryRequest` | `jwtEveryRequest`
+  - Per-profile `dataPlaneAuth` policy (Mode 3): `disabled` | `apiKey` | `oauth`
   - API key secret header formats:
     - `Authorization: Bearer <api_key_secret>` (primary)
     - `x-api-key: <api_key_secret>` (optional alias when `acceptXApiKey=true`)
   - OIDC/JWT header format:
-    - `Authorization: Bearer <jwt>` (required on every request when `mode=jwtEveryRequest`)
-    - OIDC is enabled/configured via env (`UNRELATED_GATEWAY_OIDC_ISSUER`, etc.)
+    - `Authorization: Bearer <jwt>` (required on every request when `mode=oauth`)
+    - OAuth requires `UNRELATED_GATEWAY_OAUTH_ISSUER` and `UNRELATED_GATEWAY_PUBLIC_DATA_BASE_URL`; see [data-plane auth](DATA_PLANE_AUTH.md).
   - Mode 1 can optionally enable static API keys via `dataPlaneAuth` in the config file.
   - Per-profile `dataPlaneLimits` policy (Mode 3, optional; disabled by default):
     - fixed-window per-minute `tools/call` rate limit (per API key)
     - `tools/call` quota (per API key; decremented on attempt)
 
-## HA and session routing (Model B)
+## HA and session routing
 
-### Why this exists at all
+### Session affinity
 
-With MCP-over-streamable-HTTP, the client and server communicate using a **session id** (`Mcp-Session-Id`). This session id is not just a “nice to have”:
+Session-based MCP clients and servers use `Mcp-Session-Id` to identify an upstream session:
 
 - It’s how the **streamable HTTP transport** correlates requests with the right server-side session (similar to how a WebSocket connection implicitly carries “session affinity”).
 - Many MCP servers are **stateful per session** (examples: headless browser control, in-memory caches, conversational context, resource subscriptions, long-running operations).
 
-So, in any Gateway that can run multiple nodes, we must ensure:
+Across multiple Gateway replicas:
 
 - **All requests for a given MCP session** are routed to the same upstream MCP session (and usually the same upstream _node_ that owns that session).
 - This must still work even if the load balancer sends requests to different Gateway nodes.
 
-### Model B: stateless “Gateway session token”
+### Gateway session tokens
 
-Model B makes the **Gateway session id** a self-contained, cryptographically protected token that encodes where the upstream session(s) live.
+The **Gateway session id** is a self-contained, cryptographically protected token that encodes where the upstream session(s) live.
 
 At a minimum, the token needs:
 
@@ -177,7 +179,7 @@ At a minimum, the token needs:
 
 This is similar in spirit to a JWT, but it is **not** an auth token: it is a **routing token** owned by the Gateway.
 
-Current implementation notes (Gateway session token):
+Token configuration:
 
 - **Token format**: **PASETO `v4.local`** (encrypted + authenticated).
   - Footer carries a short `kid` for key rotation (footer is authenticated but not encrypted).
@@ -253,20 +255,59 @@ Default behavior:
 - If some upstreams fail to initialize, the Gateway still returns a session with the healthy upstreams.
 - It emits warnings (logs, and optionally surfaced to the client via `InitializeResult.instructions`).
 
-### Do we need “stateful vs stateless upstream” config?
+### Stateful and sessionless upstreams
 
-For streamable HTTP, we should assume **session-affinity is always required**, because the protocol uses `Mcp-Session-Id` and upstream servers commonly keep per-session state.
+The Gateway accepts either kind of Streamable HTTP upstream. Initialization records
+an optional upstream session ID and the negotiated protocol version. Subsequent
+requests send `Mcp-Session-Id` only when the upstream issued it, and send the negotiated
+`MCP-Protocol-Version`. This follows the [MCP transport contract](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).
 
-What we _can_ configure is:
+- An upstream GET returning 405 means that it does not offer an event stream;
+  the Gateway can still serve the profile and its other upstream streams.
+- DELETE cleanup applies only to upstreams that issued a session ID.
+- Existing stateful tokens remain readable by v1. Tokens for sessionless upstreams
+  require updated Gateway replicas.
+- The Adapter still enables stateful mode, including for stdio process integrations.
 
-- how we **choose an upstream endpoint** for a _new_ session (round-robin, least-connections, etc.)
-- session idle timeouts / max lifetime
-- whether the Gateway **signs only** (opaque but readable) or **encrypts** (opaque + confidential) its session tokens
+The Gateway still issues its own routing token for the downstream profile. It chooses
+an endpoint during initialization and retains that binding for the token lifetime.
+Sessionless support removes the upstream session requirement; it does not add automatic
+per-request endpoint reselection or replay failed tool calls. An upstream URL may itself
+point to a load balancer for interchangeable sessionless replicas.
 
-Current behavior: for each upstream, the gateway **selects an endpoint during `initialize`** and pins the chosen `endpoint_id` in the signed session token:
+### Request configuration, concurrency, and cache lifetime
 
-- It starts at a pseudo-random index (per `initialize`) and tries endpoints in that order.
-- If an endpoint is down, `initialize` **fails over** to the next endpoint (best-effort).
+`mcp/transport.rs` handles HTTP decoding and body limits. `mcp/request_context.rs`
+loads the profile and effective transport limits once per POST. Initialization,
+authorization, routing, and streamed tool-call limits reuse that request context.
+The next POST reloads configuration; this is not a cross-request profile cache or
+an atomic database snapshot across every configuration table.
+
+`mcp/initialize.rs` initializes independent sources concurrently. Upstream list
+aggregation and GET-stream setup use the same bounded work scheduler. Results are
+assembled in profile order so completion order does not change tool naming or routing.
+
+| Setting                                             | Default               | Accepted range |
+| --------------------------------------------------- | --------------------- | -------------- |
+| `UNRELATED_GATEWAY_UPSTREAM_CONCURRENCY`            | 8 upstreams per batch | 1–64           |
+| `UNRELATED_GATEWAY_UPSTREAM_OPERATION_TIMEOUT_SECS` | 10 seconds per batch  | 1–300          |
+
+Positive values are clamped to these ranges; invalid or zero values use the defaults.
+The deadline includes waiting for a concurrency slot and reading list responses.
+Queued work is not started after the deadline. Completed initialization results can
+be used when `allowPartialUpstreams` permits it; otherwise initialization fails.
+List aggregation retains successful upstream results and logs failures, as before.
+GET-stream setup fails if an upstream fails or times out; a 405 is an optional-stream
+response, not a failure. Once established, SSE streams use their existing stream
+lifecycle rules, not the setup deadline. HTTP connection establishment has a five-second
+connect timeout. Tool calls retain their separate profile/tool timeout budgets.
+
+Tool-surface and endpoint caches each hold at most 4,096 entries with a 30-second TTL.
+Reads reject expired entries. Inserts reclaim expired entries and evict the oldest
+entry at capacity; background maintenance reclaims abandoned entries every 30 seconds.
+Maintenance stops with the Gateway shutdown token. These caches contain reconstructible
+data, so eviction does not invalidate a routing token. The bound is on entries, not bytes.
+Tool catalogs remain session-specific; cross-session catalog sharing is deferred.
 
 ### Tool call timeouts + retries (Gateway ↔ Adapter coordination)
 
@@ -295,4 +336,4 @@ For `tools/call` only, the Gateway enforces a **timeout budget** (and optional r
 
 ## Observability
 
-The Gateway emits structured logs and is intended to be deployed behind your normal observability stack.
+The Gateway emits structured logs and is intended to be deployed behind an observability stack.

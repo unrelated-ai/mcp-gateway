@@ -55,7 +55,7 @@ Notes:
 - Some fixtures are meant to **fail** (to demonstrate validation), for example:
   - `adapter-invalid-restart-backoff.yaml`
   - `http-tools-auth-missing-env.yaml`
-- Some fixtures assume the **docker-compose** network (e.g. `http://httpbin:80`, `http://petstore:8080`). If you’re not running the demo stack, prefer the `*-host.yaml` variants.
+- Some fixtures assume the **docker-compose** network (e.g. `http://httpbin:80`, `http://petstore:8080`). Outside the demo stack, use the `*-host.yaml` variants.
 - The `stdio-*.yaml` fixtures require **Node/npm** (`npx`) for the example MCP servers; they’re easiest to run via the demo stack (`make up`) or with the adapter’s `stdio-node` image target.
 - `openapi-mini-spec.yaml` is an OpenAPI **spec file** used by other fixtures (not an adapter config by itself).
 
@@ -73,7 +73,7 @@ make down
 
 ## Optional HTTP bearer-token guardrail
 
-If you set `UNRELATED_MCP_BEARER_TOKEN` (or `adapter.mcpBearerToken`), the adapter will require
+Setting `UNRELATED_MCP_BEARER_TOKEN` (or `adapter.mcpBearerToken`) requires
 `Authorization: Bearer <token>` for all non-health endpoints (including `/mcp`).
 
 Quick manual check:

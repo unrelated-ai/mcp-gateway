@@ -1,24 +1,19 @@
+mod managed_deployments;
+mod profiles;
+
 use crate::audit::{AuditActor, AuditError, HttpAuditEvent};
-use crate::managed_mcp::{ManagedMcpRuntimeConfig, ManagedMcpWriteGuard, managed_mcp_write_guard};
-use crate::profile_http::{
-    DataPlaneAuthSettings, DataPlaneLimitsSettings, NullableString, NullableU64,
-    default_data_plane_auth_mode, resolve_nullable_u64, validate_tool_allowlist,
-    validate_tool_timeout_and_policies,
-};
+use crate::managed_mcp::ManagedMcpRuntimeConfig;
 use crate::serde_helpers::default_true;
 use crate::store::{
-    AdminProfile, AdminStore, AdminUpstream, ApiKeyMetadata, DataPlaneAuthMode,
-    ManagedMcpDeployable, ManagedMcpDeploymentRequest, McpProfileSettings, PutProfileDataPlaneAuth,
-    PutProfileFlags, PutProfileInput, PutProfileLimits, TenantSecretMetadata, ToolSourceKind,
-    TransportLimitsSettings, UpstreamEndpoint, UpstreamEndpointActivity, UpstreamEndpointLifecycle,
-    UpstreamNetworkClass,
+    AdminStore, AdminUpstream, ApiKeyMetadata, DataPlaneAuthMode, McpProfileSettings,
+    TenantSecretMetadata, ToolSourceKind, TransportLimitsSettings, UpstreamEndpoint,
+    UpstreamEndpointActivity, UpstreamEndpointLifecycle, UpstreamNetworkClass,
 };
 use crate::tenant_token::TenantSigner;
-use crate::tool_policy::ToolPolicy;
 use axum::extract::{Path, Query};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, patch};
+use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rmcp::model::Tool;
@@ -27,6 +22,8 @@ use serde_json::Value;
 use sha2::Digest as _;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use unrelated_gateway_api::error::{ApiError, Resource, StoreKind};
+use unrelated_gateway_api::routes;
 use unrelated_http_tools::config::AuthConfig;
 use unrelated_http_tools::config::HttpServerConfig;
 use unrelated_openapi_tools::config::{
@@ -35,11 +32,6 @@ use unrelated_openapi_tools::config::{
 use unrelated_openapi_tools::runtime::OpenApiToolSource;
 use unrelated_tool_transforms::TransformPipeline;
 use uuid::{Uuid, Version};
-
-const OIDC_NOT_CONFIGURED_MSG: &str = "JWT/OIDC is unavailable because OIDC is not configured on the Gateway (missing UNRELATED_GATEWAY_OIDC_ISSUER). Configure OIDC or choose a different mode.";
-const DEFAULT_TENANT_MANAGED_MCP_DEPLOYMENT_LIST_LIMIT: u32 = 200;
-const MIN_MANAGED_MCP_REPLICAS: i32 = 0;
-const MAX_MANAGED_MCP_REPLICAS: i32 = 50;
 
 #[derive(Clone)]
 pub struct TenantState {
@@ -55,92 +47,87 @@ pub struct TenantState {
 
 pub fn router(state: Arc<TenantState>) -> Router {
     Router::new()
-        .route("/tenant/v1/upstreams", get(list_upstreams))
+        .route(routes::tenant::UPSTREAMS.template(), get(list_upstreams))
         .route(
-            "/tenant/v1/upstreams/{upstream_id}",
+            routes::tenant::UPSTREAM.template(),
             get(get_upstream).put(put_upstream).delete(delete_upstream),
         )
         .route(
-            "/tenant/v1/upstreams/{upstream_id}/endpoints/{endpoint_id}",
+            routes::tenant::ENDPOINT.template(),
             patch(patch_upstream_endpoint).delete(delete_upstream_endpoint),
         )
         .route(
-            "/tenant/v1/upstreams/{upstream_id}/surface",
+            routes::tenant::UPSTREAM_SURFACE.template(),
             get(get_upstream_surface),
         )
         .route(
-            "/tenant/v1/upstreams/{upstream_id}/session-activity",
+            routes::tenant::UPSTREAM_ACTIVITY.template(),
             get(get_upstream_session_activity),
         )
+        .merge(managed_deployments::router())
+        .merge(profiles::router())
         .route(
-            "/tenant/v1/managed-mcp/deployables",
-            get(list_managed_mcp_deployables),
-        )
-        .route(
-            "/tenant/v1/managed-mcp/deployments",
-            get(list_managed_mcp_deployment_requests).post(create_managed_mcp_deployment_request),
-        )
-        .route(
-            "/tenant/v1/managed-mcp/deployments/{request_id}",
-            get(get_managed_mcp_deployment_request).patch(patch_managed_mcp_deployment_request),
-        )
-        .route(
-            "/tenant/v1/profiles",
-            get(list_profiles).post(create_profile),
-        )
-        .route(
-            "/tenant/v1/profiles/{profile_id}",
-            get(get_profile).put(put_profile).delete(delete_profile),
-        )
-        .route(
-            "/tenant/v1/profiles/{profile_id}/audit/settings",
+            routes::tenant::PROFILE_AUDIT.template(),
             get(get_profile_audit_settings).put(put_profile_audit_settings),
         )
         .route(
-            "/tenant/v1/profiles/{profile_id}/surface",
+            routes::tenant::PROFILE_SURFACE.template(),
             get(get_profile_surface),
         )
-        .route("/tenant/v1/tool-sources", get(list_tool_sources))
         .route(
-            "/tenant/v1/tool-sources/{source_id}/tools",
+            routes::tenant::PROFILE_CONNECTIONS.template(),
+            post(check_profile_connections),
+        )
+        .route(
+            routes::tenant::TOOL_SOURCES.template(),
+            get(list_tool_sources),
+        )
+        .route(
+            routes::tenant::TOOL_SOURCE_TOOLS.template(),
             get(get_tool_source_tools),
         )
         .route(
-            "/tenant/v1/tool-sources/{source_id}",
+            routes::tenant::TOOL_SOURCE.template(),
             get(get_tool_source)
                 .put(put_tool_source)
                 .delete(delete_tool_source),
         )
         .route(
-            "/tenant/v1/tool-sources/openapi/inspect",
+            routes::tenant::OPENAPI_INSPECT.template(),
             axum::routing::post(openapi_inspect),
         )
         .route(
-            "/tenant/v1/tool-sources/validate-id",
+            routes::tenant::VALIDATE_SOURCE_ID.template(),
             axum::routing::post(validate_source_id),
         )
-        .route("/tenant/v1/secrets", get(list_secrets).post(put_secret))
-        .route("/tenant/v1/secrets/{name}", delete(delete_secret))
         .route(
-            "/tenant/v1/api-keys",
+            routes::tenant::SECRETS.template(),
+            get(list_secrets).post(put_secret),
+        )
+        .route(routes::tenant::SECRET.template(), delete(delete_secret))
+        .route(
+            routes::tenant::API_KEYS.template(),
             get(list_api_keys).post(create_api_key),
         )
-        .route("/tenant/v1/api-keys/{api_key_id}", delete(revoke_api_key))
+        .route(routes::tenant::API_KEY.template(), delete(revoke_api_key))
         .route(
-            "/tenant/v1/audit/settings",
+            routes::tenant::AUDIT_SETTINGS.template(),
             get(get_audit_settings).put(put_audit_settings),
         )
         .route(
-            "/tenant/v1/transport/limits",
+            routes::tenant::TRANSPORT_LIMITS.template(),
             get(get_transport_limits).put(put_transport_limits),
         )
-        .route("/tenant/v1/audit/events", get(list_audit_events))
         .route(
-            "/tenant/v1/audit/analytics/tool-calls/by-tool",
+            routes::tenant::AUDIT_EVENTS.template(),
+            get(list_audit_events),
+        )
+        .route(
+            routes::tenant::AUDIT_BY_TOOL.template(),
             get(tool_call_stats_by_tool),
         )
         .route(
-            "/tenant/v1/audit/analytics/tool-calls/by-api-key",
+            routes::tenant::AUDIT_BY_API_KEY.template(),
             get(tool_call_stats_by_api_key),
         )
         .layer(axum::Extension(state))
@@ -186,9 +173,7 @@ struct ValidateSourceIdResponse {
 const TENANT_UPSTREAM_ID_PREFIX: &str = "tu1.";
 
 pub(crate) fn tenant_upstream_internal_id(tenant_id: &str, upstream_id: &str) -> String {
-    let t = URL_SAFE_NO_PAD.encode(tenant_id);
-    let u = URL_SAFE_NO_PAD.encode(upstream_id);
-    format!("{TENANT_UPSTREAM_ID_PREFIX}{t}.{u}")
+    unrelated_mcp_support::tenant_upstream_id(tenant_id, upstream_id)
 }
 
 fn parse_tenant_upstream_internal_id(id: &str) -> Option<(String, String)> {
@@ -199,87 +184,6 @@ fn parse_tenant_upstream_internal_id(id: &str) -> Option<(String, String)> {
     let tenant_id = String::from_utf8(t).ok()?;
     let upstream_id = String::from_utf8(u).ok()?;
     Some((tenant_id, upstream_id))
-}
-
-fn is_profile_mcp_endpoint_url(profile_id: &str, url: &str) -> bool {
-    let Ok(u) = reqwest::Url::parse(url) else {
-        return false;
-    };
-    let want = format!("/{profile_id}/mcp");
-    u.path() == want || u.path() == format!("{want}/")
-}
-
-async fn validate_no_self_upstream_loop(
-    store: &dyn AdminStore,
-    profile_id: &str,
-    upstream_ids: &[String],
-) -> Result<(), axum::response::Response> {
-    for upstream_id in upstream_ids {
-        let Some(upstream) = store
-            .get_upstream(upstream_id)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response())?
-        else {
-            continue;
-        };
-        for ep in upstream.endpoints {
-            if is_profile_mcp_endpoint_url(profile_id, &ep.url) {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    format!(
-                        "upstream endpoint '{}' points to this profile's MCP endpoint (self-loop)",
-                        ep.url
-                    ),
-                )
-                    .into_response());
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn resolve_upstream_ids_for_tenant(
-    store: &dyn AdminStore,
-    tenant_id: &str,
-    upstream_ids: &[String],
-) -> Result<Vec<String>, axum::response::Response> {
-    let mut out = Vec::with_capacity(upstream_ids.len());
-    for id in upstream_ids {
-        let internal = tenant_upstream_internal_id(tenant_id, id);
-        let tenant_owned = store
-            .get_upstream(&internal)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response())?
-            .is_some();
-        if tenant_owned {
-            out.push(internal);
-            continue;
-        }
-
-        let global = store
-            .get_upstream(id)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response())?
-            .is_some();
-        if global {
-            out.push(id.clone());
-            continue;
-        }
-
-        return Err((StatusCode::BAD_REQUEST, format!("unknown upstream '{id}'")).into_response());
-    }
-    Ok(out)
-}
-
-async fn resolve_upstreams_for_create_profile(
-    store: &dyn AdminStore,
-    tenant_id: &str,
-    profile_id: &str,
-    upstream_ids: &[String],
-) -> Result<Vec<String>, axum::response::Response> {
-    let resolved = resolve_upstream_ids_for_tenant(store, tenant_id, upstream_ids).await?;
-    validate_no_self_upstream_loop(store, profile_id, &resolved).await?;
-    Ok(resolved)
 }
 
 fn authn(headers: &HeaderMap, signer: &TenantSigner) -> Result<String, impl IntoResponse> {
@@ -301,8 +205,8 @@ async fn ensure_enabled_tenant(
 ) -> Result<(), Response> {
     match store.get_tenant(tenant_id).await {
         Ok(Some(t)) if t.enabled => Ok(()),
-        Ok(_) => Err((StatusCode::UNAUTHORIZED, "invalid tenant").into_response()),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()),
+        Ok(_) => Err(ApiError::invalid_tenant().into_response()),
+        Err(e) => Err(ApiError::internal(e).into_response()),
     }
 }
 
@@ -360,13 +264,13 @@ async fn list_upstreams(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     match store.list_upstreams().await {
@@ -377,7 +281,7 @@ async fn list_upstreams(
                 .collect();
             Json(UpstreamsResponse { upstreams }).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -391,7 +295,7 @@ async fn get_upstream(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Prefer tenant-owned upstream if present; otherwise fall back to global.
@@ -401,16 +305,16 @@ async fn get_upstream(
         Ok(None) => match store.get_upstream(&upstream_id).await {
             Ok(Some(u)) => Some(u),
             Ok(None) => None,
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Err(e) => return ApiError::internal(e).into_response(),
         },
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
     let Some(u) = u else {
-        return (StatusCode::NOT_FOUND, "upstream not found").into_response();
+        return ApiError::not_found(Resource::Upstream).into_response();
     };
 
     let Some(resp) = upstream_to_response(&tenant_id, u) else {
-        return (StatusCode::NOT_FOUND, "upstream not found").into_response();
+        return ApiError::not_found(Resource::Upstream).into_response();
     };
     Json(resp).into_response()
 }
@@ -426,7 +330,7 @@ async fn get_upstream_session_activity(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Resolve tenant-owned upstream first, then global visible upstream.
@@ -438,13 +342,13 @@ async fn get_upstream_session_activity(
                 if upstream_to_response(&tenant_id, u).is_some() {
                     upstream_id.clone()
                 } else {
-                    return (StatusCode::NOT_FOUND, "upstream not found").into_response();
+                    return ApiError::not_found(Resource::Upstream).into_response();
                 }
             }
-            Ok(None) => return (StatusCode::NOT_FOUND, "upstream not found").into_response(),
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Ok(None) => return ApiError::not_found(Resource::Upstream).into_response(),
+            Err(e) => return ApiError::internal(e).into_response(),
         },
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     let ttl_secs = crate::pg_store::resolve_upstream_session_activity_ttl_secs(q.ttl_secs);
@@ -462,203 +366,8 @@ async fn get_upstream_session_activity(
             })
             .into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
-}
-
-async fn list_managed_mcp_deployables(
-    axum::Extension(state): axum::Extension<Arc<TenantState>>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    let tenant_id = match authn(&headers, &state.signer) {
-        Ok(t) => t,
-        Err(resp) => return resp.into_response(),
-    };
-    let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
-    };
-    if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
-        return resp;
-    }
-    match store.list_managed_mcp_deployables().await {
-        Ok(mut deployables) => {
-            deployables.retain(|d| d.enabled);
-            Json(ManagedMcpDeployablesResponse { deployables }).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-async fn create_managed_mcp_deployment_request(
-    axum::Extension(state): axum::Extension<Arc<TenantState>>,
-    headers: HeaderMap,
-    Json(req): Json<CreateManagedMcpDeploymentRequestBody>,
-) -> impl IntoResponse {
-    let tenant_id = match authn(&headers, &state.signer) {
-        Ok(t) => t,
-        Err(resp) => return resp.into_response(),
-    };
-    let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
-    };
-    if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
-        return resp;
-    }
-    if req.deployable_id.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "deployableId is required").into_response();
-    }
-    match managed_mcp_write_guard(state.store.clone(), &state.managed_mcp).await {
-        ManagedMcpWriteGuard::Allow => {}
-        ManagedMcpWriteGuard::Reject { status, message } => {
-            return (status, message).into_response();
-        }
-    }
-    match store
-        .create_managed_mcp_deployment_request(&tenant_id, &req.deployable_id)
-        .await
-    {
-        Ok(request) => (
-            StatusCode::CREATED,
-            Json(ManagedMcpDeploymentResponse { request }),
-        )
-            .into_response(),
-        Err(e) => {
-            let message = e.to_string();
-            (managed_mcp_create_error_status(&message), message).into_response()
-        }
-    }
-}
-
-async fn list_managed_mcp_deployment_requests(
-    axum::Extension(state): axum::Extension<Arc<TenantState>>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    let tenant_id = match authn(&headers, &state.signer) {
-        Ok(t) => t,
-        Err(resp) => return resp.into_response(),
-    };
-    let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
-    };
-    if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
-        return resp;
-    }
-    match store
-        .list_managed_mcp_deployment_requests_for_tenant(
-            &tenant_id,
-            DEFAULT_TENANT_MANAGED_MCP_DEPLOYMENT_LIST_LIMIT,
-        )
-        .await
-    {
-        Ok(requests) => Json(ManagedMcpDeploymentsResponse { requests }).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-async fn get_managed_mcp_deployment_request(
-    axum::Extension(state): axum::Extension<Arc<TenantState>>,
-    headers: HeaderMap,
-    Path(request_id): Path<String>,
-) -> impl IntoResponse {
-    let tenant_id = match authn(&headers, &state.signer) {
-        Ok(t) => t,
-        Err(resp) => return resp.into_response(),
-    };
-    let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
-    };
-    match store
-        .get_managed_mcp_deployment_request_for_tenant(&tenant_id, &request_id)
-        .await
-    {
-        Ok(Some(request)) => Json(ManagedMcpDeploymentResponse { request }).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "deployment request not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-async fn patch_managed_mcp_deployment_request(
-    axum::Extension(state): axum::Extension<Arc<TenantState>>,
-    headers: HeaderMap,
-    Path(request_id): Path<String>,
-    Json(req): Json<PatchManagedMcpDeploymentRequestBody>,
-) -> impl IntoResponse {
-    let tenant_id = match authn(&headers, &state.signer) {
-        Ok(t) => t,
-        Err(resp) => return resp.into_response(),
-    };
-    let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
-    };
-    if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
-        return resp;
-    }
-    if req.enabled.is_none() && req.replicas.is_none() {
-        return (
-            StatusCode::BAD_REQUEST,
-            "at least one of enabled or replicas is required",
-        )
-            .into_response();
-    }
-    match managed_mcp_write_guard(state.store.clone(), &state.managed_mcp).await {
-        ManagedMcpWriteGuard::Allow => {}
-        ManagedMcpWriteGuard::Reject { status, message } => {
-            return (status, message).into_response();
-        }
-    }
-
-    let Some(existing) = (match store
-        .get_managed_mcp_deployment_request_for_tenant(&tenant_id, &request_id)
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }) else {
-        return (StatusCode::NOT_FOUND, "deployment request not found").into_response();
-    };
-
-    let (desired_enabled, desired_replicas) = match resolve_managed_mcp_patch(&existing, &req) {
-        Ok(v) => v,
-        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
-    };
-
-    match store
-        .update_managed_mcp_deployment_request_for_tenant(
-            &tenant_id,
-            &request_id,
-            desired_enabled,
-            desired_replicas,
-        )
-        .await
-    {
-        Ok(Some(request)) => Json(ManagedMcpDeploymentResponse { request }).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "deployment request not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-fn managed_mcp_create_error_status(message: &str) -> StatusCode {
-    if message.contains("not found") || message.contains("disabled") {
-        return StatusCode::BAD_REQUEST;
-    }
-    StatusCode::INTERNAL_SERVER_ERROR
-}
-
-fn resolve_managed_mcp_patch(
-    existing: &ManagedMcpDeploymentRequest,
-    req: &PatchManagedMcpDeploymentRequestBody,
-) -> Result<(bool, i32), String> {
-    let desired_enabled = req.enabled.unwrap_or(existing.desired_enabled);
-    let desired_replicas = req.replicas.unwrap_or(existing.desired_replicas);
-    if !(MIN_MANAGED_MCP_REPLICAS..=MAX_MANAGED_MCP_REPLICAS).contains(&desired_replicas) {
-        return Err(format!(
-            "replicas must be between {MIN_MANAGED_MCP_REPLICAS} and {MAX_MANAGED_MCP_REPLICAS}"
-        ));
-    }
-    if desired_enabled && desired_replicas < 1 {
-        return Err("replicas must be at least 1 when enabled".to_string());
-    }
-    Ok((desired_enabled, desired_replicas))
 }
 
 async fn put_upstream(
@@ -672,13 +381,13 @@ async fn put_upstream(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     if upstream_id.trim().is_empty() {
@@ -719,7 +428,7 @@ async fn put_upstream(
         )
         .await
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return ApiError::internal(e).into_response();
     }
     (StatusCode::CREATED, Json(OkResponse { ok: true })).into_response()
 }
@@ -734,14 +443,14 @@ async fn delete_upstream(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     let internal_id = tenant_upstream_internal_id(&tenant_id, &upstream_id);
     match store.delete_upstream(&internal_id).await {
         Ok(true) => Json(OkResponse { ok: true }).into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, "upstream not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(false) => ApiError::not_found(Resource::Upstream).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -756,7 +465,7 @@ async fn patch_upstream_endpoint(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     if req.enabled.is_none() && req.lifecycle.is_none() {
         return (
@@ -771,8 +480,8 @@ async fn patch_upstream_endpoint(
         .await
     {
         Ok(true) => Json(OkResponse { ok: true }).into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, "upstream endpoint not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(false) => ApiError::not_found(Resource::Endpoint).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -786,7 +495,7 @@ async fn delete_upstream_endpoint(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     let internal_id = tenant_upstream_internal_id(&tenant_id, &upstream_id);
     match store
@@ -794,96 +503,9 @@ async fn delete_upstream_endpoint(
         .await
     {
         Ok(true) => Json(OkResponse { ok: true }).into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, "upstream endpoint not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(false) => ApiError::not_found(Resource::Endpoint).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateProfileRequest {
-    /// Human-friendly profile name (unique per tenant, case-insensitive).
-    name: String,
-    /// Optional human-friendly description.
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default = "default_true")]
-    enabled: bool,
-    #[serde(default = "default_true")]
-    allow_partial_upstreams: bool,
-    upstreams: Vec<String>,
-    /// Local tool sources attached to this profile (shared + tenant-owned).
-    #[serde(default)]
-    sources: Vec<String>,
-    /// Per-profile tool transforms (renames/defaults).
-    #[serde(default)]
-    transforms: TransformPipeline,
-    #[serde(default)]
-    tools: Option<Vec<String>>,
-    /// Optional per-profile data-plane auth settings.
-    #[serde(default)]
-    data_plane_auth: Option<DataPlaneAuthSettings>,
-    /// Optional per-profile data-plane limits (rate limits and quotas).
-    #[serde(default)]
-    data_plane_limits: Option<DataPlaneLimitsSettings>,
-
-    /// Optional per-profile default timeout override for `tools/call` (seconds).
-    #[serde(default)]
-    tool_call_timeout_secs: Option<u64>,
-    /// Optional per-profile per-tool policies (timeouts + retry policy).
-    #[serde(default)]
-    tool_policies: Vec<ToolPolicy>,
-
-    /// Optional per-profile MCP proxy behavior settings (capabilities allow/deny, notification filters, namespacing).
-    #[serde(default)]
-    mcp: McpProfileSettings,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PutProfileRequest {
-    /// Human-friendly profile name (unique per tenant, case-insensitive).
-    ///
-    /// If omitted, defaults to the existing profile name (PUT semantics).
-    #[serde(default)]
-    name: Option<String>,
-    /// Optional human-friendly description (PUT semantics).
-    ///
-    /// - omitted => keep existing description
-    /// - null => clear description
-    /// - string => set description
-    #[serde(default)]
-    description: Option<NullableString>,
-    #[serde(default = "default_true")]
-    enabled: bool,
-    #[serde(default = "default_true")]
-    allow_partial_upstreams: bool,
-    upstreams: Vec<String>,
-    /// Local tool sources attached to this profile (shared + tenant-owned).
-    #[serde(default)]
-    sources: Vec<String>,
-    /// Per-profile tool transforms (renames/defaults).
-    #[serde(default)]
-    transforms: TransformPipeline,
-    #[serde(default)]
-    tools: Option<Vec<String>>,
-    /// Optional per-profile data-plane auth settings.
-    #[serde(default)]
-    data_plane_auth: Option<DataPlaneAuthSettings>,
-    /// Optional per-profile data-plane limits (rate limits and quotas).
-    #[serde(default)]
-    data_plane_limits: Option<DataPlaneLimitsSettings>,
-
-    /// Optional per-profile default timeout override for `tools/call` (seconds).
-    #[serde(default)]
-    tool_call_timeout_secs: Option<NullableU64>,
-    /// Optional per-profile per-tool policies (timeouts + retry policy).
-    #[serde(default)]
-    tool_policies: Option<Vec<ToolPolicy>>,
-
-    /// Optional per-profile MCP proxy behavior settings (capabilities allow/deny, notification filters, namespacing).
-    #[serde(default)]
-    mcp: Option<McpProfileSettings>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -966,998 +588,6 @@ struct UpstreamSessionActivityResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ManagedMcpDeployablesResponse {
-    deployables: Vec<ManagedMcpDeployable>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ManagedMcpDeploymentResponse {
-    request: ManagedMcpDeploymentRequest,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ManagedMcpDeploymentsResponse {
-    requests: Vec<ManagedMcpDeploymentRequest>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateManagedMcpDeploymentRequestBody {
-    deployable_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PatchManagedMcpDeploymentRequestBody {
-    #[serde(default)]
-    enabled: Option<bool>,
-    #[serde(default)]
-    replicas: Option<i32>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProfileResponse {
-    id: String,
-    name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-    tenant_id: String,
-    enabled: bool,
-    allow_partial_upstreams: bool,
-    upstreams: Vec<String>,
-    sources: Vec<String>,
-    transforms: TransformPipeline,
-    tools: Vec<String>,
-    data_plane_path: String,
-    data_plane_auth: DataPlaneAuthSettings,
-    data_plane_limits: DataPlaneLimitsSettings,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_call_timeout_secs: Option<u64>,
-    tool_policies: Vec<ToolPolicy>,
-    mcp: McpProfileSettings,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProfilesResponse {
-    profiles: Vec<ProfileResponse>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateProfileResponse {
-    ok: bool,
-    id: String,
-    data_plane_path: String,
-}
-
-fn profile_to_response(p: AdminProfile) -> ProfileResponse {
-    let id = p.id;
-    let upstreams = p
-        .upstream_ids
-        .into_iter()
-        .map(|uid| {
-            if let Some((t, u)) = parse_tenant_upstream_internal_id(&uid)
-                && t == p.tenant_id
-            {
-                u
-            } else {
-                uid
-            }
-        })
-        .collect();
-    ProfileResponse {
-        name: p.name,
-        description: p.description,
-        tenant_id: p.tenant_id,
-        enabled: p.enabled,
-        allow_partial_upstreams: p.allow_partial_upstreams,
-        upstreams,
-        sources: p.source_ids,
-        transforms: p.transforms,
-        tools: p.enabled_tools,
-        data_plane_path: format!("/{id}/mcp"),
-        data_plane_auth: DataPlaneAuthSettings {
-            mode: p.data_plane_auth_mode,
-            accept_x_api_key: p.accept_x_api_key,
-        },
-        data_plane_limits: DataPlaneLimitsSettings {
-            rate_limit_enabled: p.rate_limit_enabled,
-            rate_limit_tool_calls_per_minute: p.rate_limit_tool_calls_per_minute,
-            quota_enabled: p.quota_enabled,
-            quota_tool_calls: p.quota_tool_calls,
-        },
-        tool_call_timeout_secs: p.tool_call_timeout_secs,
-        tool_policies: p.tool_policies,
-        mcp: p.mcp,
-        id,
-    }
-}
-
-async fn list_profiles(
-    axum::Extension(state): axum::Extension<Arc<TenantState>>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    let tenant_id = match authn(&headers, &state.signer) {
-        Ok(t) => t,
-        Err(resp) => return resp.into_response(),
-    };
-    let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
-    };
-
-    match store.list_profiles().await {
-        Ok(profiles) => {
-            let profiles = profiles
-                .into_iter()
-                .filter(|p| p.tenant_id == tenant_id)
-                .map(profile_to_response)
-                .collect();
-            Json(ProfilesResponse { profiles }).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-async fn get_profile(
-    axum::Extension(state): axum::Extension<Arc<TenantState>>,
-    headers: HeaderMap,
-    Path(profile_id): Path<String>,
-) -> impl IntoResponse {
-    let tenant_id = match authn(&headers, &state.signer) {
-        Ok(t) => t,
-        Err(resp) => return resp.into_response(),
-    };
-    let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
-    };
-
-    // UUIDv4 only, otherwise 404 (avoid enumeration patterns).
-    if Uuid::parse_str(&profile_id)
-        .ok()
-        .and_then(|u| (u.get_version() == Some(Version::Random)).then_some(u))
-        .is_none()
-    {
-        return (StatusCode::NOT_FOUND, "profile not found").into_response();
-    }
-
-    match store.get_profile(&profile_id).await {
-        Ok(Some(profile)) if profile.tenant_id == tenant_id => {
-            Json(profile_to_response(profile)).into_response()
-        }
-        Ok(_) => (StatusCode::NOT_FOUND, "profile not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-async fn put_profile_handle_name_conflict(
-    store: &dyn AdminStore,
-    input: PutProfileInput<'_>,
-) -> Result<(), Response> {
-    store.put_profile(input).await.map_err(|e| {
-        if e.to_string().contains("profiles_tenant_name_ci_uq") {
-            (
-                StatusCode::CONFLICT,
-                "profile name already exists for this tenant (case-insensitive)",
-            )
-                .into_response()
-        } else {
-            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
-        }
-    })
-}
-
-async fn create_profile(
-    axum::Extension(state): axum::Extension<Arc<TenantState>>,
-    headers: HeaderMap,
-    Json(req): Json<CreateProfileRequest>,
-) -> impl IntoResponse {
-    let tenant_id = match authn(&headers, &state.signer) {
-        Ok(t) => t,
-        Err(resp) => return resp.into_response(),
-    };
-    let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
-    };
-    // Ensure tenant exists + enabled.
-    match store.get_tenant(&tenant_id).await {
-        Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-
-    let profile_id = Uuid::new_v4().to_string();
-    let validated = match validate_create_profile_settings(state.as_ref(), &req) {
-        Ok(v) => v,
-        Err(resp) => return *resp,
-    };
-    let resolved_upstreams = match resolve_upstreams_for_create_profile(
-        store.as_ref(),
-        &tenant_id,
-        &profile_id,
-        &req.upstreams,
-    )
-    .await
-    {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
-    if let Err(resp) = put_profile_handle_name_conflict(
-        store.as_ref(),
-        PutProfileInput {
-            profile_id: &profile_id,
-            tenant_id: &tenant_id,
-            name: &req.name,
-            description: req.description.as_deref(),
-            flags: PutProfileFlags {
-                enabled: req.enabled,
-                allow_partial_upstreams: req.allow_partial_upstreams,
-            },
-            upstream_ids: &resolved_upstreams,
-            source_ids: &req.sources,
-            transforms: &req.transforms,
-            enabled_tools: &validated.enabled_tools,
-            data_plane_auth: PutProfileDataPlaneAuth {
-                mode: validated.data_plane_auth.mode,
-                accept_x_api_key: validated.data_plane_auth.accept_x_api_key,
-            },
-            limits: PutProfileLimits {
-                rate_limit_enabled: validated.data_plane_limits.rate_limit_enabled,
-                rate_limit_tool_calls_per_minute: validated
-                    .data_plane_limits
-                    .rate_limit_tool_calls_per_minute,
-                quota_enabled: validated.data_plane_limits.quota_enabled,
-                quota_tool_calls: validated.data_plane_limits.quota_tool_calls,
-            },
-            tool_call_timeout_secs: validated.tool_call_timeout_secs,
-            tool_policies: &validated.tool_policies,
-            mcp: &validated.mcp,
-        },
-    )
-    .await
-    {
-        return resp;
-    }
-
-    (
-        StatusCode::CREATED,
-        Json(CreateProfileResponse {
-            ok: true,
-            data_plane_path: format!("/{profile_id}/mcp"),
-            id: profile_id,
-        }),
-    )
-        .into_response()
-}
-
-struct CreateProfileValidatedSettings {
-    enabled_tools: Vec<String>,
-    data_plane_auth: DataPlaneAuthSettings,
-    data_plane_limits: DataPlaneLimitsSettings,
-    tool_call_timeout_secs: Option<u64>,
-    tool_policies: Vec<ToolPolicy>,
-    mcp: McpProfileSettings,
-}
-
-fn validate_create_profile_settings(
-    state: &TenantState,
-    req: &CreateProfileRequest,
-) -> Result<CreateProfileValidatedSettings, Box<Response>> {
-    if req.name.trim().is_empty() {
-        return Err(Box::new(
-            (StatusCode::BAD_REQUEST, "name is required").into_response(),
-        ));
-    }
-
-    let enabled_tools = req.tools.clone().unwrap_or_default();
-    let data_plane_auth = req
-        .data_plane_auth
-        .clone()
-        .unwrap_or(DataPlaneAuthSettings {
-            mode: default_data_plane_auth_mode(),
-            accept_x_api_key: false,
-        });
-    if data_plane_auth.mode == DataPlaneAuthMode::JwtEveryRequest && state.mcp_state.oidc.is_none()
-    {
-        return Err(Box::new(
-            (StatusCode::BAD_REQUEST, OIDC_NOT_CONFIGURED_MSG).into_response(),
-        ));
-    }
-
-    let data_plane_limits = req
-        .data_plane_limits
-        .clone()
-        .unwrap_or(DataPlaneLimitsSettings {
-            rate_limit_enabled: false,
-            rate_limit_tool_calls_per_minute: None,
-            quota_enabled: false,
-            quota_tool_calls: None,
-        });
-    if let Err(msg) = data_plane_limits.validate() {
-        return Err(Box::new((StatusCode::BAD_REQUEST, msg).into_response()));
-    }
-
-    // Tool call timeouts + per-tool policies (timeouts + retry policy).
-    let tool_call_timeout_secs = req.tool_call_timeout_secs;
-    let (tool_policies, mcp) = (req.tool_policies.clone(), req.mcp.clone());
-    if let Err(msg) = validate_tool_timeout_and_policies(tool_call_timeout_secs, &tool_policies) {
-        return Err(Box::new((StatusCode::BAD_REQUEST, msg).into_response()));
-    }
-    if let Err(msg) = validate_tool_allowlist(&enabled_tools) {
-        return Err(Box::new((StatusCode::BAD_REQUEST, msg).into_response()));
-    }
-    if let Err(msg) =
-        crate::transport_limits::validate_transport_limits_settings(&mcp.security.transport_limits)
-    {
-        return Err(Box::new((StatusCode::BAD_REQUEST, msg).into_response()));
-    }
-
-    Ok(CreateProfileValidatedSettings {
-        enabled_tools,
-        data_plane_auth,
-        data_plane_limits,
-        tool_call_timeout_secs,
-        tool_policies,
-        mcp,
-    })
-}
-
-async fn put_profile(
-    axum::Extension(state): axum::Extension<Arc<TenantState>>,
-    headers: HeaderMap,
-    Path(profile_id): Path<String>,
-    Json(req): Json<PutProfileRequest>,
-) -> impl IntoResponse {
-    let tenant_id = match authn(&headers, &state.signer) {
-        Ok(t) => t,
-        Err(resp) => return resp.into_response(),
-    };
-    let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
-    };
-    let started = Instant::now();
-
-    let outcome =
-        tenant_put_profile_inner(state.as_ref(), store.as_ref(), &tenant_id, profile_id, req).await;
-    state
-        .audit
-        .record(crate::audit::http_event(HttpAuditEvent {
-            tenant_id: tenant_id.clone(),
-            actor: AuditActor {
-                profile_id: outcome.profile_uuid,
-                ..AuditActor::default()
-            },
-            action: "tenant.profile_put",
-            http_method: "PUT",
-            http_route: "/tenant/v1/profiles/{profile_id}",
-            status_code: i32::from(outcome.status.as_u16()),
-            ok: outcome.status.is_success(),
-            elapsed: started.elapsed(),
-            meta: serde_json::json!({
-                "profile_id": outcome.profile_id_for_meta,
-                "name": outcome.name_for_meta,
-                "enabled": outcome.enabled_for_meta,
-            }),
-            error: outcome.error,
-        }))
-        .await;
-    outcome.resp
-}
-
-struct TenantPutProfileOutcome {
-    resp: axum::response::Response,
-    status: StatusCode,
-    error: Option<AuditError>,
-    profile_uuid: Option<Uuid>,
-    profile_id_for_meta: String,
-    name_for_meta: Option<String>,
-    enabled_for_meta: bool,
-}
-
-impl TenantPutProfileOutcome {
-    fn fail(
-        profile_id_for_meta: String,
-        enabled_for_meta: bool,
-        profile_uuid: Option<Uuid>,
-        status: StatusCode,
-        message: impl Into<String>,
-        error: AuditError,
-        name_for_meta: Option<String>,
-    ) -> Self {
-        let msg = message.into();
-        Self {
-            resp: (status, msg.clone()).into_response(),
-            status,
-            error: Some(error),
-            profile_uuid,
-            profile_id_for_meta,
-            name_for_meta,
-            enabled_for_meta,
-        }
-    }
-
-    fn ok(
-        profile_id_for_meta: String,
-        enabled_for_meta: bool,
-        profile_uuid: Uuid,
-        name: String,
-    ) -> Self {
-        Self {
-            resp: Json(CreateProfileResponse {
-                ok: true,
-                data_plane_path: format!("/{profile_id_for_meta}/mcp"),
-                id: profile_id_for_meta.clone(),
-            })
-            .into_response(),
-            status: StatusCode::OK,
-            error: None,
-            profile_uuid: Some(profile_uuid),
-            profile_id_for_meta,
-            name_for_meta: Some(name),
-            enabled_for_meta,
-        }
-    }
-}
-
-async fn tenant_put_profile_inner(
-    state: &TenantState,
-    store: &dyn crate::store::AdminStore,
-    tenant_id: &str,
-    profile_id: String,
-    req: PutProfileRequest,
-) -> TenantPutProfileOutcome {
-    match tenant_put_profile_inner_impl(state, store, tenant_id, profile_id, req).await {
-        Ok(out) => out,
-        Err(out) => *out,
-    }
-}
-
-type TenantPutProfileStep<T> = Result<T, Box<TenantPutProfileOutcome>>;
-
-async fn tenant_put_profile_inner_impl(
-    state: &TenantState,
-    store: &dyn crate::store::AdminStore,
-    tenant_id: &str,
-    profile_id: String,
-    req: PutProfileRequest,
-) -> TenantPutProfileStep<TenantPutProfileOutcome> {
-    let enabled_for_meta = req.enabled;
-    let profile_uuid = tenant_put_profile_parse_uuid(&profile_id, enabled_for_meta)?;
-    let existing = tenant_put_profile_load_existing(
-        store,
-        tenant_id,
-        &profile_id,
-        enabled_for_meta,
-        profile_uuid,
-    )
-    .await?;
-    let (tool_call_timeout_secs, tool_policies, mcp) =
-        tenant_put_profile_resolve_tool_settings(&req, &existing);
-    let name = tenant_put_profile_resolve_name(
-        &profile_id,
-        enabled_for_meta,
-        profile_uuid,
-        &existing,
-        req.name,
-    )?;
-    let description: Option<String> =
-        tenant_put_profile_resolve_description(&existing, req.description);
-    let resolved_upstreams = tenant_put_profile_resolve_upstreams(
-        store,
-        tenant_id,
-        &profile_id,
-        enabled_for_meta,
-        profile_uuid,
-        &name,
-        &req.upstreams,
-    )
-    .await?;
-    let enabled_tools = req.tools.unwrap_or_default();
-    let data_plane_auth = tenant_put_profile_resolve_auth(
-        state,
-        &profile_id,
-        enabled_for_meta,
-        profile_uuid,
-        &existing,
-        &name,
-        req.data_plane_auth,
-    )?;
-    let data_plane_limits = tenant_put_profile_resolve_limits(
-        &profile_id,
-        enabled_for_meta,
-        profile_uuid,
-        &existing,
-        &name,
-        req.data_plane_limits,
-    )?;
-
-    tenant_put_profile_validate_tools(
-        &profile_id,
-        enabled_for_meta,
-        profile_uuid,
-        &name,
-        &enabled_tools,
-        tool_call_timeout_secs,
-        &tool_policies,
-    )?;
-    tenant_put_profile_validate_transport_limits(
-        &profile_id,
-        enabled_for_meta,
-        profile_uuid,
-        &name,
-        &mcp,
-    )?;
-
-    tenant_put_profile_store_put(
-        store,
-        TenantPutProfileStorePutInput {
-            tenant_id,
-            profile_id: &profile_id,
-            enabled_for_meta,
-            profile_uuid,
-            name_for_meta: &name,
-            description: description.as_deref(),
-            enabled: req.enabled,
-            allow_partial_upstreams: req.allow_partial_upstreams,
-            resolved_upstreams: &resolved_upstreams,
-            sources: &req.sources,
-            transforms: &req.transforms,
-            enabled_tools: &enabled_tools,
-            data_plane_auth: &data_plane_auth,
-            data_plane_limits: &data_plane_limits,
-            tool_call_timeout_secs,
-            tool_policies: &tool_policies,
-            mcp: &mcp,
-        },
-    )
-    .await?;
-
-    Ok(TenantPutProfileOutcome::ok(
-        profile_id,
-        enabled_for_meta,
-        profile_uuid,
-        name,
-    ))
-}
-
-fn tenant_put_profile_parse_uuid(
-    profile_id: &str,
-    enabled_for_meta: bool,
-) -> TenantPutProfileStep<Uuid> {
-    let Some(profile_uuid) = Uuid::parse_str(profile_id)
-        .ok()
-        .and_then(|u| (u.get_version() == Some(Version::Random)).then_some(u))
-    else {
-        return Err(Box::new(TenantPutProfileOutcome::fail(
-            profile_id.to_string(),
-            enabled_for_meta,
-            None,
-            StatusCode::NOT_FOUND,
-            "profile not found",
-            AuditError::new("not_found", "profile not found"),
-            None,
-        )));
-    };
-    Ok(profile_uuid)
-}
-
-async fn tenant_put_profile_load_existing(
-    store: &dyn crate::store::AdminStore,
-    tenant_id: &str,
-    profile_id: &str,
-    enabled_for_meta: bool,
-    profile_uuid: Uuid,
-) -> TenantPutProfileStep<crate::store::AdminProfile> {
-    match store.get_profile(profile_id).await {
-        Ok(Some(p)) if p.tenant_id == tenant_id => Ok(p),
-        Ok(_) => Err(Box::new(TenantPutProfileOutcome::fail(
-            profile_id.to_string(),
-            enabled_for_meta,
-            Some(profile_uuid),
-            StatusCode::NOT_FOUND,
-            "profile not found",
-            AuditError::new("not_found", "profile not found"),
-            None,
-        ))),
-        Err(e) => {
-            let msg = e.to_string();
-            Err(Box::new(TenantPutProfileOutcome::fail(
-                profile_id.to_string(),
-                enabled_for_meta,
-                Some(profile_uuid),
-                StatusCode::INTERNAL_SERVER_ERROR,
-                msg.clone(),
-                AuditError::new("internal_error", msg),
-                None,
-            )))
-        }
-    }
-}
-
-fn tenant_put_profile_resolve_name(
-    profile_id: &str,
-    enabled_for_meta: bool,
-    profile_uuid: Uuid,
-    existing: &crate::store::AdminProfile,
-    req_name: Option<String>,
-) -> TenantPutProfileStep<String> {
-    let name = req_name.unwrap_or_else(|| existing.name.clone());
-    if name.trim().is_empty() {
-        return Err(Box::new(TenantPutProfileOutcome::fail(
-            profile_id.to_string(),
-            enabled_for_meta,
-            Some(profile_uuid),
-            StatusCode::BAD_REQUEST,
-            "name is required",
-            AuditError::new("bad_request", "name is required"),
-            None,
-        )));
-    }
-    Ok(name)
-}
-
-fn tenant_put_profile_resolve_description(
-    existing: &crate::store::AdminProfile,
-    req: Option<NullableString>,
-) -> Option<String> {
-    match req {
-        None => existing.description.clone(),
-        Some(NullableString::Null) => None,
-        Some(NullableString::Value(v)) => Some(v),
-    }
-}
-
-async fn tenant_put_profile_resolve_upstreams(
-    store: &dyn crate::store::AdminStore,
-    tenant_id: &str,
-    profile_id: &str,
-    enabled_for_meta: bool,
-    profile_uuid: Uuid,
-    name_for_meta: &str,
-    upstreams: &[String],
-) -> TenantPutProfileStep<Vec<String>> {
-    let resolved = match resolve_upstream_ids_for_tenant(store, tenant_id, upstreams).await {
-        Ok(v) => v,
-        Err(resp) => {
-            let status = resp.status();
-            return Err(Box::new(TenantPutProfileOutcome {
-                resp,
-                status,
-                error: Some(AuditError::new("request_failed", status.to_string())),
-                profile_uuid: Some(profile_uuid),
-                profile_id_for_meta: profile_id.to_string(),
-                name_for_meta: Some(name_for_meta.to_string()),
-                enabled_for_meta,
-            }));
-        }
-    };
-    if let Err(resp) = validate_no_self_upstream_loop(store, profile_id, &resolved).await {
-        let status = resp.status();
-        return Err(Box::new(TenantPutProfileOutcome {
-            resp,
-            status,
-            error: Some(AuditError::new("bad_request", status.to_string())),
-            profile_uuid: Some(profile_uuid),
-            profile_id_for_meta: profile_id.to_string(),
-            name_for_meta: Some(name_for_meta.to_string()),
-            enabled_for_meta,
-        }));
-    }
-    Ok(resolved)
-}
-
-fn tenant_put_profile_resolve_auth(
-    state: &TenantState,
-    profile_id: &str,
-    enabled_for_meta: bool,
-    profile_uuid: Uuid,
-    existing: &crate::store::AdminProfile,
-    name_for_meta: &str,
-    req: Option<DataPlaneAuthSettings>,
-) -> TenantPutProfileStep<DataPlaneAuthSettings> {
-    let auth = req.unwrap_or(DataPlaneAuthSettings {
-        mode: existing.data_plane_auth_mode,
-        accept_x_api_key: existing.accept_x_api_key,
-    });
-    if auth.mode == DataPlaneAuthMode::JwtEveryRequest && state.mcp_state.oidc.is_none() {
-        return Err(Box::new(TenantPutProfileOutcome::fail(
-            profile_id.to_string(),
-            enabled_for_meta,
-            Some(profile_uuid),
-            StatusCode::BAD_REQUEST,
-            OIDC_NOT_CONFIGURED_MSG,
-            AuditError::new("bad_request", OIDC_NOT_CONFIGURED_MSG),
-            Some(name_for_meta.to_string()),
-        )));
-    }
-    Ok(auth)
-}
-
-fn tenant_put_profile_resolve_limits(
-    profile_id: &str,
-    enabled_for_meta: bool,
-    profile_uuid: Uuid,
-    existing: &crate::store::AdminProfile,
-    name_for_meta: &str,
-    req: Option<DataPlaneLimitsSettings>,
-) -> TenantPutProfileStep<DataPlaneLimitsSettings> {
-    let limits = req.unwrap_or(DataPlaneLimitsSettings {
-        rate_limit_enabled: existing.rate_limit_enabled,
-        rate_limit_tool_calls_per_minute: existing.rate_limit_tool_calls_per_minute,
-        quota_enabled: existing.quota_enabled,
-        quota_tool_calls: existing.quota_tool_calls,
-    });
-    if let Err(msg) = limits.validate() {
-        let msg_string = msg.to_string();
-        return Err(Box::new(TenantPutProfileOutcome::fail(
-            profile_id.to_string(),
-            enabled_for_meta,
-            Some(profile_uuid),
-            StatusCode::BAD_REQUEST,
-            msg,
-            AuditError::new("bad_request", msg_string),
-            Some(name_for_meta.to_string()),
-        )));
-    }
-    Ok(limits)
-}
-
-fn tenant_put_profile_resolve_tool_settings(
-    req: &PutProfileRequest,
-    existing: &crate::store::AdminProfile,
-) -> (Option<u64>, Vec<ToolPolicy>, McpProfileSettings) {
-    let tool_call_timeout_secs =
-        resolve_nullable_u64(req.tool_call_timeout_secs, existing.tool_call_timeout_secs);
-    let tool_policies = req
-        .tool_policies
-        .clone()
-        .unwrap_or_else(|| existing.tool_policies.clone());
-    let mcp = req.mcp.clone().unwrap_or_else(|| existing.mcp.clone());
-    (tool_call_timeout_secs, tool_policies, mcp)
-}
-
-fn tenant_put_profile_validate_tools(
-    profile_id: &str,
-    enabled_for_meta: bool,
-    profile_uuid: Uuid,
-    name_for_meta: &str,
-    enabled_tools: &[String],
-    tool_call_timeout_secs: Option<u64>,
-    tool_policies: &[ToolPolicy],
-) -> TenantPutProfileStep<()> {
-    if let Err(msg) = validate_tool_timeout_and_policies(tool_call_timeout_secs, tool_policies) {
-        return Err(Box::new(TenantPutProfileOutcome::fail(
-            profile_id.to_string(),
-            enabled_for_meta,
-            Some(profile_uuid),
-            StatusCode::BAD_REQUEST,
-            msg.clone(),
-            AuditError::new("bad_request", msg),
-            Some(name_for_meta.to_string()),
-        )));
-    }
-    if let Err(msg) = validate_tool_allowlist(enabled_tools) {
-        return Err(Box::new(TenantPutProfileOutcome::fail(
-            profile_id.to_string(),
-            enabled_for_meta,
-            Some(profile_uuid),
-            StatusCode::BAD_REQUEST,
-            msg.clone(),
-            AuditError::new("bad_request", msg),
-            Some(name_for_meta.to_string()),
-        )));
-    }
-    Ok(())
-}
-
-fn tenant_put_profile_validate_transport_limits(
-    profile_id: &str,
-    enabled_for_meta: bool,
-    profile_uuid: Uuid,
-    name_for_meta: &str,
-    mcp: &McpProfileSettings,
-) -> TenantPutProfileStep<()> {
-    if let Err(msg) =
-        crate::transport_limits::validate_transport_limits_settings(&mcp.security.transport_limits)
-    {
-        return Err(Box::new(TenantPutProfileOutcome::fail(
-            profile_id.to_string(),
-            enabled_for_meta,
-            Some(profile_uuid),
-            StatusCode::BAD_REQUEST,
-            msg,
-            AuditError::new("bad_request", msg),
-            Some(name_for_meta.to_string()),
-        )));
-    }
-    Ok(())
-}
-
-struct TenantPutProfileStorePutInput<'a> {
-    tenant_id: &'a str,
-    profile_id: &'a str,
-    enabled_for_meta: bool,
-    profile_uuid: Uuid,
-    name_for_meta: &'a str,
-    description: Option<&'a str>,
-    enabled: bool,
-    allow_partial_upstreams: bool,
-    resolved_upstreams: &'a [String],
-    sources: &'a [String],
-    transforms: &'a TransformPipeline,
-    enabled_tools: &'a [String],
-    data_plane_auth: &'a DataPlaneAuthSettings,
-    data_plane_limits: &'a DataPlaneLimitsSettings,
-    tool_call_timeout_secs: Option<u64>,
-    tool_policies: &'a [ToolPolicy],
-    mcp: &'a McpProfileSettings,
-}
-
-async fn tenant_put_profile_store_put(
-    store: &dyn crate::store::AdminStore,
-    input: TenantPutProfileStorePutInput<'_>,
-) -> TenantPutProfileStep<()> {
-    if let Err(e) = store
-        .put_profile(PutProfileInput {
-            profile_id: input.profile_id,
-            tenant_id: input.tenant_id,
-            name: input.name_for_meta,
-            description: input.description,
-            flags: PutProfileFlags {
-                enabled: input.enabled,
-                allow_partial_upstreams: input.allow_partial_upstreams,
-            },
-            upstream_ids: input.resolved_upstreams,
-            source_ids: input.sources,
-            transforms: input.transforms,
-            enabled_tools: input.enabled_tools,
-            data_plane_auth: PutProfileDataPlaneAuth {
-                mode: input.data_plane_auth.mode,
-                accept_x_api_key: input.data_plane_auth.accept_x_api_key,
-            },
-            limits: PutProfileLimits {
-                rate_limit_enabled: input.data_plane_limits.rate_limit_enabled,
-                rate_limit_tool_calls_per_minute: input
-                    .data_plane_limits
-                    .rate_limit_tool_calls_per_minute,
-                quota_enabled: input.data_plane_limits.quota_enabled,
-                quota_tool_calls: input.data_plane_limits.quota_tool_calls,
-            },
-            tool_call_timeout_secs: input.tool_call_timeout_secs,
-            tool_policies: input.tool_policies,
-            mcp: input.mcp,
-        })
-        .await
-    {
-        if e.to_string().contains("profiles_tenant_name_ci_uq") {
-            return Err(Box::new(TenantPutProfileOutcome::fail(
-                input.profile_id.to_string(),
-                input.enabled_for_meta,
-                Some(input.profile_uuid),
-                StatusCode::CONFLICT,
-                "profile name already exists for this tenant (case-insensitive)",
-                AuditError::new(
-                    "conflict",
-                    "profile name already exists for this tenant (case-insensitive)",
-                ),
-                Some(input.name_for_meta.to_string()),
-            )));
-        }
-        let msg = e.to_string();
-        return Err(Box::new(TenantPutProfileOutcome::fail(
-            input.profile_id.to_string(),
-            input.enabled_for_meta,
-            Some(input.profile_uuid),
-            StatusCode::INTERNAL_SERVER_ERROR,
-            msg.clone(),
-            AuditError::new("internal_error", msg),
-            Some(input.name_for_meta.to_string()),
-        )));
-    }
-    Ok(())
-}
-
-async fn delete_profile(
-    axum::Extension(state): axum::Extension<Arc<TenantState>>,
-    headers: HeaderMap,
-    Path(profile_id): Path<String>,
-) -> impl IntoResponse {
-    let tenant_id = match authn(&headers, &state.signer) {
-        Ok(t) => t,
-        Err(resp) => return resp.into_response(),
-    };
-    let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
-    };
-    let started = Instant::now();
-    let http_action = "tenant.profile_delete";
-    let http_method = "DELETE";
-    let http_route = "/tenant/v1/profiles/{profile_id}";
-
-    let tenant_id_for_audit = tenant_id.clone();
-    let profile_id_for_meta = profile_id.clone();
-
-    let mut status = StatusCode::OK;
-    let mut ok = false;
-    let mut error: Option<AuditError> = None;
-    let mut profile_uuid: Option<Uuid> = None;
-
-    let resp = 'resp: {
-        // UUIDv4 only, otherwise 404 (avoid enumeration patterns).
-        let pu = match Uuid::parse_str(&profile_id) {
-            Ok(u) if u.get_version() == Some(Version::Random) => u,
-            _ => {
-                status = StatusCode::NOT_FOUND;
-                error = Some(AuditError::new("not_found", "profile not found"));
-                break 'resp (status, "profile not found").into_response();
-            }
-        };
-        profile_uuid = Some(pu);
-
-        // Cross-tenant guard (404 on mismatch).
-        match store.get_profile(&profile_id).await {
-            Ok(Some(p)) if p.tenant_id == tenant_id => {}
-            Ok(_) => {
-                status = StatusCode::NOT_FOUND;
-                error = Some(AuditError::new("not_found", "profile not found"));
-                break 'resp (status, "profile not found").into_response();
-            }
-            Err(e) => {
-                status = StatusCode::INTERNAL_SERVER_ERROR;
-                let msg = e.to_string();
-                error = Some(AuditError::new("internal_error", msg.clone()));
-                break 'resp (status, msg).into_response();
-            }
-        }
-
-        match store.delete_profile(&profile_id).await {
-            Ok(true) => {
-                ok = true;
-                break 'resp Json(OkResponse { ok: true }).into_response();
-            }
-            Ok(false) => {
-                status = StatusCode::NOT_FOUND;
-                error = Some(AuditError::new("not_found", "profile not found"));
-                break 'resp (status, "profile not found").into_response();
-            }
-            Err(e) => {
-                status = StatusCode::INTERNAL_SERVER_ERROR;
-                let msg = e.to_string();
-                error = Some(AuditError::new("internal_error", msg.clone()));
-                break 'resp (status, msg).into_response();
-            }
-        }
-    };
-
-    state
-        .audit
-        .record(crate::audit::http_event(HttpAuditEvent {
-            tenant_id: tenant_id_for_audit,
-            actor: AuditActor {
-                profile_id: profile_uuid,
-                ..AuditActor::default()
-            },
-            action: http_action,
-            http_method,
-            http_route,
-            status_code: i32::from(status.as_u16()),
-            ok,
-            elapsed: started.elapsed(),
-            meta: serde_json::json!({
-                "profile_id": profile_id_for_meta,
-            }),
-            error,
-        }))
-        .await;
-
-    resp
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct ProfileSurfaceTool {
     source_id: String,
     name: String,
@@ -1975,6 +605,11 @@ struct ProfileSurfaceTool {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProfileSurfaceResponse {
+    all_resources: Vec<crate::mcp::catalog_transforms::CatalogEntry<rmcp::model::Resource>>,
+    all_resource_templates:
+        Vec<crate::mcp::catalog_transforms::CatalogEntry<rmcp::model::ResourceTemplate>>,
+    all_prompts: Vec<crate::mcp::catalog_transforms::CatalogEntry<rmcp::model::Prompt>>,
+    resource_templates: Vec<rmcp::model::ResourceTemplate>,
     profile_id: String,
     generated_at_unix: u64,
     sources: Vec<crate::mcp::ProfileSurfaceSource>,
@@ -1991,6 +626,7 @@ struct ProfileSurfaceResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UpstreamSurfaceResponse {
+    resource_templates: Vec<rmcp::model::ResourceTemplate>,
     upstream_id: String,
     generated_at_unix: u64,
     sources: Vec<crate::mcp::ProfileSurfaceSource>,
@@ -2012,14 +648,14 @@ async fn get_upstream_surface(
         Err(resp) => return resp.into_response(),
     };
     let Some(admin_store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Ensure tenant exists + enabled.
     match admin_store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     // Resolve upstream id: prefer tenant-owned, else global.
@@ -2028,10 +664,10 @@ async fn get_upstream_surface(
         Ok(Some(_)) => internal_id,
         Ok(None) => match admin_store.get_upstream(&upstream_id).await {
             Ok(Some(_)) => upstream_id.clone(),
-            Ok(None) => return (StatusCode::NOT_FOUND, "upstream not found").into_response(),
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Ok(None) => return ApiError::not_found(Resource::Upstream).into_response(),
+            Err(e) => return ApiError::internal(e).into_response(),
         },
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     };
 
     let profile = crate::store::Profile {
@@ -2043,6 +679,7 @@ async fn get_upstream_surface(
         enabled_tools: vec![],
         data_plane_auth_mode: DataPlaneAuthMode::Disabled,
         accept_x_api_key: false,
+        oauth_required_scopes: Vec::new(),
         rate_limit_enabled: false,
         rate_limit_tool_calls_per_minute: None,
         quota_enabled: false,
@@ -2052,11 +689,17 @@ async fn get_upstream_surface(
         mcp: McpProfileSettings::default(),
     };
 
-    let (sources, tools, _all_tools, resources, prompts) =
-        match crate::mcp::probe_profile_surface(&state.mcp_state, &profile).await {
-            Ok(r) => r,
-            Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
-        };
+    let crate::mcp::ProbedProfileSurface {
+        sources,
+        tools,
+        resources,
+        resource_templates,
+        prompts,
+        ..
+    } = match crate::mcp::probe_upstream_surface(&state.mcp_state, &profile).await {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
+    };
 
     let generated_at_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2064,6 +707,7 @@ async fn get_upstream_surface(
         .as_secs();
 
     Json(UpstreamSurfaceResponse {
+        resource_templates,
         upstream_id,
         generated_at_unix,
         sources,
@@ -2074,48 +718,35 @@ async fn get_upstream_surface(
     .into_response()
 }
 
-async fn get_profile_surface(
-    axum::Extension(state): axum::Extension<Arc<TenantState>>,
-    headers: HeaderMap,
-    Path(profile_id): Path<String>,
-) -> impl IntoResponse {
-    let tenant_id = match authn(&headers, &state.signer) {
-        Ok(t) => t,
-        Err(resp) => return resp.into_response(),
-    };
-
-    // UUIDv4 only, otherwise 404 (avoid enumeration patterns).
-    if Uuid::parse_str(&profile_id)
-        .ok()
-        .and_then(|u| (u.get_version() == Some(Version::Random)).then_some(u))
-        .is_none()
-    {
-        return (StatusCode::NOT_FOUND, "profile not found").into_response();
+async fn load_profile_for_probe(
+    state: &TenantState,
+    headers: &HeaderMap,
+    profile_id: &str,
+) -> Result<crate::store::Profile, Response> {
+    let tenant_id = authn(headers, &state.signer).map_err(IntoResponse::into_response)?;
+    if !Uuid::parse_str(profile_id).is_ok_and(|id| id.get_version() == Some(Version::Random)) {
+        return Err(ApiError::not_found(Resource::Profile).into_response());
     }
-
-    // Ensure tenant exists + enabled (consistent with other tenant endpoints).
-    let Some(admin_store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
-    };
+    let admin_store = state
+        .store
+        .as_ref()
+        .ok_or_else(|| ApiError::store_unavailable(StoreKind::Tenant).into_response())?;
     match admin_store.get_tenant(&tenant_id).await {
-        Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(Some(tenant)) if tenant.enabled => {}
+        Ok(_) => return Err(ApiError::invalid_tenant().into_response()),
+        Err(error) => return Err(ApiError::internal(error).into_response()),
     }
-
-    // IMPORTANT: allow probing surfaces for disabled profiles.
-    // Disabled profiles are hidden from the data-plane store (and from /{profile_id}/mcp),
-    // but operators still need to inspect their surface to configure/fix them.
-    let admin_profile = match admin_store.get_profile(&profile_id).await {
-        Ok(Some(p)) if p.tenant_id == tenant_id => p,
-        Ok(_) => return (StatusCode::NOT_FOUND, "profile not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    // Tenant ownership is required; disabled profiles remain inspectable.
+    let admin_profile = match admin_store.get_profile(profile_id).await {
+        Ok(Some(profile)) if profile.tenant_id == tenant_id => profile,
+        Ok(_) => return Err(ApiError::not_found(Resource::Profile).into_response()),
+        Err(error) => return Err(ApiError::internal(error).into_response()),
     };
-
     let mut source_ids = admin_profile.upstream_ids.clone();
     source_ids.extend(admin_profile.source_ids.clone());
-
-    let profile = crate::store::Profile {
+    let mut seen = std::collections::HashSet::new();
+    source_ids.retain(|source| seen.insert(source.clone()));
+    Ok(crate::store::Profile {
         id: admin_profile.id,
         tenant_id: admin_profile.tenant_id,
         allow_partial_upstreams: admin_profile.allow_partial_upstreams,
@@ -2124,6 +755,7 @@ async fn get_profile_surface(
         enabled_tools: admin_profile.enabled_tools,
         data_plane_auth_mode: admin_profile.data_plane_auth_mode,
         accept_x_api_key: admin_profile.accept_x_api_key,
+        oauth_required_scopes: admin_profile.oauth_required_scopes,
         rate_limit_enabled: admin_profile.rate_limit_enabled,
         rate_limit_tool_calls_per_minute: admin_profile.rate_limit_tool_calls_per_minute,
         quota_enabled: admin_profile.quota_enabled,
@@ -2131,13 +763,53 @@ async fn get_profile_surface(
         tool_call_timeout_secs: admin_profile.tool_call_timeout_secs,
         tool_policies: admin_profile.tool_policies,
         mcp: admin_profile.mcp,
+    })
+}
+
+async fn check_profile_connections(
+    axum::Extension(state): axum::Extension<Arc<TenantState>>,
+    headers: HeaderMap,
+    Path(profile_id): Path<String>,
+) -> Response {
+    let profile = match load_profile_for_probe(&state, &headers, &profile_id).await {
+        Ok(profile) => profile,
+        Err(response) => return response,
+    };
+    let mut checks = crate::mcp::check_profile_connections(&state.mcp_state, &profile).await;
+    for check in &mut checks {
+        if let Some((tenant, local_id)) = parse_tenant_upstream_internal_id(&check.source_id)
+            && tenant == profile.tenant_id
+        {
+            check.source_id = local_id;
+        }
+    }
+    Json(serde_json::json!({"checks":checks})).into_response()
+}
+
+async fn get_profile_surface(
+    axum::Extension(state): axum::Extension<Arc<TenantState>>,
+    headers: HeaderMap,
+    Path(profile_id): Path<String>,
+) -> impl IntoResponse {
+    let profile = match load_profile_for_probe(&state, &headers, &profile_id).await {
+        Ok(profile) => profile,
+        Err(response) => return response,
     };
 
-    let (sources, tools, all_tools, resources, prompts) =
-        match crate::mcp::probe_profile_surface(&state.mcp_state, &profile).await {
-            Ok(r) => r,
-            Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
-        };
+    let crate::mcp::ProbedProfileSurface {
+        all_resources,
+        all_resource_templates,
+        all_prompts,
+        sources,
+        tools,
+        all_tools,
+        resources,
+        resource_templates,
+        prompts,
+    } = match crate::mcp::probe_profile_surface(&state.mcp_state, &profile).await {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
+    };
 
     let generated_at_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2145,6 +817,10 @@ async fn get_profile_surface(
         .as_secs();
 
     Json(ProfileSurfaceResponse {
+        all_resources,
+        all_resource_templates,
+        all_prompts,
+        resource_templates,
         profile_id,
         generated_at_unix,
         sources,
@@ -2172,12 +848,16 @@ async fn get_profile_surface(
 #[serde(tag = "type", rename_all = "kebab-case")]
 enum PutToolSourceBody {
     Http {
+        #[serde(default, rename = "expectedRevision")]
+        expected_revision: Option<i64>,
         #[serde(default = "default_true")]
         enabled: bool,
         #[serde(flatten)]
         config: HttpServerConfig,
     },
     Openapi {
+        #[serde(default, rename = "expectedRevision")]
+        expected_revision: Option<i64>,
         #[serde(default = "default_true")]
         enabled: bool,
         #[serde(flatten)]
@@ -2197,6 +877,7 @@ struct ToolSourceResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ToolSourceDetailResponse {
+    revision: i64,
     id: String,
     #[serde(rename = "type")]
     tool_type: String,
@@ -2290,6 +971,8 @@ struct AuditStatsQuery {
     tool_ref: Option<String>,
     #[serde(default)]
     limit: Option<i64>,
+    #[serde(default)]
+    offset: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2304,16 +987,12 @@ struct ToolCallStatsByApiKeyResponse {
     items: Vec<crate::store::ToolCallStatsByApiKey>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProfileAuditSettingsResponse {
-    audit_settings: Value,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PutProfileAuditSettingsRequest {
     audit_settings: Value,
+    #[serde(default)]
+    expected_revision: Option<i64>,
 }
 
 fn is_valid_source_id(id: &str) -> bool {
@@ -2400,14 +1079,14 @@ async fn openapi_inspect(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     let spec_url = req.spec_url.trim();
@@ -2476,14 +1155,14 @@ async fn validate_source_id(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     let id = req.id.trim();
@@ -2519,7 +1198,7 @@ async fn validate_source_id(
             .into_response();
         }
         Ok(None) => {}
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     Json(ValidateSourceIdResponse {
@@ -2538,7 +1217,7 @@ async fn list_tool_sources(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     match store.list_tool_sources(&tenant_id).await {
@@ -2553,7 +1232,7 @@ async fn list_tool_sources(
                 .collect();
             Json(ToolSourcesResponse { sources }).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -2567,7 +1246,7 @@ async fn get_tool_source(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     match store.get_tool_source(&tenant_id, &source_id).await {
@@ -2579,11 +1258,12 @@ async fn get_tool_source(
             let spec = match spec {
                 Ok(v) => v,
                 Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                    return ApiError::internal(e).into_response();
                 }
             };
 
             Json(ToolSourceDetailResponse {
+                revision: s.revision,
                 id: s.id,
                 tool_type: tool_source_kind_str(s.kind).to_string(),
                 enabled: s.enabled,
@@ -2591,8 +1271,8 @@ async fn get_tool_source(
             })
             .into_response()
         }
-        Ok(None) => (StatusCode::NOT_FOUND, "tool source not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::not_found(Resource::ToolSource).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -2606,14 +1286,14 @@ async fn get_tool_source_tools(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     match state
@@ -2623,7 +1303,7 @@ async fn get_tool_source_tools(
         .await
     {
         Ok(Some(tools)) => Json(ToolSourceToolsResponse { tools }).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "tool source not found").into_response(),
+        Ok(None) => ApiError::not_found(Resource::ToolSource).into_response(),
         Err(e) => (StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
@@ -2639,7 +1319,7 @@ async fn put_tool_source(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     let started = Instant::now();
     let outcome =
@@ -2653,7 +1333,7 @@ async fn put_tool_source(
             actor: AuditActor::default(),
             action: "tenant.tool_source_put",
             http_method: "PUT",
-            http_route: "/tenant/v1/tool-sources/{source_id}",
+            http_route: routes::tenant::TOOL_SOURCE.template(),
             status_code: i32::from(outcome.status.as_u16()),
             ok: outcome.status.is_success(),
             elapsed: started.elapsed(),
@@ -2779,14 +1459,26 @@ async fn tenant_put_tool_source_inner(
         return outcome;
     }
 
-    let (enabled, kind, spec_res) = match body {
-        PutToolSourceBody::Http { enabled, config } => {
-            (enabled, ToolSourceKind::Http, serde_json::to_value(&config))
-        }
-        PutToolSourceBody::Openapi { enabled, config } => (
+    let (enabled, kind, spec_res, expected_revision) = match body {
+        PutToolSourceBody::Http {
+            enabled,
+            config,
+            expected_revision,
+        } => (
+            enabled,
+            ToolSourceKind::Http,
+            serde_json::to_value(&config),
+            expected_revision,
+        ),
+        PutToolSourceBody::Openapi {
+            enabled,
+            config,
+            expected_revision,
+        } => (
             enabled,
             ToolSourceKind::Openapi,
             serde_json::to_value(&config),
+            expected_revision,
         ),
     };
     let kind_for_meta = Some(format!("{kind:?}"));
@@ -2807,10 +1499,22 @@ async fn tenant_put_tool_source_inner(
     };
 
     match store
-        .put_tool_source(tenant_id, source_id, enabled, kind, spec)
+        .put_tool_source(tenant_id, source_id, enabled, kind, spec, expected_revision)
         .await
     {
         Ok(()) => TenantPutToolSourceOutcome::ok(kind_for_meta, enabled_for_meta),
+        Err(e)
+            if e.is::<crate::store::ToolSourceRevisionConflict>()
+                || e.is::<crate::store::ToolSourceAlreadyExists>() =>
+        {
+            TenantPutToolSourceOutcome::fail_with_meta(
+                StatusCode::CONFLICT,
+                e.to_string(),
+                AuditError::new("revision_conflict", e.to_string()),
+                kind_for_meta,
+                enabled_for_meta,
+            )
+        }
         Err(e) => {
             let msg = e.to_string();
             TenantPutToolSourceOutcome::fail_with_meta(
@@ -2834,7 +1538,7 @@ async fn delete_tool_source(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     let started = Instant::now();
 
@@ -2851,7 +1555,7 @@ async fn delete_tool_source(
             StatusCode::NOT_FOUND,
             false,
             Some(AuditError::new("not_found", "tool source not found")),
-            (StatusCode::NOT_FOUND, "tool source not found").into_response(),
+            ApiError::not_found(Resource::ToolSource).into_response(),
         ),
         Err(e) => {
             let msg = e.to_string();
@@ -2859,7 +1563,7 @@ async fn delete_tool_source(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 false,
                 Some(AuditError::new("internal_error", msg.clone())),
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                ApiError::internal(msg).into_response(),
             )
         }
     };
@@ -2871,7 +1575,7 @@ async fn delete_tool_source(
             actor: AuditActor::default(),
             action: "tenant.tool_source_delete",
             http_method: "DELETE",
-            http_route: "/tenant/v1/tool-sources/{source_id}",
+            http_route: routes::tenant::TOOL_SOURCE.template(),
             status_code: i32::from(status.as_u16()),
             ok,
             elapsed: started.elapsed(),
@@ -2894,12 +1598,12 @@ async fn list_secrets(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     match store.list_secrets(&tenant_id).await {
         Ok(secrets) => Json(SecretsResponse { secrets }).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -2913,7 +1617,7 @@ async fn put_secret(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     let started = Instant::now();
     let tenant_id_for_audit = tenant_id.clone();
@@ -2930,7 +1634,7 @@ async fn put_secret(
                 actor: AuditActor::default(),
                 action: "tenant.secret_put",
                 http_method: "PUT",
-                http_route: "/tenant/v1/secrets",
+                http_route: routes::tenant::SECRETS.template(),
                 status_code: i32::from(status.as_u16()),
                 ok: false,
                 elapsed: started.elapsed(),
@@ -2953,7 +1657,7 @@ async fn put_secret(
                 actor: AuditActor::default(),
                 action: "tenant.secret_put",
                 http_method: "PUT",
-                http_route: "/tenant/v1/secrets",
+                http_route: routes::tenant::SECRETS.template(),
                 status_code: i32::from(status.as_u16()),
                 ok: false,
                 elapsed: started.elapsed(),
@@ -2981,7 +1685,7 @@ async fn put_secret(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 false,
                 Some(AuditError::new("internal_error", msg.clone())),
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                ApiError::internal(msg).into_response(),
             )
         }
     };
@@ -2993,7 +1697,7 @@ async fn put_secret(
             actor: AuditActor::default(),
             action: "tenant.secret_put",
             http_method: "PUT",
-            http_route: "/tenant/v1/secrets",
+            http_route: routes::tenant::SECRETS.template(),
             status_code: i32::from(status.as_u16()),
             ok,
             elapsed: started.elapsed(),
@@ -3018,7 +1722,7 @@ async fn delete_secret(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     let started = Instant::now();
 
@@ -3035,7 +1739,7 @@ async fn delete_secret(
             StatusCode::NOT_FOUND,
             false,
             Some(AuditError::new("not_found", "secret not found")),
-            (StatusCode::NOT_FOUND, "secret not found").into_response(),
+            ApiError::not_found(Resource::Secret).into_response(),
         ),
         Err(e) => {
             let msg = e.to_string();
@@ -3043,7 +1747,7 @@ async fn delete_secret(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 false,
                 Some(AuditError::new("internal_error", msg.clone())),
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                ApiError::internal(msg).into_response(),
             )
         }
     };
@@ -3055,7 +1759,7 @@ async fn delete_secret(
             actor: AuditActor::default(),
             action: "tenant.secret_delete",
             http_method: "DELETE",
-            http_route: "/tenant/v1/secrets/{name}",
+            http_route: routes::tenant::SECRET.template(),
             status_code: i32::from(status.as_u16()),
             ok,
             elapsed: started.elapsed(),
@@ -3106,7 +1810,7 @@ async fn list_api_keys(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
         return resp;
@@ -3114,7 +1818,7 @@ async fn list_api_keys(
 
     match store.list_api_keys(&tenant_id).await {
         Ok(api_keys) => Json(ApiKeysResponse { api_keys }).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -3128,7 +1832,7 @@ async fn create_api_key(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
         return resp;
@@ -3147,7 +1851,7 @@ async fn create_api_key(
             },
             action: "tenant.api_key_create",
             http_method: "POST",
-            http_route: "/tenant/v1/api-keys",
+            http_route: routes::tenant::API_KEYS.template(),
             status_code: i32::from(outcome.status.as_u16()),
             ok: outcome.status.is_success(),
             elapsed: started.elapsed(),
@@ -3332,7 +2036,7 @@ async fn revoke_api_key(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     if let Err(resp) = ensure_enabled_tenant(store, &tenant_id).await {
         return resp;
@@ -3361,7 +2065,7 @@ async fn revoke_api_key(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 false,
                 Some(AuditError::new("internal_error", msg.clone())),
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                ApiError::internal(msg).into_response(),
             )
         }
     };
@@ -3376,7 +2080,7 @@ async fn revoke_api_key(
             },
             action: "tenant.api_key_revoke",
             http_method: "DELETE",
-            http_route: "/tenant/v1/api-keys/{api_key_id}",
+            http_route: routes::tenant::API_KEY.template(),
             status_code: i32::from(status.as_u16()),
             ok,
             elapsed: started.elapsed(),
@@ -3390,13 +2094,6 @@ async fn revoke_api_key(
     resp
 }
 
-fn validate_audit_default_level(level: &str) -> Result<(), &'static str> {
-    match level {
-        "off" | "summary" | "metadata" | "payload" => Ok(()),
-        _ => Err("invalid defaultLevel (allowed: off|summary|metadata|payload)"),
-    }
-}
-
 async fn get_audit_settings(
     axum::Extension(state): axum::Extension<Arc<TenantState>>,
     headers: HeaderMap,
@@ -3406,14 +2103,14 @@ async fn get_audit_settings(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     match store.get_tenant_audit_settings(&tenant_id).await {
@@ -3423,8 +2120,8 @@ async fn get_audit_settings(
             default_level: s.default_level,
         })
         .into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "tenant not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::not_found(Resource::Tenant).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -3438,20 +2135,24 @@ async fn put_audit_settings(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     if req.retention_days < 0 {
         return (StatusCode::BAD_REQUEST, "retentionDays must be >= 0").into_response();
     }
-    if let Err(msg) = validate_audit_default_level(req.default_level.trim()) {
+    if let Err(msg) = req
+        .default_level
+        .trim()
+        .parse::<unrelated_gateway_api::audit::AuditLevel>()
+    {
         return (StatusCode::BAD_REQUEST, msg).into_response();
     }
 
@@ -3473,7 +2174,7 @@ async fn put_audit_settings(
         }
         Err(e) => {
             let msg = e.to_string();
-            (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+            ApiError::internal(msg).into_response()
         }
     }
 }
@@ -3487,20 +2188,20 @@ async fn get_transport_limits(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     match store.get_tenant_transport_limits(&tenant_id).await {
         Ok(Some(limits)) => Json(limits).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "tenant not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(None) => ApiError::not_found(Resource::Tenant).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -3514,14 +2215,14 @@ async fn put_transport_limits(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     if let Err(msg) = crate::transport_limits::validate_transport_limits_settings(&req) {
@@ -3532,7 +2233,7 @@ async fn put_transport_limits(
         Ok(()) => Json(OkResponse { ok: true }).into_response(),
         Err(e) => {
             let msg = e.to_string();
-            (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+            ApiError::internal(msg).into_response()
         }
     }
 }
@@ -3547,14 +2248,14 @@ async fn list_audit_events(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     // Ensure tenant exists + enabled.
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     let filter = crate::store::AuditEventFilter {
@@ -3585,13 +2286,13 @@ async fn tool_call_stats_by_tool(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     let filter = crate::store::AuditStatsFilter {
@@ -3601,6 +2302,7 @@ async fn tool_call_stats_by_tool(
         api_key_id: q.api_key_id,
         tool_ref: q.tool_ref,
         limit: q.limit.unwrap_or(100).clamp(1, 1000),
+        offset: q.offset.unwrap_or(0).max(0),
     };
 
     match store.tool_call_stats_by_tool(&tenant_id, filter).await {
@@ -3619,13 +2321,13 @@ async fn tool_call_stats_by_api_key(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
 
     match store.get_tenant(&tenant_id).await {
         Ok(Some(t)) if t.enabled => {}
-        Ok(_) => return (StatusCode::UNAUTHORIZED, "invalid tenant").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
     let filter = crate::store::AuditStatsFilter {
@@ -3635,6 +2337,7 @@ async fn tool_call_stats_by_api_key(
         api_key_id: q.api_key_id,
         tool_ref: q.tool_ref,
         limit: q.limit.unwrap_or(100).clamp(1, 1000),
+        offset: q.offset.unwrap_or(0).max(0),
     };
 
     match store.tool_call_stats_by_api_key(&tenant_id, filter).await {
@@ -3653,8 +2356,14 @@ async fn get_profile_audit_settings(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
+
+    match store.get_tenant(&tenant_id).await {
+        Ok(Some(tenant)) if tenant.enabled => {}
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(error) => return ApiError::internal(error).into_response(),
+    }
 
     // UUIDv4 only, otherwise 404 (avoid enumeration patterns).
     if Uuid::parse_str(&profile_id)
@@ -3662,20 +2371,23 @@ async fn get_profile_audit_settings(
         .and_then(|u| (u.get_version() == Some(Version::Random)).then_some(u))
         .is_none()
     {
-        return (StatusCode::NOT_FOUND, "profile not found").into_response();
+        return ApiError::not_found(Resource::Profile).into_response();
     }
 
     // Cross-tenant guard (404 on mismatch).
     match store.get_profile(&profile_id).await {
-        Ok(Some(p)) if p.tenant_id == tenant_id && p.enabled => {}
-        Ok(_) => return (StatusCode::NOT_FOUND, "profile not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(Some(p)) if p.tenant_id == tenant_id => {}
+        Ok(_) => return ApiError::not_found(Resource::Profile).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
-    match store.get_profile_audit_settings(&profile_id).await {
-        Ok(Some(v)) => Json(ProfileAuditSettingsResponse { audit_settings: v }).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "profile not found").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    match store
+        .get_profile_audit_settings(&tenant_id, &profile_id)
+        .await
+    {
+        Ok(Some(v)) => Json(v).into_response(),
+        Ok(None) => ApiError::not_found(Resource::Profile).into_response(),
+        Err(e) => ApiError::internal(e).into_response(),
     }
 }
 
@@ -3690,40 +2402,64 @@ async fn put_profile_audit_settings(
         Err(resp) => return resp.into_response(),
     };
     let Some(store) = &state.store else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "Tenant store unavailable").into_response();
+        return ApiError::store_unavailable(StoreKind::Tenant).into_response();
     };
     let started = Instant::now();
+
+    match store.get_tenant(&tenant_id).await {
+        Ok(Some(tenant)) if tenant.enabled => {}
+        Ok(_) => return ApiError::invalid_tenant().into_response(),
+        Err(error) => return ApiError::internal(error).into_response(),
+    }
 
     // UUIDv4 only, otherwise 404 (avoid enumeration patterns).
     let profile_uuid = match Uuid::parse_str(&profile_id) {
         Ok(u) if u.get_version() == Some(Version::Random) => u,
-        _ => return (StatusCode::NOT_FOUND, "profile not found").into_response(),
+        _ => return ApiError::not_found(Resource::Profile).into_response(),
     };
 
     // Cross-tenant guard (404 on mismatch).
     match store.get_profile(&profile_id).await {
-        Ok(Some(p)) if p.tenant_id == tenant_id && p.enabled => {}
-        Ok(_) => return (StatusCode::NOT_FOUND, "profile not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(Some(p)) if p.tenant_id == tenant_id => {}
+        Ok(_) => return ApiError::not_found(Resource::Profile).into_response(),
+        Err(e) => return ApiError::internal(e).into_response(),
     }
 
-    if !req.audit_settings.is_object() {
-        return (
-            StatusCode::BAD_REQUEST,
-            "auditSettings must be a JSON object",
-        )
-            .into_response();
-    }
+    let audit_settings = match serde_json::from_value::<
+        unrelated_gateway_api::audit::ProfileAuditSettings,
+    >(req.audit_settings.clone())
+    {
+        Ok(settings) => settings,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
 
     let (status, ok, error, resp) = match store
-        .put_profile_audit_settings(&profile_id, req.audit_settings.clone())
+        .put_profile_audit_settings(
+            &tenant_id,
+            &profile_id,
+            audit_settings,
+            req.expected_revision,
+        )
         .await
     {
-        Ok(()) => (
-            StatusCode::OK,
-            true,
-            None,
-            Json(OkResponse { ok: true }).into_response(),
+        Ok(()) => {
+            state
+                .invalidation
+                .apply_local(&crate::pg_invalidation::InvalidationEvent::Profile {
+                    profile_id: profile_id.clone(),
+                });
+            (
+                StatusCode::OK,
+                true,
+                None,
+                Json(OkResponse { ok: true }).into_response(),
+            )
+        }
+        Err(e) if e.is::<crate::store::ProfileRevisionConflict>() => (
+            StatusCode::CONFLICT,
+            false,
+            Some(AuditError::new("revision_conflict", e.to_string())),
+            (StatusCode::CONFLICT, e.to_string()).into_response(),
         ),
         Err(e) => {
             let msg = e.to_string();
@@ -3731,7 +2467,7 @@ async fn put_profile_audit_settings(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 false,
                 Some(AuditError::new("internal_error", msg.clone())),
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+                ApiError::internal(msg).into_response(),
             )
         }
     };
@@ -3746,7 +2482,7 @@ async fn put_profile_audit_settings(
             },
             action: "tenant.profile_audit_settings_put",
             http_method: "PUT",
-            http_route: "/tenant/v1/profiles/{profile_id}/audit/settings",
+            http_route: routes::tenant::PROFILE_AUDIT.template(),
             status_code: i32::from(status.as_u16()),
             ok,
             elapsed: started.elapsed(),
@@ -3802,7 +2538,6 @@ pub fn now_unix_secs() -> anyhow::Result<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn upstream_activity_ttl_uses_request_override_and_clamps_to_minimum() {
@@ -3814,62 +2549,5 @@ mod tests {
             crate::pg_store::resolve_upstream_session_activity_ttl_secs(Some(0)),
             1
         );
-    }
-
-    #[test]
-    fn managed_mcp_create_error_status_maps_known_messages_to_bad_request() {
-        assert_eq!(
-            managed_mcp_create_error_status("deployable not found or disabled"),
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
-            managed_mcp_create_error_status("unexpected db error"),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-    }
-
-    #[test]
-    fn resolve_managed_mcp_patch_validates_enabled_replica_rules() {
-        let existing = ManagedMcpDeploymentRequest {
-            id: "req-1".to_string(),
-            tenant_id: "t1".to_string(),
-            deployable_id: "d1".to_string(),
-            desired_enabled: true,
-            desired_replicas: 1,
-            status: crate::store::ManagedMcpDeploymentStatus::Pending,
-            upstream_id: None,
-            message: None,
-            created_at_unix: 0,
-            updated_at_unix: 0,
-        };
-        let patch = PatchManagedMcpDeploymentRequestBody {
-            enabled: Some(true),
-            replicas: Some(0),
-        };
-        let err = resolve_managed_mcp_patch(&existing, &patch).expect_err("should reject");
-        assert!(err.contains("at least 1"));
-    }
-
-    #[test]
-    fn resolve_managed_mcp_patch_applies_defaults_and_accepts_disable_to_zero() {
-        let existing = ManagedMcpDeploymentRequest {
-            id: "req-1".to_string(),
-            tenant_id: "t1".to_string(),
-            deployable_id: "d1".to_string(),
-            desired_enabled: true,
-            desired_replicas: 3,
-            status: crate::store::ManagedMcpDeploymentStatus::Ready,
-            upstream_id: Some("managed_t1_req_1".to_string()),
-            message: None,
-            created_at_unix: 0,
-            updated_at_unix: 0,
-        };
-        let patch = PatchManagedMcpDeploymentRequestBody {
-            enabled: Some(false),
-            replicas: Some(0),
-        };
-        let (enabled, replicas) = resolve_managed_mcp_patch(&existing, &patch).expect("valid");
-        assert!(!enabled);
-        assert_eq!(replicas, 0);
     }
 }

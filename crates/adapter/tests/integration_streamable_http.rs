@@ -1,3 +1,4 @@
+use unrelated_test_support::images;
 mod common;
 mod common_mcp;
 
@@ -13,7 +14,7 @@ use common::{KillOnDrop, pick_unused_port, spawn_adapter, wait_http_ok};
 use common_mcp::{McpStreamableHttpSession, tool_call_body_json};
 
 async fn start_httpbin() -> anyhow::Result<(testcontainers::ContainerAsync<GenericImage>, String)> {
-    let httpbin = GenericImage::new("kennethreitz/httpbin", "latest")
+    let httpbin = GenericImage::new(images::HTTPBIN.name, images::HTTPBIN.tag)
         .with_exposed_port(80.tcp())
         .start()
         .await

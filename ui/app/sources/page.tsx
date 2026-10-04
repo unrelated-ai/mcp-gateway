@@ -5,16 +5,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { z } from "zod";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
 import {
   Badge,
   Button,
   Callout,
   ConfirmModal,
   EmptyState,
-  Input,
   Modal,
   ModalActions,
   SectionCard,
@@ -43,15 +39,12 @@ type ToolSourceSummary = { id: string; type: string; enabled: boolean };
 const EMPTY_UPSTREAMS: tenantApi.Upstream[] = [];
 const EMPTY_SOURCES: ToolSourceSummary[] = [];
 
-type CreateKind = "tool_http";
-
 export default function SourcesPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const pushToast = useToastStore((s) => s.push);
 
   const addPicker = useDisclosure(false);
-  const [createKind, setCreateKind] = useState<CreateKind | null>(null);
   const [deletingUpstreamId, setDeletingUpstreamId] = useState<string | null>(null);
   const [deletingToolSourceId, setDeletingToolSourceId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -132,12 +125,6 @@ export default function SourcesPage() {
     }
     return { upstreamsUsed, toolSourcesUsed };
   }, [profilesQuery.data]);
-
-  const existingNamesLower = useMemo(() => {
-    return new Set(
-      [...upstreams.map((u) => u.id), ...sources.map((s) => s.id)].map((s) => s.toLowerCase()),
-    );
-  }, [upstreams, sources]);
 
   const deleteUpstreamMutation = useMutation({
     mutationFn: (id: string) => tenantApi.deleteUpstream(id),
@@ -332,7 +319,7 @@ export default function SourcesPage() {
             <EmptyState
               icon={<SourcesIcon className="size-5" />}
               title="No tool sources yet"
-              description="Add an HTTP DSL or OpenAPI source to generate tools for profiles."
+              description="Add an HTTP or OpenAPI source to generate tools for profiles."
               action={{ label: "Add source", onClick: addPicker.onOpen }}
             />
           ) : (
@@ -436,18 +423,15 @@ export default function SourcesPage() {
               type="button"
               onClick={() => {
                 addPicker.onClose();
-                setCreateKind("tool_http");
+                router.push("/sources/new/http");
               }}
               className="rounded-lg border border-edge bg-well p-4 transition-colors duration-150 hover:border-edge-strong hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
               <GlobeIconSimple className="mx-auto mb-2 size-8 text-muted" />
               <div className="inline-flex w-full items-center justify-center gap-2 text-sm font-medium text-fg">
-                HTTP DSL
-                <Badge tone="accent">Beta</Badge>
+                HTTP
               </div>
-              <div className="mt-1 text-xs text-faint">
-                JSON-only editor for now (no validation yet)
-              </div>
+              <div className="mt-1 text-xs text-faint">Define API requests as tools</div>
             </button>
             <button
               type="button"
@@ -493,125 +477,7 @@ export default function SourcesPage() {
           </ModalActions>
         </Modal>
       )}
-
-      {createKind === "tool_http" && (
-        <CreateToolSourceModal
-          type="http"
-          existingNamesLower={existingNamesLower}
-          onClose={() => setCreateKind(null)}
-          onCreated={(id) => {
-            setCreateKind(null);
-            router.push(`/sources/tool-sources/${id}`);
-          }}
-        />
-      )}
-      {/* OpenAPI creation uses the full-page wizard now. */}
     </AppShell>
-  );
-}
-
-const createToolSourceSchema = z.object({
-  name: z
-    .string()
-    .trim()
-    .min(1, "Name is required")
-    .regex(/^[A-Za-z0-9_-]+$/, "Allowed: letters, digits, underscore, dash"),
-});
-
-type CreateToolSourceForm = z.infer<typeof createToolSourceSchema>;
-
-function CreateToolSourceModal({
-  type,
-  existingNamesLower,
-  onClose,
-  onCreated,
-}: {
-  type: "http" | "openapi";
-  existingNamesLower: ReadonlySet<string>;
-  onClose: () => void;
-  onCreated: (id: string) => void;
-}) {
-  const queryClient = useQueryClient();
-  const pushToast = useToastStore((s) => s.push);
-  const {
-    register,
-    handleSubmit,
-    setError,
-    formState: { errors, isSubmitting },
-  } = useForm<CreateToolSourceForm>({
-    resolver: zodResolver(createToolSourceSchema),
-    defaultValues: { name: "" },
-  });
-
-  const createMutation = useMutation({
-    mutationFn: async (values: CreateToolSourceForm) => {
-      const id = values.name.trim();
-      const minimal =
-        type === "http"
-          ? { type: "http", enabled: true, baseUrl: "https://example.com", tools: {} }
-          : { type: "openapi", enabled: true, spec: "https://example.com/openapi.json" };
-      await tenantApi.putToolSource(id, JSON.stringify(minimal));
-      return id;
-    },
-    onSuccess: async (id) => {
-      await queryClient.invalidateQueries({ queryKey: qk.toolSources() });
-      pushToast({ variant: "success", message: "Tool source created" });
-      onCreated(id);
-    },
-    onError: (e) => {
-      pushToast({
-        variant: "error",
-        message: e instanceof Error ? e.message : "Failed to create tool source",
-      });
-    },
-  });
-
-  return (
-    <Modal
-      open
-      onClose={onClose}
-      title={type === "http" ? "Add HTTP DSL source" : "Add OpenAPI source"}
-      description={
-        type === "http"
-          ? "Create a tenant-owned HTTP DSL tool source (executed locally by the Gateway)."
-          : "Create a tenant-owned OpenAPI tool source (executed locally by the Gateway)."
-      }
-      size="lg"
-    >
-      <form
-        className="space-y-4"
-        onSubmit={handleSubmit((v) => {
-          const name = v.name.trim();
-          if (existingNamesLower.has(name.toLowerCase())) {
-            setError("name", {
-              type: "validate",
-              message: "Name already exists (names are case-insensitive). Choose a different one.",
-            });
-            return;
-          }
-          createMutation.mutate({ ...v, name });
-        })}
-      >
-        <Input
-          label="Name"
-          placeholder={type === "http" ? "http1" : "openapi1"}
-          hint="Unique (case-insensitive). Used when attaching to profiles."
-          {...register("name")}
-          error={errors.name?.message}
-          className="font-mono"
-        />
-        <p className="text-xs text-faint">Allowed characters: letters, digits, underscore, dash.</p>
-
-        <ModalActions>
-          <Button type="button" variant="ghost" onClick={onClose} disabled={isSubmitting}>
-            Cancel
-          </Button>
-          <Button type="submit" loading={createMutation.isPending}>
-            Create
-          </Button>
-        </ModalActions>
-      </form>
-    </Modal>
   );
 }
 

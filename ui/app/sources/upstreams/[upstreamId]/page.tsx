@@ -1,5 +1,6 @@
 "use client";
 
+import { CatalogSection } from "@/components/sources/catalog-section";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -909,92 +910,29 @@ export default function UpstreamDetailPage() {
                       </Table>
                     </SectionCard>
 
-                    <SectionCard title="Tools" className="overflow-hidden" bodyClassName="p-0">
-                      {surface.tools.length === 0 ? (
-                        <div className="p-5">
-                          <EmptyState title="No tools discovered" />
-                        </div>
-                      ) : (
-                        <div className="divide-y divide-edge">
-                          {surface.tools.slice(0, 200).map((t) => (
-                            <div key={t.name} className="px-5 py-4">
-                              <div className="font-mono text-sm font-medium text-accent">
-                                {t.name}
-                              </div>
-                              {t.description ? (
-                                <div className="mt-1 text-xs text-faint">{t.description}</div>
-                              ) : null}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {surface.tools.length > 200 ? (
-                        <div className="border-t border-edge px-5 py-3 text-xs text-faint">
-                          Showing first 200 tools.
-                        </div>
-                      ) : null}
-                    </SectionCard>
-
+                    <CatalogSection
+                      title="Tools"
+                      items={surface.tools.map((t) => ({ id: t.name, description: t.description }))}
+                    />
                     <div className="grid gap-6 md:grid-cols-2">
-                      <SectionCard
+                      <CatalogSection
                         title="Resources"
-                        right={
-                          <span className="font-mono text-xs text-faint">
-                            {surface.resources.length}
-                          </span>
-                        }
-                      >
-                        {surface.resources.length === 0 ? (
-                          <EmptyState title="No resources discovered" />
-                        ) : (
-                          <div className="space-y-2">
-                            {surface.resources.slice(0, 50).map((r) => (
-                              <div
-                                key={r.uri}
-                                className="rounded-md border border-edge bg-well px-3 py-2"
-                              >
-                                <div className="break-all font-mono text-xs text-fg">{r.uri}</div>
-                                {r.name ? (
-                                  <div className="mt-1 text-xs text-faint">{r.name}</div>
-                                ) : null}
-                              </div>
-                            ))}
-                            {surface.resources.length > 50 ? (
-                              <div className="text-xs text-faint">Showing first 50.</div>
-                            ) : null}
-                          </div>
-                        )}
-                      </SectionCard>
-
-                      <SectionCard
+                        items={surface.resources.map((r) => ({ id: r.uri, description: r.name }))}
+                      />
+                      <CatalogSection
+                        title="Resource templates"
+                        items={(surface.resourceTemplates ?? []).map((r) => ({
+                          id: r.uriTemplate,
+                          description: r.description ?? r.name,
+                        }))}
+                      />
+                      <CatalogSection
                         title="Prompts"
-                        right={
-                          <span className="font-mono text-xs text-faint">
-                            {surface.prompts.length}
-                          </span>
-                        }
-                      >
-                        {surface.prompts.length === 0 ? (
-                          <EmptyState title="No prompts discovered" />
-                        ) : (
-                          <div className="space-y-2">
-                            {surface.prompts.slice(0, 50).map((p) => (
-                              <div
-                                key={p.name}
-                                className="rounded-md border border-edge bg-well px-3 py-2"
-                              >
-                                <div className="break-all font-mono text-xs text-fg">{p.name}</div>
-                                {p.description ? (
-                                  <div className="mt-1 text-xs text-faint">{p.description}</div>
-                                ) : null}
-                              </div>
-                            ))}
-                            {surface.prompts.length > 50 ? (
-                              <div className="text-xs text-faint">Showing first 50.</div>
-                            ) : null}
-                          </div>
-                        )}
-                      </SectionCard>
+                        items={surface.prompts.map((p) => ({
+                          id: p.name,
+                          description: p.description,
+                        }))}
+                      />
                     </div>
                   </div>
                 ) : (

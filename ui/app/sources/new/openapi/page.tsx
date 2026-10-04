@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
 import { Button, Callout, Input } from "@/components/ui";
 import * as tenantApi from "@/src/lib/tenantApi";
-import { OpenApiAuthFields } from "./auth-fields";
+import { SourceAuthFields } from "@/components/sources/source-auth-fields";
 
 type Step = 1 | 2 | 3 | 4;
 
@@ -191,7 +191,14 @@ export default function NewOpenApiSourceWizardPage() {
                       hint="File paths are not supported in the UI."
                     />
                   </div>
-                  <OpenApiAuthFields auth={auth} onChange={setAuth} disabled={busy} />
+                  <div className="mt-6">
+                    <SourceAuthFields
+                      auth={auth}
+                      onChange={setAuth}
+                      disabled={busy}
+                      hint="Used to download the spec and make API calls."
+                    />
+                  </div>
                 </>
               )}
 

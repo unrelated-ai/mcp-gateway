@@ -8,6 +8,13 @@ use std::time::Duration;
 use unrelated_http_tools::runtime::HttpToolSource;
 use unrelated_openapi_tools::runtime::OpenApiToolSource;
 
+// Shared by config-file and tenant-owned native tool sources.
+// Per-source configuration may override these defaults.
+pub(crate) const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const OPENAPI_PROBE_ENABLED: bool = true;
+pub(crate) const OPENAPI_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Clone, Default)]
 pub struct SharedCatalog {
     inner: Arc<SharedCatalogInner>,
@@ -29,13 +36,6 @@ impl SharedCatalog {
         let mut http_sources = HashMap::new();
         let mut openapi_sources = HashMap::new();
 
-        // Default call timeout for gateway-native outbound HTTP calls.
-        // (Per-tool timeouts can be configured via `defaults.timeout`.)
-        let default_timeout = Duration::from_secs(30);
-        let startup_timeout = Duration::from_secs(30);
-        let openapi_probe_enabled = true;
-        let openapi_probe_timeout = Duration::from_secs(5);
-
         // Gateway is multi-tenant: use a restrictive outbound HTTP safety policy by default,
         // with an opt-in escape hatch for local development/testing.
         let safety = crate::outbound_safety::gateway_outbound_http_safety();
@@ -53,7 +53,7 @@ impl SharedCatalog {
                     let source = HttpToolSource::new_with_safety(
                         id.clone(),
                         config.clone(),
-                        default_timeout,
+                        DEFAULT_CALL_TIMEOUT,
                         safety.clone(),
                     )
                     .with_context(|| format!("build http shared source '{id}'"))?;
@@ -70,10 +70,10 @@ impl SharedCatalog {
                     let source = OpenApiToolSource::build_with_safety(
                         id.clone(),
                         config.clone(),
-                        default_timeout,
-                        startup_timeout,
-                        openapi_probe_enabled,
-                        openapi_probe_timeout,
+                        DEFAULT_CALL_TIMEOUT,
+                        DEFAULT_STARTUP_TIMEOUT,
+                        OPENAPI_PROBE_ENABLED,
+                        OPENAPI_PROBE_TIMEOUT,
                         safety.clone(),
                     )
                     .await

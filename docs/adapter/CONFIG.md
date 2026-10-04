@@ -24,7 +24,7 @@ See:
 
 ## CLI + environment variables
 
-You can also set adapter options with CLI flags (and matching environment variables).
+Adapter options also support CLI flags and matching environment variables.
 
 - Run `unrelated-mcp-adapter --help` for the full list.
 - `--print-effective-config` prints the resolved config and exits.

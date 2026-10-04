@@ -1,4 +1,4 @@
-use super::McpState;
+use super::{McpState, catalog_transforms};
 use crate::contracts::{ContractChange, ContractEvent};
 use crate::session_token::TokenPayloadV1;
 use crate::tools_cache::{CachedToolsSurface, ToolRoute, ToolRouteKind, profile_fingerprint};
@@ -13,42 +13,14 @@ use std::{
     sync::Arc,
 };
 
-pub(super) fn merge_resources_with_collisions(
-    per_upstream: Vec<(String, Vec<rmcp::model::Resource>)>,
-) -> (Vec<rmcp::model::Resource>, HashMap<String, usize>) {
-    let counts = count_resource_uris(&per_upstream);
-    let mut merged = Vec::new();
-    let mut per_source_counts: HashMap<String, usize> = HashMap::new();
-    for (upstream_id, mut resources) in per_upstream {
-        *per_source_counts.entry(upstream_id.clone()).or_default() += resources.len();
-        for r in &mut resources {
-            let uri = r.uri.clone();
-            if counts.get(&uri).copied().unwrap_or(0) > 1 {
-                r.uri = super::ids::resource_collision_urn(&upstream_id, &uri);
-            }
-        }
-        merged.extend(resources);
-    }
-    (merged, per_source_counts)
-}
+pub(crate) const UNRELATED_TOOL_REF_META_KEY: &str = "ai.unrelated/tool-ref";
 
-pub(super) fn merge_prompts_with_collisions(
-    per_upstream: Vec<(String, Vec<rmcp::model::Prompt>)>,
-) -> (Vec<rmcp::model::Prompt>, HashMap<String, usize>) {
-    let counts = count_prompt_names(&per_upstream);
-    let mut merged = Vec::new();
-    let mut per_source_counts: HashMap<String, usize> = HashMap::new();
-    for (upstream_id, mut prompts) in per_upstream {
-        *per_source_counts.entry(upstream_id.clone()).or_default() += prompts.len();
-        for p in &mut prompts {
-            let name = p.name.clone();
-            if counts.get(&name).copied().unwrap_or(0) > 1 {
-                p.name = format!("{upstream_id}:{name}");
-            }
-        }
-        merged.extend(prompts);
-    }
-    (merged, per_source_counts)
+fn set_stable_tool_ref(tool: &mut rmcp::model::Tool, source_id: &str, original_name: &str) {
+    let meta = tool.meta.get_or_insert_with(rmcp::model::MetaObject::new);
+    meta.0.insert(
+        UNRELATED_TOOL_REF_META_KEY.to_string(),
+        serde_json::Value::String(format!("{source_id}:{original_name}")),
+    );
 }
 
 pub(super) fn count_resource_uris(
@@ -58,18 +30,6 @@ pub(super) fn count_resource_uris(
     for (_upstream_id, resources) in per_upstream {
         for r in resources {
             *counts.entry(r.uri.clone()).or_default() += 1;
-        }
-    }
-    counts
-}
-
-fn count_prompt_names(
-    per_upstream: &[(String, Vec<rmcp::model::Prompt>)],
-) -> HashMap<String, usize> {
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    for (_upstream_id, prompts) in per_upstream {
-        for p in prompts {
-            *counts.entry(p.name.clone()).or_default() += 1;
         }
     }
     counts
@@ -113,14 +73,6 @@ pub(super) fn merge_tools_surface(
     profile: &crate::store::Profile,
     sources: Vec<ToolSourceTools>,
 ) -> ToolSurfaceMerge {
-    #[derive(Debug, Clone)]
-    struct ToolRecord {
-        kind: ToolRouteKind,
-        source_id: String,
-        original_name: String,
-        tool: rmcp::model::Tool,
-    }
-
     let mut records: Vec<ToolRecord> = Vec::new();
     let mut per_source_tool_counts: HashMap<String, usize> = HashMap::new();
 
@@ -128,6 +80,10 @@ pub(super) fn merge_tools_surface(
         let mut seen: HashSet<String> = HashSet::new();
         for mut tool in source.tools {
             let original_name = tool.name.to_string();
+            let original_input_schema = tool.input_schema.clone();
+            if !routing_annotations_valid(profile, &tool, &source.source_id) {
+                continue;
+            }
 
             // Schema transforms (param renames + default surface).
             let mut schema = serde_json::Value::Object(tool.input_schema.as_ref().clone());
@@ -179,6 +135,7 @@ pub(super) fn merge_tools_surface(
                 .entry(source.source_id.clone())
                 .or_default() += 1;
             records.push(ToolRecord {
+                original_input_schema,
                 kind: source.kind,
                 source_id: source.source_id.clone(),
                 original_name,
@@ -212,9 +169,13 @@ pub(super) fn merge_tools_surface(
         };
 
         r.tool.name = Cow::Owned(final_name.clone());
+        // This value is Gateway-owned. It is deliberately written after reading the
+        // upstream definition so an upstream cannot spoof another source's stable ref.
+        set_stable_tool_ref(&mut r.tool, &r.source_id, &r.original_name);
         merged.push(r.tool);
 
         let route = ToolRoute {
+            original_input_schema: r.original_input_schema,
             kind: r.kind,
             source_id: r.source_id.clone(),
             original_name: r.original_name.clone(),
@@ -445,7 +406,7 @@ pub(super) async fn aggregate_list_tools(
         id: req_id,
         result: ServerResult::ListToolsResult(result),
     });
-    Ok(super::sse_single_message(&msg))
+    Ok(super::sse_single_message(msg))
 }
 
 pub(super) async fn aggregate_list_resources(
@@ -457,7 +418,16 @@ pub(super) async fn aggregate_list_resources(
 ) -> Result<Response, Response> {
     let per_upstream =
         super::upstream::list_resources_all_upstreams(state, profile_id, payload, hop).await?;
-    let (merged, _per_source_counts) = merge_resources_with_collisions(per_upstream);
+    let rules = catalog_transforms::policy(state, profile_id)
+        .await
+        .map_err(super::protocol::internal_error_response(
+            "load resource policy",
+        ))?;
+    let merged = catalog_transforms::resources(&rules, per_upstream)
+        .into_iter()
+        .filter(|entry| entry.enabled)
+        .map(|entry| entry.exposed)
+        .collect();
 
     let result = ListResourcesResult {
         resources: merged,
@@ -477,7 +447,41 @@ pub(super) async fn aggregate_list_resources(
         id: req_id,
         result: ServerResult::ListResourcesResult(result),
     });
-    Ok(super::sse_single_message(&msg))
+    Ok(super::sse_single_message(msg))
+}
+
+pub(super) async fn aggregate_list_resource_templates(
+    state: &McpState,
+    profile_id: &str,
+    payload: &TokenPayloadV1,
+    req_id: rmcp::model::RequestId,
+    hop: u32,
+) -> Result<Response, Response> {
+    let per_upstream =
+        super::upstream::list_resource_templates_all_upstreams(state, profile_id, payload, hop)
+            .await?;
+    let rules = catalog_transforms::policy(state, profile_id)
+        .await
+        .map_err(super::protocol::internal_error_response(
+            "load resource policy",
+        ))?;
+    let merged = catalog_transforms::templates(&rules, per_upstream)
+        .into_iter()
+        .filter(|entry| entry.enabled)
+        .map(|entry| entry.exposed)
+        .collect();
+
+    let result = rmcp::model::ListResourceTemplatesResult {
+        resource_templates: merged,
+        ..Default::default()
+    };
+
+    let msg = ServerJsonRpcMessage::Response(JsonRpcResponse {
+        jsonrpc: JsonRpcVersion2_0,
+        id: req_id,
+        result: ServerResult::ListResourceTemplatesResult(result),
+    });
+    Ok(super::sse_single_message(msg))
 }
 
 pub(super) async fn aggregate_list_prompts(
@@ -489,7 +493,16 @@ pub(super) async fn aggregate_list_prompts(
 ) -> Result<Response, Response> {
     let per_upstream =
         super::upstream::list_prompts_all_upstreams(state, profile_id, payload, hop).await?;
-    let (merged, _per_source_counts) = merge_prompts_with_collisions(per_upstream);
+    let rules = catalog_transforms::policy(state, profile_id)
+        .await
+        .map_err(super::protocol::internal_error_response(
+            "load prompt policy",
+        ))?;
+    let merged = catalog_transforms::prompts(&rules, per_upstream)
+        .into_iter()
+        .filter(|entry| entry.enabled)
+        .map(|entry| entry.exposed)
+        .collect();
 
     let result = ListPromptsResult {
         prompts: merged,
@@ -509,7 +522,7 @@ pub(super) async fn aggregate_list_prompts(
         id: req_id,
         result: ServerResult::ListPromptsResult(result),
     });
-    Ok(super::sse_single_message(&msg))
+    Ok(super::sse_single_message(msg))
 }
 
 pub(super) async fn resolve_prompt_owner(
@@ -518,31 +531,16 @@ pub(super) async fn resolve_prompt_owner(
     payload: &TokenPayloadV1,
     prompt_name: &str,
     hop: u32,
-) -> anyhow::Result<(String, String)> {
-    if let Some((upstream_id, rest)) = split_prefixed(prompt_name)
-        && payload.bindings.iter().any(|b| b.upstream == upstream_id)
-    {
-        return Ok((upstream_id.to_string(), rest.to_string()));
-    }
-
+) -> anyhow::Result<catalog_transforms::PromptRoute> {
+    let rules = catalog_transforms::policy(state, profile_id).await?;
     let per_upstream = super::upstream::list_prompts_all_upstreams(state, profile_id, payload, hop)
         .await
         .map_err(|_| anyhow::anyhow!("failed to list prompts"))?;
-
-    let mut owners = Vec::new();
-    for (upstream_id, prompts) in per_upstream {
-        if prompts.iter().any(|p| p.name == prompt_name) {
-            owners.push(upstream_id);
-        }
-    }
-
-    match owners.len() {
-        0 => Err(anyhow::anyhow!("unknown prompt: {prompt_name}")),
-        1 => Ok((owners.remove(0), prompt_name.to_string())),
-        _ => Err(anyhow::anyhow!(
-            "ambiguous prompt name '{prompt_name}'; use '<upstream_id>:{prompt_name}'"
-        )),
-    }
+    catalog_transforms::prompt_route(
+        &rules,
+        catalog_transforms::prompts(&rules, per_upstream),
+        prompt_name,
+    )
 }
 
 pub(super) async fn resolve_resource_owner(
@@ -552,6 +550,21 @@ pub(super) async fn resolve_resource_owner(
     uri: &str,
     hop: u32,
 ) -> anyhow::Result<(String, String)> {
+    let rules = catalog_transforms::policy(state, profile_id).await?;
+    if let Some((source, original)) = unrelated_mcp_support::parse_resource_template_uri(uri) {
+        anyhow::ensure!(
+            rules.resource_allowed(&source, &original),
+            "Resource is disabled"
+        );
+        anyhow::ensure!(
+            payload
+                .bindings
+                .iter()
+                .any(|binding| binding.upstream == source),
+            "unknown resource source"
+        );
+        return Ok((source, original));
+    }
     // If this is a gateway collision URN, parse the upstream id from it.
     if super::ids::parse_resource_collision_urn(uri).is_some() {
         // We need to map back to original uri; do that by listing resources and matching exposed uri.
@@ -580,29 +593,12 @@ async fn build_resource_map(
         super::upstream::list_resources_all_upstreams(state, profile_id, payload, hop)
             .await
             .map_err(|_| anyhow::anyhow!("failed to list resources"))?;
-    let counts = count_resource_uris(&per_upstream);
-
-    let mut map = HashMap::new();
-    for (upstream_id, resources) in per_upstream {
-        for r in resources {
-            let original_uri = r.uri.clone();
-            let exposed_uri = if counts.get(&original_uri).copied().unwrap_or(0) > 1 {
-                super::ids::resource_collision_urn(&upstream_id, &original_uri)
-            } else {
-                original_uri.clone()
-            };
-            map.insert(exposed_uri, (upstream_id.clone(), original_uri));
-        }
-    }
-    Ok(map)
-}
-
-fn split_prefixed(s: &str) -> Option<(&str, &str)> {
-    let (prefix, rest) = s.split_once(':')?;
-    if prefix.is_empty() || rest.is_empty() {
-        return None;
-    }
-    Some((prefix, rest))
+    let rules = catalog_transforms::policy(state, profile_id).await?;
+    Ok(catalog_transforms::resources(&rules, per_upstream)
+        .into_iter()
+        .filter(|entry| entry.enabled)
+        .map(|entry| (entry.exposed.uri, (entry.source_id, entry.original.uri)))
+        .collect())
 }
 
 fn list_tools_local_sources(
@@ -622,10 +618,21 @@ async fn list_tools_tenant_sources(
     state: &McpState,
     profile: &crate::store::Profile,
 ) -> Vec<(String, Vec<rmcp::model::Tool>)> {
+    let local_ids = match state
+        .store
+        .tenant_tool_source_ids(&profile.tenant_id, &profile.source_ids)
+        .await
+    {
+        Ok(ids) => ids,
+        Err(error) => {
+            tracing::warn!(%error, "tenant source classification failed");
+            return Vec::new();
+        }
+    };
     let mut out = Vec::new();
     for source_id in &profile.source_ids {
         // Skip shared local sources (handled separately).
-        if state.catalog.is_local_tool_source(source_id) {
+        if state.catalog.is_local_tool_source(source_id) || !local_ids.contains(source_id) {
             continue;
         }
 
@@ -711,4 +718,30 @@ async fn publish_contract_event(state: &McpState, change: Option<ContractChange>
         event_id: state.contracts.next_local_event_id(),
     };
     state.contracts.broadcast_event(event);
+}
+
+#[derive(Debug, Clone)]
+struct ToolRecord {
+    kind: ToolRouteKind,
+    source_id: String,
+    original_name: String,
+    original_input_schema: Arc<rmcp::model::JsonObject>,
+    tool: rmcp::model::Tool,
+}
+
+fn routing_annotations_valid(
+    profile: &crate::store::Profile,
+    tool: &rmcp::model::Tool,
+    source: &str,
+) -> bool {
+    if !profile.mcp.modern_protocol
+        || unrelated_mcp_support::headers::validate_tool_schema(&serde_json::json!(
+            tool.input_schema
+        ))
+        .is_ok()
+    {
+        return true;
+    }
+    tracing::warn!(source, tool = %tool.name, "excluding invalid MCP routing annotations");
+    false
 }

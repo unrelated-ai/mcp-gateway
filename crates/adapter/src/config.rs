@@ -443,7 +443,7 @@ impl AdapterConfig {
         }
 
         // 6) Clamp tool call timeout to the shared cap (Gateway ↔ Adapter coordination).
-        let cap = crate::timeouts::tool_call_timeout_cap_secs();
+        let cap = crate::timeouts::tool_call_timeout_max_secs();
         if adapter.call_timeout == 0 {
             return Err(AdapterError::Config("callTimeout must be > 0".to_string()));
         }
@@ -492,7 +492,7 @@ fn load_config_file(path: &std::path::Path) -> Result<ConfigFile> {
         serde_json::from_str(&content)
             .map_err(|e| AdapterError::Config(format!("Failed to parse {}: {}", path.display(), e)))
     } else {
-        serde_yaml::from_str(&content)
+        serde_saphyr::from_str(&content)
             .map_err(|e| AdapterError::Config(format!("Failed to parse {}: {}", path.display(), e)))
     }
 }
@@ -872,8 +872,8 @@ servers:
 
         let loaded = AdapterConfig::load(cli_args_with_config(cfg)).expect("load config");
 
-        let rendered =
-            serde_yaml::to_string(&loaded.effective_redacted()).expect("serialize redacted config");
+        let rendered = serde_saphyr::to_string(&loaded.effective_redacted())
+            .expect("serialize redacted config");
 
         for secret in [
             "MCP_BEARER_SUPER_SECRET",

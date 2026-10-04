@@ -1,12 +1,14 @@
-//! Shared transforms applied to tool surfaces (names, parameters, defaults).
+//! Shared transforms for MCP tools, resources, and prompts.
 //!
-//! This is intentionally small for now; we will grow it as we implement
-//! per-tenant/per-profile policies in the Gateway and standalone transforms in the Adapter.
+//! Gateway profile policies and standalone Adapter tool transforms share this contract.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::HashMap;
+
+mod catalog;
+pub use catalog::{CatalogOverrides, PromptOverride, PromptParamOverride, ResourceOverride};
 
 mod serde_helpers {
     // Serde's `default = "..."` expects helpers with the signature `fn() -> T`.
@@ -17,21 +19,25 @@ mod serde_helpers {
 
 use serde_helpers::default_true;
 
-/// A minimal transform pipeline for shaping tool surfaces.
+/// A transform pipeline for shaping MCP surfaces.
 ///
 /// This is designed to be shared by:
 /// - the Gateway (per-tenant/per-profile policy)
 /// - the Adapter (standalone single-tenant config)
 ///
-/// The initial scope is intentionally small and only covers:
-/// - tool name renames
-/// - top-level argument renames
-/// - top-level default argument injection
+/// Tool overrides preserve their original unscoped keys for compatibility. Gateway
+/// resource/template and prompt overrides use source IDs and original identities.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransformPipeline {
     #[serde(default)]
     pub tool_overrides: HashMap<String, ToolOverride>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub resource_overrides: CatalogOverrides<ResourceOverride>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub resource_template_overrides: CatalogOverrides<ResourceOverride>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub prompt_overrides: CatalogOverrides<PromptOverride>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]

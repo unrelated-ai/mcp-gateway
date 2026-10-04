@@ -18,7 +18,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: seed-managed-mcp-deployables
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: {{ include "unrelated.images.ref" (dict "root" . "key" "CURL_IMAGE" "image" .Values.image) | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command:
             - /bin/sh

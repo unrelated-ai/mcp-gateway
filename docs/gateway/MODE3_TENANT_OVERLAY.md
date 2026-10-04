@@ -74,6 +74,11 @@ Notes:
 - **Tool sources**:
   - `GET /tenant/v1/tool-sources`
   - `GET|PUT|DELETE /tenant/v1/tool-sources/{source_id}`
+  - Detail responses include `revision`. Sending that value as `expectedRevision` on PUT
+    prevents overwriting a newer edit; stale or deleted sources return **409**. Omitting
+    it retains the existing create-or-replace behavior for API clients. Sending
+    `expectedRevision: 0` creates a source only if it does not exist; a name collision
+    returns **409** without changing the existing source.
   - `POST /tenant/v1/tool-sources/openapi/inspect` accepts `specUrl` and optional
     `auth` using the source auth format. Secret references are resolved within the
     caller's tenant. Preview returns metadata and tools without creating a source.
@@ -147,7 +152,7 @@ Gateway-native execution and upstream MCP proxying use a restrictive outbound po
   - Generate a key (example):
 
 ```bash
-export UNRELATED_GATEWAY_SECRET_KEYS="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export UNRELATED_GATEWAY_SECRET_KEYS="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
 ```
 
 - If `openssl` is available, this also works:
@@ -163,3 +168,53 @@ export UNRELATED_GATEWAY_SECRET_KEYS="$(openssl rand -base64 32 | tr '+/' '-_' |
   - The Gateway also uses a lightweight Postgres `LISTEN/NOTIFY` invalidation channel to clear per-node caches on writes (secrets/tool-sources/profiles/upstreams).
   - In addition, tool routing caches are invalidated locally on `tools` contract changes (including remote changes delivered via fanout).
 - Data-plane authn/z is implemented and configured per profile (API keys + OIDC/JWT). Claim-based RBAC is not implemented yet.
+
+## Resource and prompt overrides
+
+Profile `transforms` also accepts `resourceOverrides`, `resourceTemplateOverrides`,
+and `promptOverrides`. Each map is keyed first by the upstream source ID, then by
+the original resource URI, template URI, or prompt name. Use the `sourceId` and
+`original` identity returned by the profile surface endpoint; tenant-owned upstreams
+have a distinct internal source ID. Aliases never change these configuration keys.
+
+```json
+{
+  "resourceOverrides": {
+    "docs": {
+      "docs:///guide": { "enabled": true, "name": "Team handbook", "description": "Team reference" }
+    }
+  },
+  "resourceTemplateOverrides": {
+    "docs": {
+      "docs:///internal/{id}": { "enabled": false }
+    }
+  },
+  "promptOverrides": {
+    "docs": {
+      "review": {
+        "rename": "review_changes",
+        "params": {
+          "topic": { "rename": "subject", "default": "Recent changes" }
+        }
+      }
+    }
+  }
+}
+```
+
+All entries are enabled by default. Resource overrides accept `name`, `title`, and
+`description`; prompt overrides accept `rename`, `description`, and `params`.
+Prompt defaults are strings, including empty strings. Defaults apply only to omitted
+arguments, and renamed arguments are translated back for prompt calls and completion
+requests. Returned prompt messages and resource content are unchanged.
+
+Disabled resources cannot be read, completed, or subscribed to. Disabled templates
+block matching URI families, including overlaps with enabled entries. Matching keeps
+literal URI text and treats template expressions as wildcards. Existing resource
+notifications are checked against the current profile policy before forwarding.
+
+The surface response includes `allResources`, `allResourceTemplates`, and `allPrompts`
+for management editors. Each entry includes its source, original definition, exposed
+definition, availability, and any restriction or collision error. The ordinary catalog arrays contain
+only available entries. Keep unrelated sections of `transforms` when updating a profile,
+and send its loaded `expectedRevision` to detect concurrent changes.

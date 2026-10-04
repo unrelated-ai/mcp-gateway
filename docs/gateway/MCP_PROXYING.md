@@ -10,7 +10,11 @@ This page describes how the Gateway behaves as an MCP server when it is aggregat
 
 ## What “aggregation” means for MCP
 
-Aggregation means the Gateway exposes **one** MCP endpoint (`/{profile_id}/mcp`) that is backed by **many** upstream sessions.
+Aggregation means the Gateway exposes **one** MCP endpoint (`/{profile_id}/mcp`) that is backed by **many** upstream MCP servers, with optional upstream sessions.
+
+Stateful and sessionless servers can share a profile. See [session handling and
+concurrency](ARCHITECTURE.md#stateful-and-sessionless-upstreams) for routing, stream
+setup, deadlines, and cleanup behavior.
 
 This introduces three classes of collisions:
 
@@ -18,7 +22,7 @@ This introduces three classes of collisions:
 - **Resource URI collisions**: handled by rewriting to stable Gateway URNs (`urn:unrelated-mcp-gateway:resource:...`) when needed.
 - **ID collisions** (server→client requests, SSE event ids): handled by namespacing IDs so responses/resume work correctly.
 
-## Supported MCP interactions (today)
+## Session-based MCP interactions
 
 ### Server → client requests (interactive flows)
 
@@ -48,7 +52,7 @@ fabricating “valid-looking” proxied IDs.
 
 ### Client → server methods (routed / fanned out)
 
-- `tools/list`, `resources/list`, `prompts/list` (fan-out + merge)
+- `tools/list`, `resources/list`, `resources/templates/list`, `prompts/list` (paginated fan-out + merge)
 - `tools/call`, `resources/read`, `prompts/get` (route to owning upstream)
 - `completion/complete` (route by prompt/resource owner)
 - `resources/subscribe`, `resources/unsubscribe` (route by resource owner)
@@ -68,7 +72,7 @@ Forwarded best-effort from upstreams (stdio backends via the Adapter):
 
 It is possible to accidentally configure a profile to “point to itself” by creating an upstream MCP server that uses the profile’s own data-plane URL (`/{profile_id}/mcp`). If the Gateway then proxies `tools/list`, `tools/call`, etc. to that upstream, it can create a **proxy loop**.
 
-### Config-time guard (implemented)
+### Configuration checks
 
 When creating/updating a profile, the Gateway rejects any upstream whose endpoint URL path matches:
 
@@ -76,7 +80,7 @@ When creating/updating a profile, the Gateway rejects any upstream whose endpoin
 
 This blocks the most obvious “self link” misconfiguration.
 
-### Runtime loop guard header (implemented; also recommended for future)
+### Runtime hop limit
 
 To make loops **fail fast** even when config-time detection misses something (or in multi-hop topologies), the Gateway adds an internal hop counter header on outbound upstream requests:
 
@@ -84,9 +88,7 @@ To make loops **fail fast** even when config-time detection misses something (or
 
 On each proxy hop, the Gateway increments the value and rejects forwarding once it exceeds a small maximum (currently 8 hops), returning `502 Bad Gateway` with a loop-detected message.
 
-**Future improvement recommendation**: standardize this hop header across gateways/proxies so multi-gateway deployments can prevent loops deterministically, and consider making the max configurable per environment.
-
-## Outbound safety for upstream MCP endpoints (implemented)
+## Outbound safety for upstream MCP endpoints
 
 The Gateway applies its outbound HTTP safety policy (SSRF hardening) to **upstream MCP endpoint URLs**:
 
@@ -96,7 +98,7 @@ The Gateway applies its outbound HTTP safety policy (SSRF hardening) to **upstre
 
 See: [`docs/gateway/OUTBOUND_HTTP_SAFETY.md`](OUTBOUND_HTTP_SAFETY.md)
 
-## Config knobs that improve UX
+## Profile settings
 
 All of these are per-profile settings under `mcp:` (see [`docs/gateway/MCP_SETTINGS.md`](MCP_SETTINGS.md)):
 
@@ -105,7 +107,7 @@ All of these are per-profile settings under `mcp:` (see [`docs/gateway/MCP_SETTI
 - **`mcp.namespacing`**: choose request-id and SSE-event-id namespacing formats (defaults are safe for aggregation).
 - **`mcp.security`**: per-upstream trust controls (client capability forwarding, server→client request filtering, signed proxied IDs).
 
-## Additional runtime behavior (implemented)
+## Tool validation and results
 
 ### `tools/call` argument validation
 
@@ -120,7 +122,35 @@ When the underlying HTTP API returns `Content-Type: image/*`, HTTP/OpenAPI tool 
 
 For other non-UTF8 binary bodies, tool execution safely returns a base64-wrapped JSON value instead of failing UTF-8 decoding.
 
-## Limitations
+## Native MCP 2026-07-28 (opt-in)
 
-- Tasks (SEP-1686) are not proxied end-to-end yet; Gateway/Adapter task proxying remains pending.
-- `notifications/roots/list_changed` is not forwarded yet (RMCP type exposure gap).
+Set `mcp.modernProtocol: true` on a profile to enable authenticated
+`server/discover` and stateless POST routing. Each request carries the native
+protocol metadata and standard MCP headers. No initialize or session token is
+required for this path; legacy clients can still initialize the same profile.
+
+The native path supports tools, resources/templates, prompts, completions,
+`subscriptions/listen`, multi-round-trip `input_required` continuations, and
+Tasks Extension creation/get/update/cancel. Subscription acknowledgements and
+resource/task notifications are mapped to profile-owned identities. Closing the
+client request closes its upstream streams. MRTR and task state is encrypted,
+bound to the profile and authenticated principal, and survives Gateway restarts
+with the same keyring. See [settings and limits](MCP_SETTINGS.md#native-protocol).
+
+All remote MCP sources attached to a native profile must implement 2026-07-28.
+There is no automatic downgrade bridge. Gateway-native HTTP/OpenAPI sources can
+participate without a remote protocol lifecycle. The Adapter and compact stdio
+proxy still expose the legacy lifecycle through 2025-11-25; keep their profiles
+on that path. The `unrelated` CLI can opt into native discovery.
+
+Resource templates preserve RFC 6570 expansion through namespaced URIs and
+Gateway chains. Gateway catalog pagination is bounded to 64 pages and 100,000
+items, with repeated cursors rejected. Adapter roots-list changes reach active
+persistent/per-session stdio backends; per-call backends read current roots when
+the next process starts.
+
+Remaining boundaries: enterprise ID-JAG token exchange is not configured as a
+product feature; native response caching is deliberately disabled (`ttl: 0`,
+private hints and `Cache-Control: no-store`); legacy event-resume IDs are not used
+for native subscriptions. Resource and prompt access is controlled separately from
+tool restrictions through [profile catalog overrides](MODE3_TENANT_OVERLAY.md#resource-and-prompt-overrides).

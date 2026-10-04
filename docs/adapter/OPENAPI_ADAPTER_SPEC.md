@@ -52,7 +52,7 @@ Exclude wins.
 
 ## Spec hash verification
 
-If you set `specHash`, the adapter computes `sha256:<hex>` of the raw spec content.
+When `specHash` is set, the adapter computes `sha256:<hex>` of the raw spec content.
 
 - `specHashPolicy: warn` (default): log a warning and continue
 - `specHashPolicy: fail`: exit on mismatch

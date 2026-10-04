@@ -1,63 +1,45 @@
-# Gateway (beta)
+# Gateway
 
-The **Gateway** is the public-facing component of this workspace. It executes native HTTP/OpenAPI
-tool sources and sits in front of remote MCP servers, including optional **Adapters**. It provides:
+The Gateway combines HTTP/OpenAPI tools and remote MCP servers behind a profile
+endpoint: `/{profile_id}/mcp`. Each profile controls its sources, authentication,
+and tool policies. The optional Adapter publishes stdio MCP servers over HTTP.
 
-- **MCP proxying** over streamable HTTP (`/{profile_id}/mcp`)
-- **Upstream aggregation** (merge tools/resources/prompts across multiple upstream adapters per profile)
-- **Tenancy (configuration scope)** via tenant-owned profiles
-- **Control plane (admin API)** for managing tenants/upstreams/profiles (Mode 3 / Postgres)
-- **HA-ready session routing** via stateless, signed Gateway session tokens (`Mcp-Session-Id`)
+## Getting started
 
-The Adapter stays “dumb plumbing” on purpose: it turns systems into MCP and exposes `/mcp` + operational endpoints (like `/map`) inside a trusted network.
+- [Docker quickstart](../../README.md#try-it-locally)
+- [Kubernetes deployment](../deploy/HELM.md)
+- [Upgrading to v1](V1_UPGRADE.md)
+- [Web UI](../ui/INDEX.md)
+- [Client CLI and compact MCP proxy](../unrelated-cli/README.md)
 
-## Current status
+## Configuration and operation
 
-- **Data plane MCP proxy**: implemented (`POST`/`GET`/`DELETE` `/{profile_id}/mcp`)
-  - Stateless Gateway session token returned as `Mcp-Session-Id` (**PASETO `v4.local`**, encrypted + authenticated)
-    - TTL via `UNRELATED_GATEWAY_SESSION_TTL_SECS` (default: 1h)
-    - Key rotation via `UNRELATED_GATEWAY_SESSION_SECRETS` (comma-separated; first is active for minting)
-      - Fallback: `UNRELATED_GATEWAY_SESSION_SECRET` (single secret, no rotation)
-      - If neither is set, the Gateway generates an ephemeral secret at startup (not HA-safe)
-    - Legacy `v1.<payload>.<hmac>` session tokens are no longer accepted
-  - `tools/list`, `resources/list`, `prompts/list`: fan-out to upstreams + merge
-    - Name collisions: prefix with `<upstream_id>:` (same philosophy as the adapter)
-    - Resource URI collisions: rewritten into stable gateway URNs (`urn:unrelated-mcp-gateway:resource:...`)
-  - `tools/call`, `resources/read`, `prompts/get`: routed to the owning upstream session
-    - `tools/call`: gateway-enforced timeout budgets (global default + per-profile/per-tool overrides) and optional per-tool retries
-  - `GET` stream: opens one SSE stream per upstream and merges events (event ids are prefixed to reduce collisions)
-  - Partial upstream availability is supported via per-profile `allow_partial_upstreams`
-- **Control plane (admin API)**: implemented (Mode 3 only)
-  - Supports machine auth via either:
-    - static compatibility token (`UNRELATED_GATEWAY_ADMIN_TOKEN`)
-    - control-plane OIDC/JWT (`UNRELATED_GATEWAY_CONTROL_PLANE_OIDC_*`) with required read/write scopes (defaults: `gateway.operator.read` / `gateway.operator.write`)
-  - CRUD for tenants, upstreams (with endpoints), and profiles
-- **Status metadata**: `/status` includes `runtimeMode`, `topology`, and `nodeId` for support/debugging
-- **Storage backends**:
-  - Mode 1 (config file): implemented for the data plane (read-only); admin API is unavailable
-  - Mode 3 (Postgres): implemented (shared state for HA deployments)
-- **Audit logging** (Mode 3): implemented (optional per tenant; retention cleanup)
+- [Authentication](DATA_PLANE_AUTH.md): API keys and OAuth, with per-profile access rules.
+- [MCP proxying](MCP_PROXYING.md): aggregation, routing, subscriptions, and protocol compatibility.
+- [MCP settings](MCP_SETTINGS.md): capabilities, notifications, upstream trust, and transport limits.
+- [Tenant sources and secrets](MODE3_TENANT_OVERLAY.md): isolated HTTP/OpenAPI sources and credentials.
+- [Audit logging](AUDIT.md): event capture, retention, and tenant audit settings.
+- [Outbound HTTP safety](OUTBOUND_HTTP_SAFETY.md): allowed destinations and SSRF protection.
+- [Performance](PERFORMANCE.md): concurrency, workload measurement, and development benchmarks.
+- [Admin CLI](../gateway-cli/INDEX.md): tenant, upstream, and profile administration.
+- [Architecture](ARCHITECTURE.md): storage, session routing, and deployment behavior.
 
-## Docs
+## Deployment modes
 
-- Architecture (incl. HA session routing “Model B”): [`docs/gateway/ARCHITECTURE.md`](ARCHITECTURE.md)
-- Data-plane auth (Mode 1 API keys + Mode 3 API keys + OIDC/JWT, per-profile policy): [`docs/gateway/DATA_PLANE_AUTH.md`](DATA_PLANE_AUTH.md)
-- MCP proxying & aggregation behavior: [`docs/gateway/MCP_PROXYING.md`](MCP_PROXYING.md)
-- Profile MCP settings (capabilities, notifications, namespacing, upstream trust controls, transport limits): [`docs/gateway/MCP_SETTINGS.md`](MCP_SETTINGS.md)
-- Outbound HTTP safety (SSRF hardening for tool sources + upstream MCP endpoints): [`docs/gateway/OUTBOUND_HTTP_SAFETY.md`](OUTBOUND_HTTP_SAFETY.md)
-- Audit logging (Mode 3 / Postgres): [`docs/gateway/AUDIT.md`](AUDIT.md)
-- CLI: [`docs/gateway-cli/INDEX.md`](../gateway-cli/INDEX.md)
+**File configuration (Mode 1)** serves profiles from a read-only configuration
+file. **Shared configuration (Mode 3)** stores configuration in PostgreSQL and
+provides admin and tenant APIs, the Web UI, and audit logging. Mode 3 can run on
+Docker or Kubernetes and can use multiple Gateway replicas.
 
-## Current limitations
+Replicas must share session keys and configuration. Routing tokens allow a client
+request to reach the correct upstream through another Gateway replica; they do
+not preserve a stateful upstream's sessions after that upstream restarts.
 
-- No server-side session token revocation list (rely on TTL + re-initialize).
-- Audit event detail levels are still evolving (the current implementation stores safe, structured metadata by default).
-- Fine-grained allow/deny for **resources/prompts** is not implemented yet (tools have allowlisting + `tools/call` limits).
-- Tasks (SEP-1686) are not proxied end-to-end yet; Gateway/Adapter task proxying remains pending.
-- `notifications/roots/list_changed` is not forwarded yet (RMCP type exposure gap).
+## Compatibility boundaries
 
-## Component boundary
-
-- The Gateway owns native HTTP/OpenAPI tool execution and upstream MCP aggregation.
-- Spawning stdio MCP processes stays in the Adapter; the Adapter can also pre-aggregate HTTP/OpenAPI
-  and stdio sources behind one upstream MCP endpoint.
+- Native MCP `2026-07-28` is opt-in per profile and requires compatible remote
+  upstreams. Adapter and compact stdio proxy connections use the legacy lifecycle.
+- Tool allowlists do not restrict resources or prompts. Configure their availability
+  separately with [resource and prompt overrides](MODE3_TENANT_OVERLAY.md#resource-and-prompt-overrides).
+- Routing tokens have a lifetime but no individual revocation list. Authentication
+  is still checked on each request.

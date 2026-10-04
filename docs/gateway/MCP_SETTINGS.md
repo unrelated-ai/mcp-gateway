@@ -8,6 +8,50 @@ These settings are supported in:
 - **Mode 3** (Postgres): via Admin/Tenant profile APIs (`mcp` field), stored in `profiles.mcp_settings`
   - CLI: `unrelated-gateway-admin profiles create|put --mcp-json ...` (or `--mcp-file ...`)
 
+## Native protocol
+
+`mcp.modernProtocol` defaults to `false`. Enable it in the profile's MCP settings
+or JSON/YAML configuration for native MCP **2026-07-28** clients. All attached
+remote MCP sources must support that version. The Adapter's stdio lifecycle is
+still legacy; use a separate profile for those sources. Older clients can still
+initialize a native-enabled profile using a supported legacy revision.
+
+Native requests authenticate on every POST and require the version, client info,
+and capabilities in `params._meta` as defined by the
+[Streamable HTTP specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http).
+`MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` and schema-promoted argument
+headers are checked against the body, then regenerated for upstream names and
+transformed arguments. Client-info rewriting and capability policies also apply
+to native request metadata. Native GET/DELETE return 405 with `Allow: POST`.
+
+`subscriptions/listen` supports catalog changes, resource subscriptions and task
+IDs. Filters and ownership are validated before upstream access. At most 1,024
+identifiers per filter are accepted. Stream disconnects release upstream
+requests; upstream failure or profile/auth changes end the stream so the client
+can reconnect. Authorization/profile settings are checked at least every 30
+seconds. The existing notification filters and payload limits still apply.
+
+MRTR continuations use encrypted state with a 15-minute lifetime, at most 10
+rounds, and at most 16 KiB of sealed state. They are bound to the principal,
+profile, arguments, original endpoint and policy. They do not trigger automatic
+tool retries or consume a fresh tool quota for each continuation. Input requests
+respect `mcp.security.*.serverRequests`.
+
+The [Tasks Extension](https://tasks.extensions.modelcontextprotocol.io/specification/2026-07-28/tasks)
+is supported for `tools/call`, `tasks/get`, `tasks/update`, `tasks/cancel`, and
+status subscriptions. Clients must declare the extension. Public task IDs are
+opaque encrypted routing state scoped to their owner; lifetime follows upstream
+TTL with a maximum of 24 hours. Preserve the Gateway session keyring across
+replicas/restarts. Removing a referenced key invalidates its outstanding state.
+
+## Browser Origin policy
+
+For all MCP lifecycle paths, requests with an `Origin` header accept loopback
+origins by default. Add exact browser origins, separated by commas, using
+`UNRELATED_GATEWAY_ALLOWED_ORIGINS`. Requests without Origin are unaffected.
+This is transport Origin validation, not a replacement for authentication or
+reverse-proxy CORS configuration.
+
 ## `mcp.capabilities` (allow/deny)
 
 Controls which MCP **server** capabilities the Gateway advertises (and enforces for the corresponding methods/notifications).
@@ -36,6 +80,10 @@ Shape:
 
 - `mcp.notifications.allow`: list of notification method strings (non-empty ⇒ allowlist)
 - `mcp.notifications.deny`: list of notification method strings (denylist)
+
+A nonempty allowlist takes precedence over the denylist. With an empty allowlist, all
+methods except denied ones are permitted. The Web UI exposes both lists under
+**Profile → MCP settings → Advanced MCP settings**.
 
 Examples:
 

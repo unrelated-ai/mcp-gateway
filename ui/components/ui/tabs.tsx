@@ -34,7 +34,10 @@ export function Tabs<T extends string>({ items, value, onChange, className = "" 
   };
 
   return (
-    <div role="tablist" className={`flex items-center gap-1 border-b border-edge ${className}`}>
+    <div
+      role="tablist"
+      className={`flex max-w-full items-center gap-1 overflow-x-auto border-b border-edge ${className}`}
+    >
       {items.map((item, i) => {
         const active = item.value === value;
         return (
@@ -52,7 +55,7 @@ export function Tabs<T extends string>({ items, value, onChange, className = "" 
               if (e.key === "ArrowLeft") moveFocus(i, -1);
             }}
             className={`
-              relative -mb-px inline-flex items-center gap-2 px-3 py-2.5 text-sm font-medium
+              relative -mb-px inline-flex shrink-0 items-center gap-2 whitespace-nowrap px-3 py-2.5 text-sm font-medium
               border-b-2 transition-colors duration-150
               focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset
               disabled:opacity-40 disabled:cursor-not-allowed

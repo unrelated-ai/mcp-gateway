@@ -1,11 +1,14 @@
 # syntax=docker/dockerfile:1
 
-FROM node:20-alpine AS deps
+ARG NODE_IMAGE=node:26.9.0-alpine3.24
+FROM ${NODE_IMAGE} AS node-base
+
+FROM node-base AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-FROM node:20-alpine AS builder
+FROM node-base AS builder
 WORKDIR /app
 ARG UI_VERSION=dev
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -14,7 +17,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-FROM node:20-alpine AS runner
+FROM node-base AS runner
 WORKDIR /app
 ARG UI_VERSION=dev
 ENV NODE_ENV=production

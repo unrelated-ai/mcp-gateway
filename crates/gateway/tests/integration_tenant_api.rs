@@ -17,9 +17,9 @@ use rmcp::model::{
 use serde_json::json;
 use std::time::Duration;
 use std::{collections::HashSet, sync::Arc};
+use testcontainers::ImageExt as _;
 use testcontainers::core::IntoContainerPort;
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{GenericImage, ImageExt as _};
 use tokio::sync::Mutex;
 
 const ADMIN_TOKEN: &str = "test-admin-token";
@@ -265,7 +265,7 @@ async fn admin_issue_tenant_token(
 #[allow(clippy::too_many_lines)]
 async fn tenant_profiles_are_scoped_and_cross_tenant_access_is_404() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -359,6 +359,32 @@ async fn tenant_profiles_are_scoped_and_cross_tenant_access_is_404() -> anyhow::
         "expected created profile in tenant list"
     );
 
+    assert_profile_nullable_updates(&client, &admin_base, &profile_id, &t1_token).await?;
+    assert_profile_revision_conflicts(&client, &admin_base, &profile_id, &t1_token).await?;
+
+    // Connection checks use the same tenant ownership and authentication boundary.
+    let connections_url = format!("{admin_base}/tenant/v1/profiles/{profile_id}/connections");
+    for (token, expected_status) in [
+        (Some(t1_token.as_str()), reqwest::StatusCode::OK),
+        (Some(t2_token.as_str()), reqwest::StatusCode::NOT_FOUND),
+        (None, reqwest::StatusCode::UNAUTHORIZED),
+    ] {
+        let request = client.post(&connections_url);
+        let response = match token {
+            Some(token) => request.bearer_auth(token),
+            None => request,
+        }
+        .send()
+        .await?;
+        assert_eq!(response.status(), expected_status);
+        if expected_status.is_success() {
+            assert_eq!(
+                response.json::<serde_json::Value>().await?,
+                json!({"checks":[]})
+            );
+        }
+    }
+
     // Cross-tenant access is 404 (not 403).
     let resp = client
         .get(format!("{admin_base}/tenant/v1/profiles/{profile_id}"))
@@ -380,12 +406,129 @@ async fn tenant_profiles_are_scoped_and_cross_tenant_access_is_404() -> anyhow::
     Ok(())
 }
 
+async fn assert_profile_revision_conflicts(
+    client: &reqwest::Client,
+    admin_base: &str,
+    profile_id: &str,
+    token: &str,
+) -> anyhow::Result<()> {
+    let url = format!("{admin_base}/tenant/v1/profiles/{profile_id}");
+    let original: serde_json::Value = client
+        .get(&url)
+        .bearer_auth(token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let revision = original["revision"].as_i64().context("profile revision")?;
+    let mut first = original.clone();
+    first["expectedRevision"] = json!(revision);
+    first["description"] = json!("first browser");
+    let mut second = first.clone();
+    second["description"] = json!("second browser");
+    let (a, b) = tokio::join!(
+        client.put(&url).bearer_auth(token).json(&first).send(),
+        client.put(&url).bearer_auth(token).json(&second).send(),
+    );
+    let a = a?;
+    let b = b?;
+    assert!(
+        (a.status().is_success() && b.status() == reqwest::StatusCode::CONFLICT)
+            || (b.status().is_success() && a.status() == reqwest::StatusCode::CONFLICT),
+        "concurrent writes: {} / {}",
+        a.status(),
+        b.status(),
+    );
+    let stored: serde_json::Value = client
+        .get(&url)
+        .bearer_auth(token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(stored["revision"], json!(revision + 1));
+    assert_eq!(
+        stored["description"],
+        if a.status().is_success() {
+            &first["description"]
+        } else {
+            &second["description"]
+        }
+        .clone()
+    );
+    let stale = client
+        .put(&url)
+        .bearer_auth(token)
+        .json(&first)
+        .send()
+        .await?;
+    assert_eq!(stale.status(), reqwest::StatusCode::CONFLICT);
+    Ok(())
+}
+
+// Both profile APIs promise omitted => retain, explicit null => clear.
+async fn assert_profile_nullable_updates(
+    client: &reqwest::Client,
+    admin_base: &str,
+    profile_id: &str,
+    tenant_token: &str,
+) -> anyhow::Result<()> {
+    for (api, token) in [("tenant", tenant_token), ("admin", ADMIN_TOKEN)] {
+        let url = format!("{admin_base}/{api}/v1/profiles/{profile_id}");
+        for (fields, expected_description, expected_timeout) in [
+            (
+                json!({"description": "keep me", "toolCallTimeoutSecs": 15}),
+                json!("keep me"),
+                json!(15),
+            ),
+            (json!({}), json!("keep me"), json!(15)),
+            (
+                json!({"description": null, "toolCallTimeoutSecs": null}),
+                json!(null),
+                json!(null),
+            ),
+        ] {
+            let mut body = json!({"id": profile_id, "tenantId": "t1", "upstreams": []});
+            body.as_object_mut()
+                .unwrap()
+                .extend(fields.as_object().unwrap().clone());
+            let request = if api == "admin" {
+                client.post(format!("{admin_base}/admin/v1/profiles"))
+            } else {
+                client.put(&url)
+            };
+            request
+                .bearer_auth(token)
+                .json(&body)
+                .send()
+                .await?
+                .error_for_status()?;
+            let stored: serde_json::Value = client
+                .get(&url)
+                .bearer_auth(token)
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            assert_eq!(stored["description"], expected_description, "{api}: {body}");
+            assert_eq!(
+                stored["toolCallTimeoutSecs"], expected_timeout,
+                "{api}: {body}"
+            );
+        }
+    }
+    Ok(())
+}
+
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers)"]
 #[allow(clippy::too_many_lines)]
 async fn profile_name_is_unique_per_tenant_case_insensitive() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -460,7 +603,7 @@ async fn profile_name_is_unique_per_tenant_case_insensitive() -> anyhow::Result<
 #[allow(clippy::too_many_lines)]
 async fn bootstrap_tenant_creates_first_tenant_and_returns_tenant_token() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -541,7 +684,7 @@ async fn bootstrap_tenant_creates_first_tenant_and_returns_tenant_token() -> any
 #[allow(clippy::too_many_lines)]
 async fn tenant_can_create_upstream_and_attach_to_profile() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -648,9 +791,7 @@ async fn tenant_can_create_upstream_and_attach_to_profile() -> anyhow::Result<()
 
     // Data-plane initialize + tools/list should succeed.
     let mcp = McpSession::connect(format!("{data_base}/{profile_id}/mcp"), Some(secret)).await?;
-    let tools = mcp
-        .request_value_no_auth(1, "tools/list", json!({}))
-        .await?;
+    let tools = mcp.request_value(1, "tools/list", json!({})).await?;
     let arr = tools
         .get("result")
         .and_then(|r| r.get("tools"))
@@ -668,7 +809,7 @@ async fn tenant_can_create_upstream_and_attach_to_profile() -> anyhow::Result<()
 async fn tenant_tool_source_requires_secret_and_appears_in_tools_list_after_put_secret()
 -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -748,7 +889,7 @@ async fn tenant_tool_source_requires_secret_and_appears_in_tools_list_after_put_
         .context("create profile response missing id")?
         .to_string();
 
-    // Mode 3 data-plane requires an API key (profile default: ApiKeyInitializeOnly).
+    // Mode 3 data-plane requires an API key by default.
     let create_key_resp = client
         .post(format!("{admin_base}/tenant/v1/api-keys"))
         .header("Authorization", format!("Bearer {t1_token}"))
@@ -776,10 +917,7 @@ async fn tenant_tool_source_requires_secret_and_appears_in_tools_list_after_put_
     .await?;
 
     // tools/list: should be empty because the required secret is missing (source cannot be built).
-    // (ApiKeyInitializeOnly → follow-ups should work without auth.)
-    let tools_msg = session
-        .request_value_no_auth(1, "tools/list", json!({}))
-        .await?;
+    let tools_msg = session.request_value(1, "tools/list", json!({})).await?;
     let tools = tools_msg
         .get("result")
         .and_then(|r| r.get("tools"))
@@ -798,9 +936,7 @@ async fn tenant_tool_source_requires_secret_and_appears_in_tools_list_after_put_
     anyhow::ensure!(put_secret_resp.status().is_success());
 
     // tools/list: now the tool source can be built and the tool should appear.
-    let tools_msg = session
-        .request_value_no_auth(2, "tools/list", json!({}))
-        .await?;
+    let tools_msg = session.request_value(2, "tools/list", json!({})).await?;
     let tools = tools_msg
         .get("result")
         .and_then(|r| r.get("tools"))
@@ -823,7 +959,7 @@ async fn tenant_tool_source_requires_secret_and_appears_in_tools_list_after_put_
 #[ignore = "requires Docker (testcontainers)"]
 async fn tenant_tool_source_get_returns_spec_for_round_trip() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -836,7 +972,7 @@ async fn tenant_tool_source_get_returns_spec_for_round_trip() -> anyhow::Result<
     let database_url =
         format!("postgres://postgres:postgres@{host}:{port}/gateway?sslmode=disable");
     wait_pg_ready(&database_url, Duration::from_secs(30)).await?;
-    apply_dbmate_migrations(&database_url).await?;
+    migrate_existing_tool_sources(&database_url).await?;
 
     // Gateway (Mode 3)
     let gw = spawn_gateway(&database_url, Some(ADMIN_TOKEN), SESSION_SECRET)?;
@@ -909,6 +1045,160 @@ async fn tenant_tool_source_get_returns_spec_for_round_trip() -> anyhow::Result<
         "spec.tools missing"
     );
 
+    assert_tool_source_revisions(&client, &admin_base, &t1_token, &got).await?;
+
+    Ok(())
+}
+
+async fn assert_tool_source_revisions(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    original: &serde_json::Value,
+) -> anyhow::Result<()> {
+    let url = format!("{base}/tenant/v1/tool-sources/s1");
+    let mut update = original["spec"].clone();
+    update["type"] = json!("http");
+    update["enabled"] = json!(false);
+    update["expectedRevision"] = original["revision"].clone();
+    let put = || client.put(&url).bearer_auth(token).json(&update).send();
+    // Two saves with the same revision cannot both win.
+    let (a, b) = tokio::join!(put(), put());
+    let mut statuses = [a?.status().as_u16(), b?.status().as_u16()];
+    statuses.sort_unstable();
+    assert_eq!(statuses, [200, 409]);
+    let latest: serde_json::Value = client
+        .get(&url)
+        .bearer_auth(token)
+        .send()
+        .await?
+        .json()
+        .await?;
+    assert_eq!(latest["enabled"], false);
+    assert_eq!(
+        latest["revision"].as_i64(),
+        original["revision"].as_i64().map(|r| r + 1)
+    );
+    // Administrative writes also advance the revision and reject stale tenant drafts.
+    admin_post(
+        client,
+        base,
+        "/admin/v1/tenants",
+        json!({"id":"other", "enabled":true}),
+    )
+    .await?;
+    let other_token = admin_issue_tenant_token(client, base, "other").await?;
+    let cross_tenant = client
+        .put(&url)
+        .bearer_auth(other_token)
+        .json(&update)
+        .send()
+        .await?;
+    assert_eq!(cross_tenant.status(), reqwest::StatusCode::CONFLICT);
+    update["expectedRevision"] = latest["revision"].clone();
+    let mut admin_update = update.clone();
+    admin_update
+        .as_object_mut()
+        .unwrap()
+        .remove("expectedRevision");
+    client
+        .put(format!("{base}/admin/v1/tenants/t1/tool-sources/s1"))
+        .bearer_auth(ADMIN_TOKEN)
+        .json(&admin_update)
+        .send()
+        .await?
+        .error_for_status()?;
+    assert_eq!(
+        client
+            .put(&url)
+            .bearer_auth(token)
+            .json(&update)
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    client
+        .delete(&url)
+        .bearer_auth(token)
+        .send()
+        .await?
+        .error_for_status()?;
+    assert_eq!(
+        client
+            .put(&url)
+            .bearer_auth(token)
+            .json(&update)
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    // Deletion and recreation must not make an old draft valid again.
+    client
+        .put(&url)
+        .bearer_auth(token)
+        .json(&admin_update)
+        .send()
+        .await?
+        .error_for_status()?;
+    update["expectedRevision"] = original["revision"].clone();
+    assert_eq!(
+        client
+            .put(&url)
+            .bearer_auth(token)
+            .json(&update)
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    assert_tool_source_creation(client, base, token).await?;
+    Ok(())
+}
+
+async fn assert_tool_source_creation(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+) -> anyhow::Result<()> {
+    // Creation forms use revision zero and can never overwrite a concurrent creator.
+    let create_url = format!("{base}/tenant/v1/tool-sources/create-only");
+    let create =
+        json!({"type":"http","baseUrl":"https://example.com","tools":{},"expectedRevision":0});
+    let put = || {
+        client
+            .put(&create_url)
+            .bearer_auth(token)
+            .json(&create)
+            .send()
+    };
+    let (a, b) = tokio::try_join!(put(), put())?;
+    let mut statuses = [a.status().as_u16(), b.status().as_u16()];
+    statuses.sort_unstable();
+    assert_eq!(statuses, [200, 409]);
+    let mut collision = create.clone();
+    collision["baseUrl"] = json!("https://different.example.com");
+    assert_eq!(
+        client
+            .put(&create_url)
+            .bearer_auth(token)
+            .json(&collision)
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    let saved: serde_json::Value = client
+        .get(&create_url)
+        .bearer_auth(token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(saved["spec"]["baseUrl"], "https://example.com");
+
     Ok(())
 }
 
@@ -917,7 +1207,7 @@ async fn tenant_tool_source_get_returns_spec_for_round_trip() -> anyhow::Result<
 #[allow(clippy::too_many_lines)]
 async fn tenant_profile_surface_probe_returns_tools_and_source_status() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -1072,6 +1362,21 @@ async fn tenant_profile_surface_probe_returns_tools_and_source_status() -> anyho
         "expected discovered tool 'ping' for disabled profile, got: {tools2:?}"
     );
 
+    // Disabled profiles can be inspected; HTTP tool sources must not execute API calls.
+    let checks: serde_json::Value = client
+        .post(format!(
+            "{admin_base}/tenant/v1/profiles/{profile_id}/connections"
+        ))
+        .bearer_auth(&t1_token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(checks["checks"].as_array().unwrap().len(), 1);
+    assert_eq!(checks["checks"][0]["sourceId"], "s1");
+    assert_eq!(checks["checks"][0]["status"], "notChecked");
+
     Ok(())
 }
 
@@ -1080,7 +1385,7 @@ async fn tenant_profile_surface_probe_returns_tools_and_source_status() -> anyho
 #[allow(clippy::too_many_lines)]
 async fn tenant_can_patch_delete_and_inspect_upstream_endpoints() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -1261,7 +1566,7 @@ async fn tenant_can_patch_delete_and_inspect_upstream_endpoints() -> anyhow::Res
 #[allow(clippy::too_many_lines)]
 async fn tenant_managed_mcp_deployables_and_requests_are_scoped() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -1671,7 +1976,7 @@ async fn tenant_managed_mcp_deployables_and_requests_are_scoped() -> anyhow::Res
 #[allow(clippy::too_many_lines)]
 async fn tenant_managed_upstream_created_via_admin_is_tenant_scoped() -> anyhow::Result<()> {
     // Postgres
-    let pg = GenericImage::new("postgres", "16-alpine")
+    let pg = crate::common::pg::image()
         .with_exposed_port(5432.tcp())
         .with_env_var("POSTGRES_PASSWORD", "postgres")
         .with_env_var("POSTGRES_USER", "postgres")
@@ -1816,5 +2121,44 @@ async fn tenant_managed_upstream_created_via_admin_is_tenant_scoped() -> anyhow:
         "expected tenant-owned managed upstream payload, got: {t1_get_body}"
     );
 
+    Ok(())
+}
+
+async fn migrate_existing_tool_sources(database_url: &str) -> anyhow::Result<()> {
+    const MIGRATION: &str = "20260920010000_tool_source_revisions.sql";
+    common::pg::apply_dbmate_migrations_before(database_url, MIGRATION).await?;
+    let pool = sqlx::PgPool::connect(database_url).await?;
+    sqlx::query("insert into tenants (id, enabled) values ('migration-check', true)")
+        .execute(&pool)
+        .await?;
+    sqlx::query(r#"insert into tool_sources (tenant_id, id, kind, enabled, spec) values ('migration-check', 'one', 'http', true, '{"baseUrl":"https://example.com","tools":{}}'), ('migration-check', 'two', 'http', false, '{}')"#)
+        .execute(&pool).await?;
+    common::pg::apply_dbmate_migrations_from(database_url, MIGRATION).await?;
+    let revisions: Vec<i64> = sqlx::query_scalar("select revision from tool_sources order by id")
+        .fetch_all(&pool)
+        .await?;
+    assert_eq!(revisions.len(), 2);
+    assert_ne!(revisions[0], revisions[1]);
+    let enabled: bool = sqlx::query_scalar("select enabled from tool_sources where id = 'two'")
+        .fetch_one(&pool)
+        .await?;
+    assert!(!enabled);
+    let base: String =
+        sqlx::query_scalar("select spec->>'baseUrl' from tool_sources where id = 'one'")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(base, "https://example.com");
+    // Rollback preserves configuration, and the migration can be applied again.
+    let (_, down) = include_str!("../migrations/20260920010000_tool_source_revisions.sql")
+        .split_once("-- migrate:down")
+        .unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(down))
+        .execute(&pool)
+        .await?;
+    common::pg::apply_dbmate_migrations_from(database_url, MIGRATION).await?;
+    sqlx::query("delete from tenants where id = 'migration-check'")
+        .execute(&pool)
+        .await?;
+    pool.close().await;
     Ok(())
 }

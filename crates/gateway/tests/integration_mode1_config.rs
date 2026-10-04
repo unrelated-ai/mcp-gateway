@@ -11,9 +11,9 @@ use common::mcp::McpSession;
 use common::sse::read_first_event_stream_json_message;
 use common::{KillOnDrop, pick_unused_port, spawn_gateway_mode1, wait_http_ok};
 use rmcp::model::{
-    CallToolResult, ClientJsonRpcMessage, ClientRequest, Content, InitializeResult, JsonObject,
-    JsonRpcRequest, JsonRpcResponse, JsonRpcVersion2_0, ListToolsResult, ServerCapabilities,
-    ServerJsonRpcMessage, ServerResult, Tool,
+    CallToolResult, ClientJsonRpcMessage, ClientRequest, ContentBlock, InitializeResult,
+    JsonObject, JsonRpcRequest, JsonRpcResponse, JsonRpcVersion2_0, ListToolsResult,
+    ServerCapabilities, ServerJsonRpcMessage, ServerResult, Tool,
 };
 use serde_json::json;
 use std::collections::HashSet;
@@ -57,7 +57,6 @@ fn write_mode1_config(
     dir: &tempfile::TempDir,
     profile_id: &str,
     backend_base: &str,
-    require_every_request: bool,
     accept_x_api_key: bool,
     tools: Option<&str>,
 ) -> anyhow::Result<std::path::PathBuf> {
@@ -71,7 +70,6 @@ dataPlaneAuth:
   apiKeys:
     - "k1"
   acceptXApiKey: {accept_x_api_key}
-  requireEveryRequest: {require_every_request}
 
 tenants:
   t1:
@@ -120,7 +118,6 @@ fn write_mode1_config_upstream_only(
     dir: &tempfile::TempDir,
     profile_id: &str,
     upstream_url: &str,
-    require_every_request: bool,
     accept_x_api_key: bool,
 ) -> anyhow::Result<std::path::PathBuf> {
     let cfg_path = dir.path().join("gateway.yaml");
@@ -131,7 +128,6 @@ dataPlaneAuth:
   apiKeys:
     - "k1"
   acceptXApiKey: {accept_x_api_key}
-  requireEveryRequest: {require_every_request}
 
 tenants:
   t1:
@@ -282,7 +278,8 @@ impl MockUpstream {
             }
             ClientRequest::CallToolRequest(call) => {
                 let name = call.params.name.to_string();
-                let mut result = CallToolResult::success(vec![Content::text(format!("ok:{name}"))]);
+                let mut result =
+                    CallToolResult::success(vec![ContentBlock::text(format!("ok:{name}"))]);
                 result.is_error = None;
                 let msg = ServerJsonRpcMessage::Response(JsonRpcResponse {
                     jsonrpc: JsonRpcVersion2_0,
@@ -320,7 +317,6 @@ fn write_mode1_config_with_tenant_enabled(
     dir: &tempfile::TempDir,
     profile_id: &str,
     tenant_enabled: bool,
-    require_every_request: bool,
     accept_x_api_key: bool,
 ) -> anyhow::Result<std::path::PathBuf> {
     let cfg_path = dir.path().join("gateway.yaml");
@@ -331,7 +327,6 @@ dataPlaneAuth:
   apiKeys:
     - "k1"
   acceptXApiKey: {accept_x_api_key}
-  requireEveryRequest: {require_every_request}
 
 tenants:
   t1:
@@ -363,7 +358,6 @@ dataPlaneAuth:
   apiKeys:
     - "k1"
   acceptXApiKey: true
-  requireEveryRequest: false
 
 tenants:
   t1:
@@ -405,7 +399,6 @@ dataPlaneAuth:
   apiKeys:
     - "k1"
   acceptXApiKey: true
-  requireEveryRequest: false
 
 tenants:
   t1:
@@ -453,7 +446,6 @@ dataPlaneAuth:
   apiKeys:
     - "k1"
   acceptXApiKey: true
-  requireEveryRequest: false
 
 tenants:
   t1:
@@ -586,8 +578,7 @@ impl MockUpstreamSingleTool {
 }
 
 #[tokio::test]
-async fn mode1_static_api_keys_initialize_only_allows_followups_without_key() -> anyhow::Result<()>
-{
+async fn mode1_static_api_keys_require_key_on_followups() -> anyhow::Result<()> {
     let profile_id = uuid::Uuid::new_v4().to_string();
     let dir = tempdir().context("create temp dir")?;
     let (backend_base, backend_task) = start_http_backend().await?;
@@ -596,8 +587,7 @@ async fn mode1_static_api_keys_initialize_only_allows_followups_without_key() ->
         &dir,
         &profile_id,
         &backend_base,
-        false, // requireEveryRequest
-        true,  // acceptXApiKey
+        true, // acceptXApiKey
         None,
     )?;
 
@@ -639,21 +629,10 @@ async fn mode1_static_api_keys_initialize_only_allows_followups_without_key() ->
     )
     .await?;
 
-    // Follow-up tools/list should succeed with session only (no auth header).
-    let tools_msg = session
+    let result = session
         .request_value_no_auth(2, "tools/list", json!({}))
-        .await?;
-    let tools = tools_msg
-        .get("result")
-        .and_then(|r| r.get("tools"))
-        .and_then(serde_json::Value::as_array)
-        .context("tools/list missing result.tools")?;
-    let names: Vec<String> = tools
-        .iter()
-        .filter_map(|t| t.get("name").and_then(serde_json::Value::as_str))
-        .map(str::to_string)
-        .collect();
-    anyhow::ensure!(names.contains(&"ping".to_string()), "expected ping tool");
+        .await;
+    anyhow::ensure!(result.is_err(), "follow-up without an API key must fail");
 
     backend_task.abort();
     Ok(())
@@ -670,7 +649,6 @@ async fn mode1_static_api_keys_every_request_requires_key_each_time_and_x_api_ke
         &dir,
         &profile_id,
         &backend_base,
-        true, // requireEveryRequest
         true, // acceptXApiKey
         None,
     )?;
@@ -741,8 +719,7 @@ async fn mode1_tool_allowlist_allows_all_when_omitted() -> anyhow::Result<()> {
         &dir,
         &profile_id,
         &backend_base,
-        false, // requireEveryRequest
-        true,  // acceptXApiKey
+        true, // acceptXApiKey
         None,
     )?;
 
@@ -785,8 +762,7 @@ async fn mode1_tool_allowlist_can_allow_single_tool_by_stable_ref() -> anyhow::R
         &dir,
         &profile_id,
         &backend_base,
-        false, // requireEveryRequest
-        true,  // acceptXApiKey
+        true, // acceptXApiKey
         Some("    tools: [\"s1:ping\"]"),
     )?;
 
@@ -829,7 +805,6 @@ async fn mode1_accept_x_api_key_false_rejects_x_api_key_header() -> anyhow::Resu
         &dir,
         &profile_id,
         &backend_base,
-        false, // requireEveryRequest
         false, // acceptXApiKey
         None,
     )?;
@@ -896,7 +871,6 @@ async fn mode1_gateway_does_not_forward_caller_auth_to_upstream_mcp() -> anyhow:
         &dir,
         &profile_id,
         &format!("http://127.0.0.1:{upstream_port}/mcp"),
-        true, // requireEveryRequest
         true, // acceptXApiKey
     )?;
 
@@ -938,7 +912,6 @@ async fn mode1_disabled_tenant_hides_profiles_as_404() -> anyhow::Result<()> {
         &dir,
         &profile_id,
         false, // tenant enabled
-        false, // requireEveryRequest
         true,  // acceptXApiKey
     )?;
 

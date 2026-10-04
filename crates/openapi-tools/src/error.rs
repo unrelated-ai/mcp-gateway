@@ -42,7 +42,7 @@ pub enum OpenApiToolsError {
     OpenApiSpecParse {
         location: String,
         #[source]
-        source: serde_yaml::Error,
+        source: Box<serde_saphyr::DeserializeError>,
     },
 
     /// Parameter collision errors.
@@ -59,7 +59,7 @@ pub enum OpenApiToolsError {
 
     /// YAML parsing errors.
     #[error("YAML error: {0}")]
-    Yaml(#[from] serde_yaml::Error),
+    Yaml(#[from] serde_saphyr::DeserializeError),
 
     /// HTTP client errors.
     #[error("Request error: {0}")]

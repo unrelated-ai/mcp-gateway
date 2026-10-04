@@ -17,13 +17,16 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: {{ include "unrelated.images.ref" (dict "root" . "key" "POSTGRES_IMAGE" "image" .Values.image) | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: postgresql
               containerPort: 5432
               protocol: TCP
           env:
+            # Stable path prevents a major image change from opening an empty database.
+            - name: PGDATA
+              value: /var/lib/postgresql/data
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:

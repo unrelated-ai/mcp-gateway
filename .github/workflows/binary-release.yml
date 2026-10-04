@@ -23,7 +23,12 @@ on:
       rust_toolchain:
         description: "Rust toolchain version"
         required: false
-        default: "1.92.0"
+        default: ""
+        type: string
+      runner:
+        description: "GitHub-hosted runner label"
+        required: false
+        default: "ubuntu-24.04"
         type: string
 
 permissions:
@@ -36,21 +41,23 @@ env:
 jobs:
   build_and_publish:
     name: binary (build + upload GitHub Release assets)
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7.0.1
 
       - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: ./.github/actions/setup-rust
         with:
           toolchain: ${{ inputs.rust_toolchain }}
           targets: ${{ inputs.target }}
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
 
@@ -105,6 +112,39 @@ jobs:
           set -euo pipefail
           cargo build --release -p "${{ inputs.cargo_pkg }}" --bin "${{ inputs.binary_name }}" --target "${{ inputs.target }}"
 
+      - name: Smoke-test native binary
+        shell: bash
+        run: target/${{ inputs.target }}/release/${{ inputs.binary_name }} --help >/dev/null
+
+      - name: Install Linux credential-store services
+        if: runner.os == 'Linux' && inputs.cargo_pkg == 'unrelated-cli'
+        run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring
+
+      - name: Verify native CLI credential storage
+        if: inputs.cargo_pkg == 'unrelated-cli'
+        shell: bash
+        env:
+          RELEASE_CLI: ${{ github.workspace }}/target/${{ inputs.target }}/release/${{ inputs.binary_name }}
+        run: |
+          set -euo pipefail
+          unset UNRELATED_TOKEN
+          export XDG_CONFIG_HOME="${RUNNER_TEMP}/release-cli-config"
+          export XDG_CACHE_HOME="${RUNNER_TEMP}/release-cli-cache"
+          credential_smoke() {
+            set -euo pipefail
+            "${RELEASE_CLI}" context add release-smoke --url http://127.0.0.1:1/mcp --auth api-key
+            printf '%s\n' 'synthetic-release-smoke-key' | "${RELEASE_CLI}" --context release-smoke auth login
+            "${RELEASE_CLI}" --context release-smoke --json auth status | jq -e '.authenticated == true'
+            "${RELEASE_CLI}" --context release-smoke auth logout
+            "${RELEASE_CLI}" --context release-smoke --json auth status | jq -e '.authenticated == false'
+          }
+          export -f credential_smoke
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            dbus-run-session -- bash -c 'printf "%s\n" "release-smoke" | gnome-keyring-daemon --unlock; credential_smoke'
+          else
+            credential_smoke
+          fi
+
       - name: Package
         shell: bash
         run: |
@@ -123,10 +163,19 @@ jobs:
 
           tarball="${bin}-v${version}-${target}.tar.gz"
           (cd dist && tar -czf "${tarball}" "${pkgdir}")
-          (cd dist && sha256sum "${tarball}" > "${tarball}.sha256")
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd dist && sha256sum "${tarball}" > "${tarball}.sha256")
+          else
+            (cd dist && shasum -a 256 "${tarball}" > "${tarball}.sha256")
+          fi
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
 
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.3
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true

@@ -1,4 +1,8 @@
 //! Backend supervision and lifecycle management.
+
+// SEP-2577 keeps roots, sampling, and logging wire-compatible during their deprecation window.
+// Preserve those proxy paths until the protocol removes them or replacements are available.
+#![allow(deprecated)]
 //!
 //! This module manages both stdio MCP server processes and `OpenAPI` backends.
 
@@ -16,12 +20,12 @@ use parking_lot::RwLock;
 use rmcp::{
     ClientHandler, RoleClient, ServiceExt,
     model::{
-        CallToolRequestParams, CallToolResult, ClientInfo, CompleteRequestParams, CompleteResult,
-        CreateElicitationRequestParams, CreateElicitationResult, CreateMessageRequestMethod,
-        CreateMessageRequestParams, CreateMessageResult, ErrorData as McpError,
-        GetPromptRequestParams, GetPromptResult, ListRootsResult, LoggingMessageNotificationParam,
-        ProgressNotificationParam, Prompt, ReadResourceRequestParams, ReadResourceResult, Resource,
-        ResourceUpdatedNotificationParam, Tool,
+        CallToolRequestParams, CallToolResult, ClientConfig, CompleteRequestParams, CompleteResult,
+        CreateMessageRequestMethod, CreateMessageRequestParams, CreateMessageResult,
+        ElicitRequestParams, ElicitResult, ErrorData as McpError, GetPromptRequestParams,
+        GetPromptResult, ListRootsResult, LoggingMessageNotificationParam,
+        ProgressNotificationParam, Prompt, ProtocolVersion, ReadResourceRequestParams,
+        ReadResourceResult, Resource, ResourceUpdatedNotificationParam, Tool,
     },
     service::{Peer, RequestContext, RoleServer, RunningService, ServiceError},
     transport::TokioChildProcess,
@@ -89,7 +93,7 @@ struct ProxyClientHandler {
     backend_name: String,
     aggregator: Arc<Aggregator>,
     downstream_peer: Option<Peer<RoleServer>>,
-    downstream_client_info: ClientInfo,
+    downstream_client_info: ClientConfig,
     // Best-effort: when the upstream signals list_changed, trigger a registry refresh in the
     // adapter main loop (only wired for persistent stdio backends).
     refresh_tx: Option<UnboundedSender<String>>,
@@ -102,7 +106,7 @@ impl ProxyClientHandler {
             backend_name,
             aggregator,
             downstream_peer: None,
-            downstream_client_info: ClientInfo::default(),
+            downstream_client_info: ClientConfig::default(),
             refresh_tx: None,
             registry_dirty: None,
         }
@@ -118,7 +122,7 @@ impl ProxyClientHandler {
             backend_name,
             aggregator,
             downstream_peer: None,
-            downstream_client_info: ClientInfo::default(),
+            downstream_client_info: ClientConfig::default(),
             refresh_tx,
             registry_dirty: Some(registry_dirty),
         }
@@ -133,7 +137,8 @@ impl ProxyClientHandler {
         let downstream_peer = peers.get_peer(session_id);
         let downstream_client_info = downstream_peer
             .as_ref()
-            .and_then(|p| p.peer_info().cloned())
+            .and_then(rmcp::Peer::peer_info)
+            .map(|info| (*info).clone())
             .unwrap_or_default();
         Self {
             backend_name,
@@ -177,8 +182,13 @@ impl std::fmt::Debug for ProxyClientHandler {
 }
 
 impl ClientHandler for ProxyClientHandler {
-    fn get_info(&self) -> ClientInfo {
-        self.downstream_client_info.clone()
+    fn get_info(&self) -> ClientConfig {
+        let mut info = self.downstream_client_info.clone();
+        // Stdio backends use initialize even when the SDK or downstream client prefers native MCP.
+        if !info.protocol_version.has_initialize() {
+            info.protocol_version = ProtocolVersion::LATEST_WITH_INITIALIZE;
+        }
+        info
     }
 
     fn create_message(
@@ -216,17 +226,14 @@ impl ClientHandler for ProxyClientHandler {
 
     fn create_elicitation(
         &self,
-        request: CreateElicitationRequestParams,
+        request: ElicitRequestParams,
         _context: RequestContext<RoleClient>,
-    ) -> impl std::future::Future<Output = std::result::Result<CreateElicitationResult, McpError>>
-    + Send
-    + '_ {
+    ) -> impl std::future::Future<Output = std::result::Result<ElicitResult, McpError>> + Send + '_
+    {
         let peer = self.downstream_peer.clone();
         async move {
             let Some(peer) = peer else {
-                return Ok(CreateElicitationResult::new(
-                    rmcp::model::ElicitationAction::Decline,
-                ));
+                return Ok(ElicitResult::new(rmcp::model::ElicitationAction::Decline));
             };
             peer.create_elicitation(request)
                 .await
@@ -546,12 +553,14 @@ impl StdioBackend {
         let client = self.connect_client(handler).await?;
 
         // Get server info (best-effort)
-        if let Some(server_info) = client.peer_info() {
+        if let Some(peer_info) = client.peer_info()
+            && let Some(server_info) = peer_info.server_info.as_ref()
+        {
             tracing::info!(
                 "MCP server '{}' connected: name={}, version={}",
                 name,
-                server_info.server_info.name,
-                server_info.server_info.version,
+                server_info.name,
+                server_info.version,
             );
         } else {
             tracing::info!("MCP server '{}' connected (peer_info unavailable)", name);
@@ -607,10 +616,15 @@ impl StdioBackend {
         let transport = TokioChildProcess::new(cmd)
             .map_err(|e| AdapterError::Startup(format!("Failed to spawn '{name}': {e}")))?;
 
-        handler
+        let client = handler
             .serve(transport)
             .await
-            .map_err(|e| AdapterError::Startup(format!("Failed to connect to '{name}': {e}")))
+            .map_err(|e| AdapterError::Startup(format!("Failed to connect to '{name}': {e}")))?;
+        // Catalog refresh and failure handling are owned by the supervisor.
+        client
+            .set_response_cache_config(rmcp::service::ClientCacheConfig::disabled())
+            .await;
+        Ok(client)
     }
 
     fn get_or_create_session_process(&self, session_id: &str) -> Arc<SessionProcess> {
@@ -1321,6 +1335,73 @@ impl Backend for StdioBackend {
                 size: r.size,
             })
             .collect())
+    }
+
+    async fn list_resource_templates(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<Vec<rmcp::model::ResourceTemplate>> {
+        let mut temporary = None;
+        let peer = match self.lifecycle {
+            StdioLifecycle::Persistent => self.get_peer().await?,
+            StdioLifecycle::PerSession => {
+                self.get_peer_for_session(session_id.ok_or_else(|| {
+                    AdapterError::Runtime("resource templates require a session".into())
+                })?)
+                .await?
+            }
+            StdioLifecycle::PerCall => {
+                let client = timeout(
+                    self.startup_timeout,
+                    self.connect_client(self.per_call_handler(session_id)),
+                )
+                .await
+                .map_err(|_| {
+                    AdapterError::Runtime("template discovery startup timed out".into())
+                })??;
+                let peer = client.peer().clone();
+                temporary = Some(client);
+                peer
+            }
+        };
+        let result = timeout(self.call_timeout, peer.list_all_resource_templates()).await;
+        if let Some(client) = temporary {
+            let _ = client.cancel().await;
+        }
+        result
+            .map_err(|_| AdapterError::Runtime("template discovery timed out".into()))?
+            .map_err(|e| AdapterError::Runtime(format!("template discovery failed: {e}")))
+    }
+
+    async fn roots_list_changed(&self, session_id: Option<&str>) -> Result<()> {
+        // A notification never starts a process. Per-call processes get current
+        // roots on their next request; per-session notifications stay isolated.
+        let peer = match self.lifecycle {
+            StdioLifecycle::Persistent => {
+                self.client.lock().await.as_ref().map(|c| c.peer().clone())
+            }
+            StdioLifecycle::PerSession => {
+                let process =
+                    session_id.and_then(|id| self.session_processes.read().get(id).cloned());
+                if let Some(process) = process {
+                    process
+                        .client
+                        .lock()
+                        .await
+                        .as_ref()
+                        .map(|c| c.peer().clone())
+                } else {
+                    None
+                }
+            }
+            StdioLifecycle::PerCall => None,
+        };
+        if let Some(peer) = peer {
+            peer.notify_roots_list_changed()
+                .await
+                .map_err(|e| AdapterError::Runtime(format!("roots notification failed: {e}")))?;
+        }
+        Ok(())
     }
 
     async fn read_resource(

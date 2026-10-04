@@ -8,8 +8,7 @@ export type TenantTokenPayloadV1 = {
 };
 
 type RawTenantTokenPayloadV1 =
-  | { tenant_id: string; exp_unix_secs: number }
-  | { tenantId: string; expUnixSecs: number };
+  { tenant_id: string; exp_unix_secs: number } | { tenantId: string; expUnixSecs: number };
 
 function base64UrlToBase64(input: string): string {
   const padded = input.replace(/-/g, "+").replace(/_/g, "/");
@@ -17,10 +16,15 @@ function base64UrlToBase64(input: string): string {
   return padded + "=".repeat(padLen);
 }
 
+export function normalizeTenantToken(token: string): string {
+  return token
+    .trim()
+    .replace(/^Bearer\s+/i, "")
+    .trim();
+}
+
 export function decodeTenantTokenPayload(token: string): TenantTokenPayloadV1 {
-  const raw = token.trim().startsWith("Bearer ")
-    ? token.trim().slice("Bearer ".length).trim()
-    : token.trim();
+  const raw = normalizeTenantToken(token);
 
   const parts = raw.split(".");
   if (parts.length !== 3 || parts[0] !== "tv1") {
@@ -29,7 +33,9 @@ export function decodeTenantTokenPayload(token: string): TenantTokenPayloadV1 {
 
   const payloadB64Url = parts[1];
   const payloadB64 = base64UrlToBase64(payloadB64Url);
-  const json = atob(payloadB64);
+  const json = new TextDecoder().decode(
+    Uint8Array.from(atob(payloadB64), (char) => char.charCodeAt(0)),
+  );
   const payload = JSON.parse(json) as RawTenantTokenPayloadV1;
 
   const tenantId =
@@ -49,7 +55,11 @@ export function decodeTenantTokenPayload(token: string): TenantTokenPayloadV1 {
   if (!tenantId) {
     throw new Error("Invalid token payload (missing tenantId)");
   }
-  if (expUnixSecs == null || typeof expUnixSecs !== "number" || !Number.isFinite(expUnixSecs)) {
+  if (
+    expUnixSecs == null ||
+    !Number.isSafeInteger(expUnixSecs) ||
+    !Number.isFinite(new Date(expUnixSecs * 1000).getTime())
+  ) {
     throw new Error("Invalid token payload (missing expUnixSecs)");
   }
   return { tenant_id: tenantId, exp_unix_secs: expUnixSecs };
@@ -77,7 +87,18 @@ function parseErrorMessage(text: string): string {
 }
 
 export async function establishTenantSession(token: string): Promise<TenantTokenPayloadV1> {
-  const res = await fetch("/api/session/unlock", {
+  return requestTenantSession("unlock", token);
+}
+
+export async function validateTenantSession(token: string): Promise<TenantTokenPayloadV1> {
+  return requestTenantSession("validate", token);
+}
+
+async function requestTenantSession(
+  action: "validate" | "unlock",
+  token: string,
+): Promise<TenantTokenPayloadV1> {
+  const res = await fetch(`/api/session/${action}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ token: token.trim() }),
@@ -90,10 +111,10 @@ export async function establishTenantSession(token: string): Promise<TenantToken
   try {
     body = JSON.parse(text) as UnlockSessionResponse;
   } catch {
-    throw new Error("Invalid unlock response");
+    throw new Error("Invalid session response");
   }
   if (!body.ok || !body.tenantId || !Number.isFinite(body.expUnixSecs)) {
-    throw new Error("Invalid unlock response");
+    throw new Error("Invalid session response");
   }
   return {
     tenant_id: body.tenantId,

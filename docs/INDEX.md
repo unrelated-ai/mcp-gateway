@@ -1,52 +1,35 @@
-# Documentation Index (workspace)
+# Documentation
 
-This repository ships **MCP infrastructure** for turning existing systems into MCP servers and serving them safely at scale:
+MCP Gateway connects HTTP APIs and MCP servers to MCP clients through secured
+profile endpoints. Start with the [Docker quickstart](../README.md#try-it-locally)
+or the [Helm deployment guide](deploy/HELM.md).
 
-- **Adapter**: expose HTTP/OpenAPI/stdio MCP as a single MCP server over streamable HTTP (`/mcp`)
-- **Gateway**: expose tenant-owned “virtual MCP servers” (`/{profile_id}/mcp`) backed by native HTTP/OpenAPI sources and upstream MCP servers, with data-plane auth and policy
-- **Admin tooling**: CLI (operator workflows) + Web UI (tenant workflows)
+## Components
 
-## Why use this
+| Component | Purpose | Guides |
+| --- | --- | --- |
+| Gateway | Profile endpoints, authentication, aggregation, and tool policies | [Overview](gateway/INDEX.md), [upgrading to v1](gateway/V1_UPGRADE.md) |
+| Adapter | Publish HTTP/OpenAPI tools and stdio MCP servers over HTTP | [Overview](adapter/INDEX.md), [configuration](adapter/CONFIG.md), [testing](adapter/TESTING.md) |
+| Web UI | Manage tenant sources, profiles, keys, secrets, and audit settings | [UI guide](ui/INDEX.md) |
+| Client CLI | Connect to profiles, log in, discover tools, and run a compact stdio proxy | [`unrelated` guide](unrelated-cli/README.md) |
+| Admin CLI | Administer tenants, upstreams, and profiles | [Overview](gateway-cli/INDEX.md), [commands](gateway-cli/COMMANDS.md) |
+| Operator | Manage MCP workloads on Docker or Kubernetes | [Operator guide](../crates/gateway-operator/README.md) |
 
-Common use cases:
+## Deployment and operation
 
-- **Expose an existing HTTP API as MCP tools** without rewriting it as an MCP server.
-- **Publish stdio MCP servers over streamable HTTP** (run the server as a child process; clients connect over HTTP).
-- **Aggregate tool surfaces** from multiple upstreams into a single MCP endpoint (with collision handling).
-- **Multi-tenant MCP gateway**: isolate tenants, issue API keys, configure per-profile tool allowlists/transforms, and enforce per-tool timeouts/retries.
+- [Helm deployment](deploy/HELM.md)
+- [Local Kubernetes testing](deploy/K8S_TESTING.md)
+- [Authentication](gateway/DATA_PLANE_AUTH.md)
+- [MCP compatibility and aggregation](gateway/MCP_PROXYING.md)
+- [Profile MCP settings](gateway/MCP_SETTINGS.md)
+- [Tenant sources and secrets](gateway/MODE3_TENANT_OVERLAY.md)
+- [Audit logging](gateway/AUDIT.md)
+- [Performance and tuning](gateway/PERFORMANCE.md)
 
-## Components (start here)
+## Development
 
-- **Adapter (implemented)**: [`docs/adapter/INDEX.md`](adapter/INDEX.md)
-  - Config reference: [`docs/adapter/CONFIG.md`](adapter/CONFIG.md)
-  - Running & testing: [`docs/adapter/TESTING.md`](adapter/TESTING.md)
-- **Gateway (beta)**: [`docs/gateway/INDEX.md`](gateway/INDEX.md)
-  - MCP proxying & aggregation behavior: [`docs/gateway/MCP_PROXYING.md`](gateway/MCP_PROXYING.md)
-  - Data-plane auth (API keys + OIDC/JWT): [`docs/gateway/DATA_PLANE_AUTH.md`](gateway/DATA_PLANE_AUTH.md)
-  - Profile MCP settings (capabilities/notifications/namespacing, trust controls, transport limits): [`docs/gateway/MCP_SETTINGS.md`](gateway/MCP_SETTINGS.md)
-  - Mode 3 tenant overlay (tool sources + secrets): [`docs/gateway/MODE3_TENANT_OVERLAY.md`](gateway/MODE3_TENANT_OVERLAY.md)
-  - Audit logging (Mode 3 / Postgres): [`docs/gateway/AUDIT.md`](gateway/AUDIT.md)
-- **Gateway admin CLI (implemented)**: [`docs/gateway-cli/INDEX.md`](gateway-cli/INDEX.md)
-  - Commands: [`docs/gateway-cli/COMMANDS.md`](gateway-cli/COMMANDS.md)
-  - Config/auth precedence: [`docs/gateway-cli/CONFIG.md`](gateway-cli/CONFIG.md)
-  - `mcp.json` output: [`docs/gateway-cli/MCP_JSON.md`](gateway-cli/MCP_JSON.md)
-- **Gateway operator (implemented)**: [`crates/gateway-operator/README.md`](../crates/gateway-operator/README.md)
-  - Helm chart: `deploy/helm/unrelated-mcp-gateway-operator/`
-- **Gateway runtime/admin Helm chart**: `deploy/helm/unrelated-mcp-gateway/`
-- **Gateway UI Helm chart**: `deploy/helm/unrelated-mcp-gateway-ui/`
-- **Optional bundled Postgres chart**: `deploy/helm/unrelated-mcp-postgres/`
-- **Umbrella install chart** (operator + gateway + UI + optional postgres): `deploy/helm/unrelated-mcp-gateway-stack/`
-- **Helm deployment guide**: [`docs/deploy/HELM.md`](deploy/HELM.md)
-- **Kubernetes testing guide** (`kind` + local image workflow): [`docs/deploy/K8S_TESTING.md`](deploy/K8S_TESTING.md)
-- **Web UI (beta)**: [`docs/ui/INDEX.md`](ui/INDEX.md)
-  - Build/versioning/releases: [`docs/CICD.md`](CICD.md)
-
-## Notes on what exists today
-
-- The Gateway implements **MCP proxying + upstream aggregation** and a **control-plane admin API** (Mode 3 / Postgres).
-- Tenant-facing **data-plane authn/z is implemented** (API keys + OIDC/JWT).
-
-## Workspace docs
-
-- Workspace layout: [`docs/WORKSPACE.md`](WORKSPACE.md)
-- CI/CD: [`docs/CICD.md`](CICD.md)
+- [Contributing](../CONTRIBUTING.md)
+- [Workspace layout](WORKSPACE.md)
+- [Version maintenance](development/VERSIONS.md)
+- [Release checklist](development/RELEASING.md)
+- [CI/CD](CICD.md)

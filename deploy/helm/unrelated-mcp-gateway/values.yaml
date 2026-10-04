@@ -3,7 +3,7 @@ fullnameOverride: ""
 
 image:
   repository: ghcr.io/unrelated-ai/mcp-gateway
-  tag: "0.13.4"
+  tag: "1.0.0"
   pullPolicy: IfNotPresent
 
 replicaCount: 1
@@ -58,10 +58,7 @@ postgres:
     username: postgres
     password: postgres
     database: gateway
-  image:
-    repository: postgres
-    tag: "16-alpine"
-    pullPolicy: IfNotPresent
+  # Image defaults come from the PostgreSQL subchart; override postgres.image as needed.
   service:
     port: 5432
   persistence:
@@ -77,7 +74,7 @@ migrations:
   enabled: true
   image:
     repository: ghcr.io/unrelated-ai/mcp-gateway-migrator
-    tag: "0.13.4"
+    tag: "1.0.0"
     pullPolicy: IfNotPresent
   # `gateway-migrator` image uses dbmate as ENTRYPOINT.
   # Set args (not command) so this renders to `dbmate --wait up`.
