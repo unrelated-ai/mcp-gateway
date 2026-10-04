@@ -4,6 +4,7 @@ import {
   createProfileWriteQueue,
   type ProfileRevision,
 } from "./profile-updates";
+import type { ToolSourceDetail } from "./tool-source-updates";
 import { tenantFetchJson } from "@/src/lib/tenantFetch";
 import type {
   ApiKeyMetadata,
@@ -364,13 +365,10 @@ export async function listToolSources(): Promise<{ sources: ToolSourceSummary[] 
   );
 }
 
-export async function getToolSource(
-  id: string,
-): Promise<{ type: string; enabled: boolean; spec?: Record<string, unknown> }> {
-  return await tenantFetchJson<{ type: string; enabled: boolean; spec?: Record<string, unknown> }>(
-    bffRoute(tenantRoutes.TOOL_SOURCE(id)),
-    { cache: "no-store" },
-  );
+export async function getToolSource(id: string): Promise<ToolSourceDetail> {
+  return await tenantFetchJson<ToolSourceDetail>(bffRoute(tenantRoutes.TOOL_SOURCE(id)), {
+    cache: "no-store",
+  });
 }
 
 export async function listToolSourceTools(

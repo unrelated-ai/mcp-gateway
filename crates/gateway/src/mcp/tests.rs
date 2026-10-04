@@ -1261,6 +1261,7 @@ impl crate::store::Store for CountingStore {
             // We don't need a usable spec for this test: we only need TenantCatalog::has_tool_source
             // to return true, which is based on presence.
             return Ok(Some(crate::store::TenantToolSource {
+                revision: 1,
                 id: source_id.to_string(),
                 kind: crate::store::ToolSourceKind::Http,
                 enabled: true,

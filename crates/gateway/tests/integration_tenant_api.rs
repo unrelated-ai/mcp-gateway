@@ -972,7 +972,7 @@ async fn tenant_tool_source_get_returns_spec_for_round_trip() -> anyhow::Result<
     let database_url =
         format!("postgres://postgres:postgres@{host}:{port}/gateway?sslmode=disable");
     wait_pg_ready(&database_url, Duration::from_secs(30)).await?;
-    apply_dbmate_migrations(&database_url).await?;
+    migrate_existing_tool_sources(&database_url).await?;
 
     // Gateway (Mode 3)
     let gw = spawn_gateway(&database_url, Some(ADMIN_TOKEN), SESSION_SECRET)?;
@@ -1044,6 +1044,160 @@ async fn tenant_tool_source_get_returns_spec_for_round_trip() -> anyhow::Result<
             .is_some(),
         "spec.tools missing"
     );
+
+    assert_tool_source_revisions(&client, &admin_base, &t1_token, &got).await?;
+
+    Ok(())
+}
+
+async fn assert_tool_source_revisions(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    original: &serde_json::Value,
+) -> anyhow::Result<()> {
+    let url = format!("{base}/tenant/v1/tool-sources/s1");
+    let mut update = original["spec"].clone();
+    update["type"] = json!("http");
+    update["enabled"] = json!(false);
+    update["expectedRevision"] = original["revision"].clone();
+    let put = || client.put(&url).bearer_auth(token).json(&update).send();
+    // Two saves with the same revision cannot both win.
+    let (a, b) = tokio::join!(put(), put());
+    let mut statuses = [a?.status().as_u16(), b?.status().as_u16()];
+    statuses.sort_unstable();
+    assert_eq!(statuses, [200, 409]);
+    let latest: serde_json::Value = client
+        .get(&url)
+        .bearer_auth(token)
+        .send()
+        .await?
+        .json()
+        .await?;
+    assert_eq!(latest["enabled"], false);
+    assert_eq!(
+        latest["revision"].as_i64(),
+        original["revision"].as_i64().map(|r| r + 1)
+    );
+    // Administrative writes also advance the revision and reject stale tenant drafts.
+    admin_post(
+        client,
+        base,
+        "/admin/v1/tenants",
+        json!({"id":"other", "enabled":true}),
+    )
+    .await?;
+    let other_token = admin_issue_tenant_token(client, base, "other").await?;
+    let cross_tenant = client
+        .put(&url)
+        .bearer_auth(other_token)
+        .json(&update)
+        .send()
+        .await?;
+    assert_eq!(cross_tenant.status(), reqwest::StatusCode::CONFLICT);
+    update["expectedRevision"] = latest["revision"].clone();
+    let mut admin_update = update.clone();
+    admin_update
+        .as_object_mut()
+        .unwrap()
+        .remove("expectedRevision");
+    client
+        .put(format!("{base}/admin/v1/tenants/t1/tool-sources/s1"))
+        .bearer_auth(ADMIN_TOKEN)
+        .json(&admin_update)
+        .send()
+        .await?
+        .error_for_status()?;
+    assert_eq!(
+        client
+            .put(&url)
+            .bearer_auth(token)
+            .json(&update)
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    client
+        .delete(&url)
+        .bearer_auth(token)
+        .send()
+        .await?
+        .error_for_status()?;
+    assert_eq!(
+        client
+            .put(&url)
+            .bearer_auth(token)
+            .json(&update)
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    // Deletion and recreation must not make an old draft valid again.
+    client
+        .put(&url)
+        .bearer_auth(token)
+        .json(&admin_update)
+        .send()
+        .await?
+        .error_for_status()?;
+    update["expectedRevision"] = original["revision"].clone();
+    assert_eq!(
+        client
+            .put(&url)
+            .bearer_auth(token)
+            .json(&update)
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    assert_tool_source_creation(client, base, token).await?;
+    Ok(())
+}
+
+async fn assert_tool_source_creation(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+) -> anyhow::Result<()> {
+    // Creation forms use revision zero and can never overwrite a concurrent creator.
+    let create_url = format!("{base}/tenant/v1/tool-sources/create-only");
+    let create =
+        json!({"type":"http","baseUrl":"https://example.com","tools":{},"expectedRevision":0});
+    let put = || {
+        client
+            .put(&create_url)
+            .bearer_auth(token)
+            .json(&create)
+            .send()
+    };
+    let (a, b) = tokio::try_join!(put(), put())?;
+    let mut statuses = [a.status().as_u16(), b.status().as_u16()];
+    statuses.sort_unstable();
+    assert_eq!(statuses, [200, 409]);
+    let mut collision = create.clone();
+    collision["baseUrl"] = json!("https://different.example.com");
+    assert_eq!(
+        client
+            .put(&create_url)
+            .bearer_auth(token)
+            .json(&collision)
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    let saved: serde_json::Value = client
+        .get(&create_url)
+        .bearer_auth(token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(saved["spec"]["baseUrl"], "https://example.com");
 
     Ok(())
 }
@@ -1967,5 +2121,44 @@ async fn tenant_managed_upstream_created_via_admin_is_tenant_scoped() -> anyhow:
         "expected tenant-owned managed upstream payload, got: {t1_get_body}"
     );
 
+    Ok(())
+}
+
+async fn migrate_existing_tool_sources(database_url: &str) -> anyhow::Result<()> {
+    const MIGRATION: &str = "20260920010000_tool_source_revisions.sql";
+    common::pg::apply_dbmate_migrations_before(database_url, MIGRATION).await?;
+    let pool = sqlx::PgPool::connect(database_url).await?;
+    sqlx::query("insert into tenants (id, enabled) values ('migration-check', true)")
+        .execute(&pool)
+        .await?;
+    sqlx::query(r#"insert into tool_sources (tenant_id, id, kind, enabled, spec) values ('migration-check', 'one', 'http', true, '{"baseUrl":"https://example.com","tools":{}}'), ('migration-check', 'two', 'http', false, '{}')"#)
+        .execute(&pool).await?;
+    common::pg::apply_dbmate_migrations_from(database_url, MIGRATION).await?;
+    let revisions: Vec<i64> = sqlx::query_scalar("select revision from tool_sources order by id")
+        .fetch_all(&pool)
+        .await?;
+    assert_eq!(revisions.len(), 2);
+    assert_ne!(revisions[0], revisions[1]);
+    let enabled: bool = sqlx::query_scalar("select enabled from tool_sources where id = 'two'")
+        .fetch_one(&pool)
+        .await?;
+    assert!(!enabled);
+    let base: String =
+        sqlx::query_scalar("select spec->>'baseUrl' from tool_sources where id = 'one'")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(base, "https://example.com");
+    // Rollback preserves configuration, and the migration can be applied again.
+    let (_, down) = include_str!("../migrations/20260920010000_tool_source_revisions.sql")
+        .split_once("-- migrate:down")
+        .unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(down))
+        .execute(&pool)
+        .await?;
+    common::pg::apply_dbmate_migrations_from(database_url, MIGRATION).await?;
+    sqlx::query("delete from tenants where id = 'migration-check'")
+        .execute(&pool)
+        .await?;
+    pool.close().await;
     Ok(())
 }

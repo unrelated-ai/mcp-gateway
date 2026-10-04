@@ -757,6 +757,7 @@ pub enum ToolSourceSpec {
 
 #[derive(Debug, Clone)]
 pub struct TenantToolSource {
+    pub revision: i64,
     pub id: String,
     pub kind: ToolSourceKind,
     pub enabled: bool,
@@ -1153,6 +1154,7 @@ pub trait AdminStore: Send + Sync {
         enabled: bool,
         kind: ToolSourceKind,
         spec: Value,
+        expected_revision: Option<i64>,
     ) -> anyhow::Result<()>;
     async fn delete_tool_source(&self, tenant_id: &str, source_id: &str) -> anyhow::Result<bool>;
 
@@ -1404,6 +1406,14 @@ pub struct PutProfileInput<'a> {
 #[derive(Debug, thiserror::Error)]
 #[error("Profile changed in another window. Reload the profile before saving again.")]
 pub struct ProfileRevisionConflict;
+
+#[derive(Debug, thiserror::Error)]
+#[error("Tool source changed in another window. Reload the source before saving again.")]
+pub struct ToolSourceRevisionConflict;
+
+#[derive(Debug, thiserror::Error)]
+#[error("A tool source with this name already exists. Choose a different name.")]
+pub struct ToolSourceAlreadyExists;
 
 /// In-memory store backed by a static config file (Mode 1).
 #[derive(Clone)]

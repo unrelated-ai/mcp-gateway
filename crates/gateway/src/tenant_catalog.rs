@@ -435,6 +435,7 @@ mod tests {
         });
         let store = FakeStore::default();
         store.set_source(crate::store::TenantToolSource {
+            revision: 1,
             id: "protected".into(),
             kind: ToolSourceKind::Openapi,
             enabled: true,
@@ -513,6 +514,7 @@ mod tests {
         };
 
         store.set_source(crate::store::TenantToolSource {
+            revision: 1,
             id: "s1".to_string(),
             kind: crate::store::ToolSourceKind::Http,
             enabled: true,
@@ -554,6 +556,7 @@ mod tests {
 
         // v0: tool_a + tool_b
         store.set_source(crate::store::TenantToolSource {
+            revision: 1,
             id: "s1".to_string(),
             kind: crate::store::ToolSourceKind::Http,
             enabled: true,
@@ -597,6 +600,7 @@ mod tests {
 
         // v1: drop tool_b
         store.set_source(crate::store::TenantToolSource {
+            revision: 1,
             id: "s1".to_string(),
             kind: crate::store::ToolSourceKind::Http,
             enabled: true,

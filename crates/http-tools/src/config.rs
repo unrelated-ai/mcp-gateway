@@ -234,6 +234,17 @@ pub enum QueryStyleConfig {
     DeepObject,
 }
 
+impl From<ArrayStyle> for QueryStyleConfig {
+    fn from(style: ArrayStyle) -> Self {
+        match style {
+            ArrayStyle::Form => Self::Form,
+            ArrayStyle::SpaceDelimited => Self::SpaceDelimited,
+            ArrayStyle::PipeDelimited => Self::PipeDelimited,
+            ArrayStyle::DeepObject => Self::DeepObject,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::EndpointDefaults;

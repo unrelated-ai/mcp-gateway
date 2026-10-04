@@ -19,22 +19,24 @@ function emptyAuth(type: AuthConfig["type"]): AuthConfig {
   }
 }
 
-export function OpenApiAuthFields({
+export function SourceAuthFields({
   auth,
   onChange,
-  disabled,
+  disabled = false,
+  hint = "Used to authenticate API requests.",
 }: {
   auth: AuthConfig;
   onChange: (auth: AuthConfig) => void;
-  disabled: boolean;
+  disabled?: boolean;
+  hint?: string;
 }) {
   return (
-    <fieldset disabled={disabled} className="mt-6 space-y-4">
+    <fieldset disabled={disabled} className="space-y-4">
       <Select
         label="Source authentication"
         value={auth.type}
         onChange={(event) => onChange(emptyAuth(event.target.value as AuthConfig["type"]))}
-        hint="Used to download the spec and make API calls."
+        hint={hint}
       >
         <option value="none">None</option>
         <option value="bearer">Bearer token</option>

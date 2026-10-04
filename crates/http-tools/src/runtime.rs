@@ -281,7 +281,12 @@ fn generate_tools(source_name: &str, config: &HttpServerConfig) -> Result<Vec<Ge
             &response_pipeline,
         )?;
 
-        let parameters = collect_tool_parameters(source_name, tool_name, tool_cfg)?;
+        let parameters = collect_tool_parameters(
+            source_name,
+            tool_name,
+            tool_cfg,
+            config.defaults.array_style,
+        )?;
 
         let input_schema = build_input_schema(&parameters);
 
@@ -352,6 +357,7 @@ fn collect_tool_parameters(
     source_name: &str,
     tool_name: &str,
     tool_cfg: &crate::config::HttpToolConfig,
+    default_array_style: Option<crate::config::ArrayStyle>,
 ) -> Result<Vec<ToolParameter>> {
     let mut parameters = Vec::new();
     let mut param_names: HashSet<String> = HashSet::new();
@@ -373,7 +379,10 @@ fn collect_tool_parameters(
             .unwrap_or_else(|| json!({"type": "string"}));
 
         let query = if matches!(p.location, HttpParamLocation::Query) {
-            let style = p.style.map_or(QueryStyle::Form, map_query_style);
+            let style = map_query_style(
+                p.style
+                    .unwrap_or_else(|| default_array_style.unwrap_or_default().into()),
+            );
             let explode = p.explode.unwrap_or_else(|| default_query_explode(&style));
             Some(QuerySerialization {
                 style,
@@ -888,6 +897,10 @@ fn build_input_schema(parameters: &[ToolParameter]) -> Value {
     for param in parameters {
         let mut prop_schema = param.schema.clone();
         if let Some(default) = &param.default {
+            // Boolean schemas have no properties; wrap them before adding an annotation.
+            if prop_schema.is_boolean() {
+                prop_schema = json!({"allOf": [prop_schema]});
+            }
             prop_schema["default"] = default.clone();
         }
 
@@ -912,7 +925,7 @@ fn build_input_schema(parameters: &[ToolParameter]) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::HttpToolSource;
+    use super::{HttpToolSource, QueryPair, generate_tools, serialize_query_param};
     use crate::config::{
         AuthConfig, EndpointDefaults, HttpParamConfig, HttpParamLocation, HttpResponseConfig,
         HttpResponseMode, HttpServerConfig, HttpToolConfig,
@@ -925,6 +938,51 @@ mod tests {
     use std::collections::HashMap;
     use std::time::Duration;
     use tokio::net::TcpListener;
+
+    #[test]
+    fn boolean_argument_schemas_accept_default_annotations_without_panicking() {
+        for allowed in [true, false] {
+            let config: HttpServerConfig = serde_json::from_value(json!({
+                "baseUrl":"https://example.com", "tools":{"get":{"method":"GET","path":"/", "params":{
+                    "value":{"in":"query","schema":allowed,"default":"fallback"}
+                }}}
+            })).unwrap();
+            let tools = generate_tools("test", &config).unwrap();
+            assert_eq!(
+                tools[0].input_schema["properties"]["value"],
+                json!({"allOf":[allowed],"default":"fallback"})
+            );
+        }
+    }
+
+    #[test]
+    fn source_array_style_applies_unless_a_parameter_overrides_it() {
+        let config: HttpServerConfig = serde_json::from_value(json!({
+            "baseUrl":"https://example.com", "defaults":{"arrayStyle":"pipeDelimited"},
+            "tools":{"list":{"method":"GET","path":"/items","params":{
+                "inherited":{"in":"query"}, "overridden":{"in":"query","style":"spaceDelimited"}
+            }}}
+        }))
+        .unwrap();
+        let tools = generate_tools("test", &config).unwrap();
+        for (name, expected) in [("inherited", "a|b"), ("overridden", "a b")] {
+            let param = tools[0]
+                .parameters
+                .iter()
+                .find(|p| p.tool_name == name)
+                .unwrap();
+            let pairs =
+                serialize_query_param(name, &json!(["a", "b"]), false, param.query.as_ref());
+            assert_eq!(
+                pairs,
+                vec![QueryPair {
+                    key: name.to_owned(),
+                    value: expected.to_owned(),
+                    allow_reserved: false
+                }]
+            );
+        }
+    }
 
     #[test]
     fn list_tools_builds_required_and_defaults_in_schema() {

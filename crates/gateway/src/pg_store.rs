@@ -601,8 +601,9 @@ impl AdminStore for PostgresStore {
         enabled: bool,
         kind: ToolSourceKind,
         spec: Value,
+        expected_revision: Option<i64>,
     ) -> anyhow::Result<()> {
-        self.admin_put_tool_source(tenant_id, source_id, enabled, kind, spec)
+        self.admin_put_tool_source(tenant_id, source_id, enabled, kind, spec, expected_revision)
             .await
     }
 

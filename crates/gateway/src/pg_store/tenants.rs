@@ -27,7 +27,7 @@ impl PostgresStore {
     ) -> anyhow::Result<Option<TenantToolSource>> {
         let row = sqlx::query(
             r"
-select tenant_id, id, kind, enabled, spec
+select tenant_id, id, kind, enabled, spec, revision
 from tool_sources
 where tenant_id = $1
   and id = $2
@@ -65,6 +65,7 @@ where tenant_id = $1
         };
 
         Ok(Some(TenantToolSource {
+            revision: row.try_get("revision")?,
             id,
             kind,
             enabled,
@@ -271,7 +272,7 @@ set enabled = excluded.enabled,
     ) -> anyhow::Result<Vec<TenantToolSource>> {
         let rows = sqlx::query(
             r"
-select id, kind, enabled, spec
+select id, kind, enabled, spec, revision
 from tool_sources
 where tenant_id = $1
 order by created_at asc, id asc
@@ -305,6 +306,7 @@ order by created_at asc, id asc
             };
 
             out.push(TenantToolSource {
+                revision: row.try_get("revision")?,
                 id,
                 kind,
                 enabled,
@@ -330,14 +332,48 @@ order by created_at asc, id asc
         enabled: bool,
         kind: ToolSourceKind,
         spec: Value,
+        expected_revision: Option<i64>,
     ) -> anyhow::Result<()> {
         let kind = match kind {
             ToolSourceKind::Http => "http",
             ToolSourceKind::Openapi => "openapi",
         };
 
-        sqlx::query(
-            r"
+        if expected_revision == Some(0) {
+            // Revision zero means create only; a stale creation form must never upsert.
+            let result = sqlx::query(
+                "insert into tool_sources (tenant_id, id, kind, enabled, spec) \
+                 values ($1, $2, $3, $4, $5) on conflict (tenant_id, id) do nothing",
+            )
+            .bind(tenant_id)
+            .bind(source_id)
+            .bind(kind)
+            .bind(enabled)
+            .bind(spec)
+            .execute(&self.pool)
+            .await?;
+            if result.rows_affected() == 0 {
+                return Err(crate::store::ToolSourceAlreadyExists.into());
+            }
+        } else if let Some(revision) = expected_revision {
+            let result = sqlx::query(
+                "update tool_sources set kind = $3, enabled = $4, spec = $5, updated_at = now() \
+                 where tenant_id = $1 and id = $2 and revision = $6",
+            )
+            .bind(tenant_id)
+            .bind(source_id)
+            .bind(kind)
+            .bind(enabled)
+            .bind(spec)
+            .bind(revision)
+            .execute(&self.pool)
+            .await?;
+            if result.rows_affected() == 0 {
+                return Err(crate::store::ToolSourceRevisionConflict.into());
+            }
+        } else {
+            sqlx::query(
+                r"
 insert into tool_sources (tenant_id, id, kind, enabled, spec)
 values ($1, $2, $3, $4, $5)
 on conflict (tenant_id, id) do update
@@ -346,14 +382,15 @@ set kind = excluded.kind,
     spec = excluded.spec,
     updated_at = now()
 ",
-        )
-        .bind(tenant_id)
-        .bind(source_id)
-        .bind(kind)
-        .bind(enabled)
-        .bind(spec)
-        .execute(&self.pool)
-        .await?;
+            )
+            .bind(tenant_id)
+            .bind(source_id)
+            .bind(kind)
+            .bind(enabled)
+            .bind(spec)
+            .execute(&self.pool)
+            .await?;
+        }
 
         let events = vec![pg_invalidation::InvalidationEvent::TenantToolSource {
             tenant_id: tenant_id.to_string(),

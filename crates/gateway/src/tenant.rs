@@ -822,12 +822,16 @@ async fn get_profile_surface(
 #[serde(tag = "type", rename_all = "kebab-case")]
 enum PutToolSourceBody {
     Http {
+        #[serde(default, rename = "expectedRevision")]
+        expected_revision: Option<i64>,
         #[serde(default = "default_true")]
         enabled: bool,
         #[serde(flatten)]
         config: HttpServerConfig,
     },
     Openapi {
+        #[serde(default, rename = "expectedRevision")]
+        expected_revision: Option<i64>,
         #[serde(default = "default_true")]
         enabled: bool,
         #[serde(flatten)]
@@ -847,6 +851,7 @@ struct ToolSourceResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ToolSourceDetailResponse {
+    revision: i64,
     id: String,
     #[serde(rename = "type")]
     tool_type: String,
@@ -1232,6 +1237,7 @@ async fn get_tool_source(
             };
 
             Json(ToolSourceDetailResponse {
+                revision: s.revision,
                 id: s.id,
                 tool_type: tool_source_kind_str(s.kind).to_string(),
                 enabled: s.enabled,
@@ -1427,14 +1433,26 @@ async fn tenant_put_tool_source_inner(
         return outcome;
     }
 
-    let (enabled, kind, spec_res) = match body {
-        PutToolSourceBody::Http { enabled, config } => {
-            (enabled, ToolSourceKind::Http, serde_json::to_value(&config))
-        }
-        PutToolSourceBody::Openapi { enabled, config } => (
+    let (enabled, kind, spec_res, expected_revision) = match body {
+        PutToolSourceBody::Http {
+            enabled,
+            config,
+            expected_revision,
+        } => (
+            enabled,
+            ToolSourceKind::Http,
+            serde_json::to_value(&config),
+            expected_revision,
+        ),
+        PutToolSourceBody::Openapi {
+            enabled,
+            config,
+            expected_revision,
+        } => (
             enabled,
             ToolSourceKind::Openapi,
             serde_json::to_value(&config),
+            expected_revision,
         ),
     };
     let kind_for_meta = Some(format!("{kind:?}"));
@@ -1455,10 +1473,22 @@ async fn tenant_put_tool_source_inner(
     };
 
     match store
-        .put_tool_source(tenant_id, source_id, enabled, kind, spec)
+        .put_tool_source(tenant_id, source_id, enabled, kind, spec, expected_revision)
         .await
     {
         Ok(()) => TenantPutToolSourceOutcome::ok(kind_for_meta, enabled_for_meta),
+        Err(e)
+            if e.is::<crate::store::ToolSourceRevisionConflict>()
+                || e.is::<crate::store::ToolSourceAlreadyExists>() =>
+        {
+            TenantPutToolSourceOutcome::fail_with_meta(
+                StatusCode::CONFLICT,
+                e.to_string(),
+                AuditError::new("revision_conflict", e.to_string()),
+                kind_for_meta,
+                enabled_for_meta,
+            )
+        }
         Err(e) => {
             let msg = e.to_string();
             TenantPutToolSourceOutcome::fail_with_meta(

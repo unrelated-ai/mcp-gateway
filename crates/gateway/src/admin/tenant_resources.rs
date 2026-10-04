@@ -273,7 +273,7 @@ async fn admin_put_tool_source_inner(
     };
 
     match store
-        .put_tool_source(tenant_id, source_id, enabled, kind, spec)
+        .put_tool_source(tenant_id, source_id, enabled, kind, spec, None)
         .await
     {
         Ok(()) => AdminPutToolSourceOutcome::ok(kind_for_meta, enabled_for_meta),

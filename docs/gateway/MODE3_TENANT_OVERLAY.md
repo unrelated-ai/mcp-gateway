@@ -74,6 +74,11 @@ Notes:
 - **Tool sources**:
   - `GET /tenant/v1/tool-sources`
   - `GET|PUT|DELETE /tenant/v1/tool-sources/{source_id}`
+  - Detail responses include `revision`. Sending that value as `expectedRevision` on PUT
+    prevents overwriting a newer edit; stale or deleted sources return **409**. Omitting
+    it retains the existing create-or-replace behavior for API clients. Sending
+    `expectedRevision: 0` creates a source only if it does not exist; a name collision
+    returns **409** without changing the existing source.
   - `POST /tenant/v1/tool-sources/openapi/inspect` accepts `specUrl` and optional
     `auth` using the source auth format. Secret references are resolved within the
     caller's tenant. Preview returns metadata and tools without creating a source.

@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { HttpSourceEditor } from "@/components/sources/http-source-editor";
 import { useParams, useRouter } from "next/navigation";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Button,
   Callout,
@@ -26,6 +27,11 @@ import * as tenantApi from "@/src/lib/tenantApi";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import {
+  buildJsonSourceUpdate,
+  buildOpenApiSourceUpdate,
+  type ToolSourceDetail,
+} from "@/src/lib/tool-source-updates";
 
 export default function ToolSourceDetailPage() {
   const params = useParams();
@@ -88,7 +94,6 @@ export default function ToolSourceDetailPage() {
 }
 
 function ToolSourceEditor({ sourceId }: { sourceId: string }) {
-  const pushToast = useToastStore((s) => s.push);
   const [activeTab, setActiveTab] = useState<"settings" | "tools">("settings");
 
   const toolSourceQuery = useQuery({
@@ -99,9 +104,6 @@ function ToolSourceEditor({ sourceId }: { sourceId: string }) {
 
   const detail = toolSourceQuery.data;
   const toolsTabEnabled = detail?.type === "openapi";
-  const editorKey = detail
-    ? `${sourceId}:${detail.type}:${toolSourceQuery.dataUpdatedAt}`
-    : sourceId;
 
   const tabItems: TabItem<"settings" | "tools">[] = toolsTabEnabled
     ? [
@@ -127,45 +129,101 @@ function ToolSourceEditor({ sourceId }: { sourceId: string }) {
         <EmptyState title="Tool source not found" />
       )}
 
-      {detail && detail.type === "openapi" && (
-        <OpenApiEditor
-          key={editorKey}
+      {detail ? (
+        <SourceDraft
+          key={sourceId}
           sourceId={sourceId}
-          initialSpec={detail.spec ?? {}}
-          enabled={detail.enabled}
+          initial={detail}
           activeTab={activeTab}
           onSaved={() => setActiveTab("tools")}
         />
-      )}
-
-      {detail && detail.type !== "openapi" && (
-        <div className="space-y-4">
-          {detail.type === "http" ? (
-            <Callout tone="accent" title="HTTP DSL (beta)">
-              For now this source type supports JSON-only editing via the advanced JSON editor. We
-              don’t validate or help with the schema yet. A full editor is planned.
-            </Callout>
-          ) : (
-            <Callout tone="neutral">
-              Dedicated editor for <span className="font-mono text-fg">{detail.type}</span> is not
-              implemented yet. For now, use the advanced JSON editor below.
-            </Callout>
-          )}
-          <AdvancedJsonEditor
-            key={editorKey}
-            sourceId={sourceId}
-            type={detail.type}
-            enabled={detail.enabled}
-            spec={detail.spec ?? {}}
-            onSaved={() => pushToast({ variant: "success", message: "Tool source saved" })}
-          />
-        </div>
-      )}
+      ) : null}
     </PageContent>
   );
 }
 
+function SourceDraft({
+  sourceId,
+  initial,
+  activeTab,
+  onSaved,
+}: {
+  sourceId: string;
+  initial: ToolSourceDetail;
+  activeTab: "settings" | "tools";
+  onSaved: () => void;
+}) {
+  const [source, setSource] = useState(initial);
+  const [epoch, setEpoch] = useState(0);
+  const [showReload, setShowReload] = useState(false);
+  const saving = useIsMutating({ mutationKey: ["toolSourceSave", sourceId] }) > 0;
+  const queryClient = useQueryClient();
+  const toast = useToastStore((s) => s.push);
+  const reload = useMutation({
+    mutationFn: () => tenantApi.getToolSource(sourceId),
+    onSuccess: (latest) => {
+      setSource(latest);
+      setEpoch((value) => value + 1);
+      queryClient.setQueryData(qk.toolSource(sourceId), latest);
+      setShowReload(false);
+    },
+    onError: (error) => toast({ variant: "error", message: error.message }),
+  });
+  const saved = async () => {
+    await reload.mutateAsync();
+    if (source.type === "openapi") onSaved();
+  };
+  return (
+    <>
+      <div className="flex justify-end">
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          disabled={saving || reload.isPending}
+          onClick={() => setShowReload(true)}
+        >
+          Reload source
+        </Button>
+      </div>
+      {initial.revision !== source.revision ? (
+        <Callout tone="info">
+          This source has changed. Unsaved edits are kept; reload to use the latest configuration.
+        </Callout>
+      ) : null}
+      {source.type === "openapi" && (
+        <OpenApiEditor
+          key={epoch}
+          sourceId={sourceId}
+          source={source}
+          activeTab={activeTab}
+          onSaved={saved}
+        />
+      )}
+
+      {source.type === "http" && (
+        <HttpSourceEditor key={epoch} sourceId={sourceId} source={source} onSaved={saved} />
+      )}
+      {source.type !== "http" && source.type !== "openapi" && (
+        <AdvancedJsonEditor key={epoch} sourceId={sourceId} source={source} onSaved={saved} />
+      )}
+      <ConfirmModal
+        open={showReload}
+        onClose={() => setShowReload(false)}
+        onConfirm={() => {
+          if (!saving) reload.mutate();
+        }}
+        title="Reload source?"
+        description="This replaces the current draft with the latest saved configuration. Unsaved edits will be discarded."
+        confirmLabel="Reload"
+        loading={reload.isPending || saving}
+      />
+    </>
+  );
+}
+
 const openApiSchema = z.object({
+  enabled: z.boolean(),
   spec: z.string().url("Must be a valid URL"),
   baseUrl: z.string().optional(),
 
@@ -203,22 +261,20 @@ type OpenApiFormValues = z.input<typeof openApiSchema>;
 
 function OpenApiEditor({
   sourceId,
-  initialSpec,
-  enabled,
+  source,
   activeTab,
   onSaved,
 }: {
   sourceId: string;
-  initialSpec: Record<string, unknown>;
-  enabled: boolean;
+  source: ToolSourceDetail;
   activeTab: "settings" | "tools";
-  onSaved: () => void;
+  onSaved: () => Promise<void>;
 }) {
   const queryClient = useQueryClient();
   const pushToast = useToastStore((s) => s.push);
 
   const defaults = useMemo<OpenApiFormValues>(() => {
-    const cfg = (initialSpec ?? {}) as Record<string, unknown>;
+    const cfg = source.spec;
 
     const auth = (cfg.auth ?? null) as Record<string, unknown> | null;
     const authType = (auth?.type as string | undefined) ?? "none";
@@ -242,6 +298,7 @@ function OpenApiEditor({
       .map(([k, v]) => ({ key: k, value: String(v) }));
 
     return {
+      enabled: source.enabled,
       spec: typeof cfg.spec === "string" ? cfg.spec : "",
       baseUrl: typeof cfg.baseUrl === "string" ? cfg.baseUrl : "",
 
@@ -276,7 +333,7 @@ function OpenApiEditor({
           : undefined,
       defaultsHeaders: headers,
     };
-  }, [initialSpec]);
+  }, [source]);
 
   const form = useForm<OpenApiFormValues>({
     resolver: zodResolver(openApiSchema),
@@ -284,6 +341,7 @@ function OpenApiEditor({
   });
 
   const authMode = useWatch({ control: form.control, name: "authMode" });
+  const enabled = useWatch({ control: form.control, name: "enabled" });
   const autoDiscoverEnabled = useWatch({ control: form.control, name: "autoDiscoverEnabled" });
   const defaultsArrayStyle = useWatch({ control: form.control, name: "defaultsArrayStyle" });
   const defaultsHeaders = useWatch({ control: form.control, name: "defaultsHeaders" });
@@ -295,12 +353,14 @@ function OpenApiEditor({
   });
 
   const saveMutation = useMutation({
+    mutationKey: ["toolSourceSave", sourceId],
     mutationFn: async (values: OpenApiFormValues) => {
       const payload: Record<string, unknown> = {
         type: "openapi",
-        // UI does not expose "enabled" yet; preserve existing value.
-        enabled,
+        enabled: values.enabled,
         spec: values.spec,
+        baseUrl: null,
+        auth: null,
       };
 
       const baseUrl = values.baseUrl?.trim();
@@ -347,25 +407,27 @@ function OpenApiEditor({
       }
       const timeoutStr = values.defaultsTimeoutSecs?.trim();
       const timeout = timeoutStr ? Number(timeoutStr) : undefined;
-      if (
-        timeout !== undefined ||
-        values.defaultsArrayStyle !== undefined ||
-        Object.keys(headers).length > 0
-      ) {
-        payload.defaults = {
-          timeout,
-          arrayStyle: values.defaultsArrayStyle,
-          headers,
-        };
-      }
-
-      await tenantApi.putToolSource(sourceId, JSON.stringify(payload));
+      payload.defaults = {
+        timeout,
+        arrayStyle: values.defaultsArrayStyle,
+        headers,
+      };
+      await tenantApi.putToolSource(
+        sourceId,
+        JSON.stringify(
+          buildOpenApiSourceUpdate(source, {
+            ...payload,
+            enabled: values.enabled,
+            defaults: payload.defaults as Record<string, unknown>,
+          }),
+        ),
+      );
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: qk.toolSources() });
       await queryClient.invalidateQueries({ queryKey: qk.toolSource(sourceId) });
       pushToast({ variant: "success", message: "Source saved" });
-      onSaved();
+      await onSaved();
       await queryClient.invalidateQueries({ queryKey: qk.toolSourceTools(sourceId) });
     },
     onError: (e) => {
@@ -442,239 +504,254 @@ function OpenApiEditor({
 
   return (
     <form onSubmit={form.handleSubmit((v) => saveMutation.mutate(v))} className="space-y-6">
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <Input
-          label="OpenAPI spec URL"
-          placeholder="https://example.com/openapi.json"
-          {...form.register("spec")}
-          error={form.formState.errors.spec?.message}
+      <fieldset disabled={saveMutation.isPending} className="space-y-6">
+        <Toggle
+          label="Source enabled"
+          checked={enabled}
+          onChange={(checked) => form.setValue("enabled", checked, { shouldDirty: true })}
+          description="Disabled sources stay configured but do not expose tools."
         />
-        <Input
-          label="Base URL (optional)"
-          placeholder="https://api.example.com/v1"
-          hint="Override the spec's base url (recommended when the spec uses a relative server URL)."
-          {...form.register("baseUrl")}
-          error={form.formState.errors.baseUrl?.message}
-        />
-      </div>
-
-      <SectionCard title="Auth" bodyClassName="space-y-4">
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <Select
-            label="Auth mode"
-            value={authMode}
-            onChange={(e) =>
-              form.setValue("authMode", e.target.value as OpenApiFormValues["authMode"])
-            }
-          >
-            <option value="none">None</option>
-            <option value="bearer">Bearer token</option>
-            <option value="header">Custom header</option>
-            <option value="basic">Basic auth</option>
-            <option value="query">Query parameter</option>
-          </Select>
-        </div>
-
-        {authMode === "bearer" && (
-          <Input label="Bearer token" placeholder="token" {...form.register("bearerToken")} />
-        )}
-        {authMode === "header" && (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <Input
-              label="Header name"
-              placeholder="Authorization"
-              {...form.register("headerName")}
-            />
-            <Input label="Header value" placeholder="Bearer …" {...form.register("headerValue")} />
-          </div>
-        )}
-        {authMode === "basic" && (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <Input label="Username" {...form.register("basicUsername")} />
-            <Input label="Password" type="password" {...form.register("basicPassword")} />
-          </div>
-        )}
-        {authMode === "query" && (
-          <>
-            <QueryParamAuthWarning />
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <Input
-                label="Query param name"
-                placeholder="api_key"
-                {...form.register("queryName")}
-              />
-              <Input label="Query param value" {...form.register("queryValue")} />
-            </div>
-          </>
-        )}
-      </SectionCard>
-
-      <SectionCard title="Discovery" bodyClassName="space-y-4">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <div className="text-sm text-fg">Auto-discover tools</div>
-            <div className="text-xs text-faint">
-              Discover operations from the spec automatically.
-            </div>
-          </div>
-          <Toggle
-            checked={autoDiscoverEnabled}
-            onChange={(checked) =>
-              form.setValue("autoDiscoverEnabled", checked, { shouldDirty: true })
-            }
-          />
-        </div>
-
-        {autoDiscoverEnabled && (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <Textarea
-              label="Include patterns (optional)"
-              hint="One per line. Leave empty to include everything."
-              rows={6}
-              {...form.register("autoDiscoverInclude")}
-            />
-            <Textarea
-              label="Exclude patterns (optional)"
-              hint="One per line."
-              rows={6}
-              {...form.register("autoDiscoverExclude")}
-            />
-          </div>
-        )}
-      </SectionCard>
-
-      <SectionCard title="Defaults" bodyClassName="space-y-4">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <Input
-            label="Default timeout (seconds)"
-            placeholder="e.g. 30"
-            inputMode="numeric"
-            {...form.register("defaultsTimeoutSecs")}
-            error={form.formState.errors.defaultsTimeoutSecs?.message}
+            label="OpenAPI spec URL"
+            placeholder="https://example.com/openapi.json"
+            {...form.register("spec")}
+            error={form.formState.errors.spec?.message}
           />
-          <Select
-            label="Array style"
-            value={defaultsArrayStyle ?? ""}
-            onChange={(e) =>
-              form.setValue(
-                "defaultsArrayStyle",
-                e.target.value
-                  ? (e.target.value as NonNullable<OpenApiFormValues["defaultsArrayStyle"]>)
-                  : undefined,
-                { shouldDirty: true },
-              )
-            }
-          >
-            <option value="">Default</option>
-            <option value="form">Comma-separated (form)</option>
-            <option value="spaceDelimited">Space-delimited</option>
-            <option value="pipeDelimited">Pipe-delimited</option>
-            <option value="deepObject">Deep object</option>
-          </Select>
+          <Input
+            label="Base URL (optional)"
+            placeholder="https://api.example.com/v1"
+            hint="Override the spec's base url (recommended when the spec uses a relative server URL)."
+            {...form.register("baseUrl")}
+            error={form.formState.errors.baseUrl?.message}
+          />
         </div>
 
-        <div>
-          <div className="mb-2 flex items-center justify-between gap-4">
-            <div>
-              <div className="text-sm font-medium text-fg">Default headers</div>
-              <div className="text-xs text-faint">Applied to every request.</div>
-            </div>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={() =>
-                form.setValue("defaultsHeaders", [...headerRows, { key: "", value: "" }], {
-                  shouldDirty: true,
-                })
+        <SectionCard title="Auth" bodyClassName="space-y-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <Select
+              label="Auth mode"
+              value={authMode}
+              onChange={(e) =>
+                form.setValue("authMode", e.target.value as OpenApiFormValues["authMode"])
               }
             >
-              Add header
-            </Button>
+              <option value="none">None</option>
+              <option value="bearer">Bearer token</option>
+              <option value="header">Custom header</option>
+              <option value="basic">Basic auth</option>
+              <option value="query">Query parameter</option>
+            </Select>
           </div>
 
-          {headerRows.length === 0 ? (
-            <div className="text-sm text-faint">No headers.</div>
-          ) : (
-            <div className="space-y-3">
-              {headerRows.map((row, idx) => (
-                <div key={idx} className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_auto]">
-                  <Input
-                    aria-label={`Default header ${idx + 1} name`}
-                    placeholder="Header name"
-                    value={row.key}
-                    onChange={(e) => {
-                      const next = [...headerRows];
-                      next[idx] = { ...next[idx], key: e.target.value };
-                      form.setValue("defaultsHeaders", next, { shouldDirty: true });
-                    }}
-                  />
-                  <Input
-                    aria-label={`Default header ${idx + 1} value`}
-                    placeholder="Header value"
-                    value={row.value}
-                    onChange={(e) => {
-                      const next = [...headerRows];
-                      next[idx] = { ...next[idx], value: e.target.value };
-                      form.setValue("defaultsHeaders", next, { shouldDirty: true });
-                    }}
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      const next = headerRows.filter((_, i) => i !== idx);
-                      form.setValue("defaultsHeaders", next, { shouldDirty: true });
-                    }}
-                  >
-                    Remove
-                  </Button>
-                </div>
-              ))}
+          {authMode === "bearer" && (
+            <Input label="Bearer token" placeholder="token" {...form.register("bearerToken")} />
+          )}
+          {authMode === "header" && (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <Input
+                label="Header name"
+                placeholder="Authorization"
+                {...form.register("headerName")}
+              />
+              <Input
+                label="Header value"
+                placeholder="Bearer …"
+                {...form.register("headerValue")}
+              />
             </div>
           )}
-        </div>
-      </SectionCard>
+          {authMode === "basic" && (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <Input label="Username" {...form.register("basicUsername")} />
+              <Input label="Password" type="password" {...form.register("basicPassword")} />
+            </div>
+          )}
+          {authMode === "query" && (
+            <>
+              <QueryParamAuthWarning />
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <Input
+                  label="Query param name"
+                  placeholder="api_key"
+                  {...form.register("queryName")}
+                />
+                <Input label="Query param value" {...form.register("queryValue")} />
+              </div>
+            </>
+          )}
+        </SectionCard>
 
-      <div className="flex items-center justify-end gap-3 pt-2">
-        <Button type="submit" loading={saveMutation.isPending}>
-          Save
-        </Button>
-      </div>
+        <SectionCard title="Discovery" bodyClassName="space-y-4">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <div className="text-sm text-fg">Auto-discover tools</div>
+              <div className="text-xs text-faint">
+                Discover operations from the spec automatically.
+              </div>
+            </div>
+            <Toggle
+              checked={autoDiscoverEnabled}
+              onChange={(checked) =>
+                form.setValue("autoDiscoverEnabled", checked, { shouldDirty: true })
+              }
+            />
+          </div>
+
+          {autoDiscoverEnabled && (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <Textarea
+                label="Include patterns (optional)"
+                hint="One per line. Leave empty to include everything."
+                rows={6}
+                {...form.register("autoDiscoverInclude")}
+              />
+              <Textarea
+                label="Exclude patterns (optional)"
+                hint="One per line."
+                rows={6}
+                {...form.register("autoDiscoverExclude")}
+              />
+            </div>
+          )}
+        </SectionCard>
+
+        <SectionCard title="Defaults" bodyClassName="space-y-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <Input
+              label="Default timeout (seconds)"
+              placeholder="e.g. 30"
+              inputMode="numeric"
+              {...form.register("defaultsTimeoutSecs")}
+              error={form.formState.errors.defaultsTimeoutSecs?.message}
+            />
+            <Select
+              label="Array style"
+              value={defaultsArrayStyle ?? ""}
+              onChange={(e) =>
+                form.setValue(
+                  "defaultsArrayStyle",
+                  e.target.value
+                    ? (e.target.value as NonNullable<OpenApiFormValues["defaultsArrayStyle"]>)
+                    : undefined,
+                  { shouldDirty: true },
+                )
+              }
+            >
+              <option value="">Default</option>
+              <option value="form">Comma-separated (form)</option>
+              <option value="spaceDelimited">Space-delimited</option>
+              <option value="pipeDelimited">Pipe-delimited</option>
+              <option value="deepObject">Deep object</option>
+            </Select>
+          </div>
+
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-4">
+              <div>
+                <div className="text-sm font-medium text-fg">Default headers</div>
+                <div className="text-xs text-faint">Applied to every request.</div>
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() =>
+                  form.setValue("defaultsHeaders", [...headerRows, { key: "", value: "" }], {
+                    shouldDirty: true,
+                  })
+                }
+              >
+                Add header
+              </Button>
+            </div>
+
+            {headerRows.length === 0 ? (
+              <div className="text-sm text-faint">No headers.</div>
+            ) : (
+              <div className="space-y-3">
+                {headerRows.map((row, idx) => (
+                  <div key={idx} className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_auto]">
+                    <Input
+                      aria-label={`Default header ${idx + 1} name`}
+                      placeholder="Header name"
+                      value={row.key}
+                      onChange={(e) => {
+                        const next = [...headerRows];
+                        next[idx] = { ...next[idx], key: e.target.value };
+                        form.setValue("defaultsHeaders", next, { shouldDirty: true });
+                      }}
+                    />
+                    <Input
+                      aria-label={`Default header ${idx + 1} value`}
+                      placeholder="Header value"
+                      value={row.value}
+                      onChange={(e) => {
+                        const next = [...headerRows];
+                        next[idx] = { ...next[idx], value: e.target.value };
+                        form.setValue("defaultsHeaders", next, { shouldDirty: true });
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        const next = headerRows.filter((_, i) => i !== idx);
+                        form.setValue("defaultsHeaders", next, { shouldDirty: true });
+                      }}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </SectionCard>
+
+        <div className="flex items-center justify-end gap-3 pt-2">
+          <Button type="submit" loading={saveMutation.isPending}>
+            Save
+          </Button>
+        </div>
+      </fieldset>
     </form>
   );
 }
 
 function AdvancedJsonEditor({
   sourceId,
-  type,
-  enabled,
-  spec,
+  source,
   onSaved,
 }: {
   sourceId: string;
-  type: string;
-  enabled: boolean;
-  spec: Record<string, unknown>;
-  onSaved: () => void;
+  source: ToolSourceDetail;
+  onSaved: () => Promise<void>;
 }) {
   const queryClient = useQueryClient();
   const pushToast = useToastStore((s) => s.push);
   const [text, setText] = useState(() =>
-    JSON.stringify({ type, enabled, ...(spec ?? {}) }, null, 2),
+    JSON.stringify({ ...source.spec, type: source.type, enabled: source.enabled }, null, 2),
   );
   const [error, setError] = useState<string | null>(null);
+  let jsonDraft: Record<string, unknown> | null = null;
+  try {
+    jsonDraft = buildJsonSourceUpdate(source, text);
+  } catch {
+    /* Keep invalid JSON editable. */
+  }
 
   const saveMutation = useMutation({
+    mutationKey: ["toolSourceSave", sourceId],
     mutationFn: async () => {
-      JSON.parse(text);
-      await tenantApi.putToolSource(sourceId, text);
+      await tenantApi.putToolSource(sourceId, JSON.stringify(buildJsonSourceUpdate(source, text)));
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: qk.toolSources() });
       await queryClient.invalidateQueries({ queryKey: qk.toolSource(sourceId) });
-      onSaved();
+      await onSaved();
+      pushToast({ variant: "success", message: "Tool source saved" });
       setError(null);
     },
     onError: (e) => {
@@ -687,12 +764,26 @@ function AdvancedJsonEditor({
   return (
     <SectionCard
       title="Advanced JSON"
-      subtitle="Direct payload editor (temporary). UI will replace this with dedicated editors per type."
+      subtitle="Edit the source configuration as JSON, then save to apply changes."
       bodyClassName="space-y-4"
     >
       {error && <Callout tone="danger">{error}</Callout>}
 
+      <Toggle
+        label="Source enabled"
+        description="Save JSON to apply this change."
+        checked={jsonDraft?.enabled !== false}
+        disabled={!jsonDraft || saveMutation.isPending}
+        onChange={(enabled) => {
+          if (jsonDraft) {
+            setText(JSON.stringify({ ...jsonDraft, enabled }, null, 2));
+            setError(null);
+          }
+        }}
+      />
       <Textarea
+        aria-label="Source configuration JSON"
+        disabled={saveMutation.isPending}
         value={text}
         onChange={(e) => {
           setError(null);
