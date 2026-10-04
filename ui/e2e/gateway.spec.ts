@@ -466,6 +466,7 @@ test("tenant writes keep session and cross-site protection", async ({ page, brow
       ["POST", "/api/tenant/managed-mcp/deployments"],
       ["PATCH", "/api/tenant/managed-mcp/deployments/test-request"],
       ["POST", `${apiPath()}/connections`],
+      ["PUT", `${apiPath()}/audit/settings`],
     ]) {
       const url = `${stack.uiBase}${endpoint}`;
       const anonymous = await unauthenticated.request.fetch(url, { method, data: {} });
@@ -481,4 +482,846 @@ test("tenant writes keep session and cross-site protection", async ({ page, brow
   } finally {
     await unauthenticated.close();
   }
+});
+
+test("tool-call limits and advanced MCP controls persist without resetting other panels", async ({
+  page,
+}) => {
+  await openProfile(page);
+  const before = await stored(page);
+  await page.getByRole("tab", { name: "Security", exact: true }).click();
+  await page.getByRole("switch", { name: "Limit calls per minute", exact: true }).check();
+  const save = page.getByRole("button", { name: "Save tool-call limits", exact: true });
+  await page.getByRole("textbox", { name: "Calls per minute", exact: true }).fill("1.5");
+  await expect(save).toBeDisabled();
+  await page.getByRole("textbox", { name: "Calls per minute", exact: true }).fill("25");
+  await page.getByRole("switch", { name: "Limit total calls", exact: true }).check();
+  await page.getByRole("textbox", { name: "Initial call quota", exact: true }).fill("300");
+  await save.click();
+  await expect(page.getByRole("status", { name: "Tool-call limits save status" })).toHaveText(
+    "Saved",
+  );
+  await page.getByRole("tab", { name: "MCP settings", exact: true }).click();
+  await page
+    .getByRole("textbox", { name: "Allowed notifications", exact: true })
+    .fill("notifications/progress\nnotifications/progress");
+  await page
+    .getByRole("textbox", { name: "Denied notifications", exact: true })
+    .fill("notifications/message");
+  await page.getByRole("combobox", { name: "Proxied request IDs" }).selectOption("readable");
+  await page.getByRole("combobox", { name: "SSE event IDs" }).selectOption("none");
+  await page.getByRole("button", { name: "Save advanced MCP settings" }).click();
+  await expect(page.getByRole("status", { name: "Advanced MCP settings save status" })).toHaveText(
+    "Saved",
+  );
+  const after = await stored(page);
+  expect(after.dataPlaneLimits).toEqual({
+    rateLimitEnabled: true,
+    rateLimitToolCallsPerMinute: 25,
+    quotaEnabled: true,
+    quotaToolCalls: 300,
+  });
+  expect(after.mcp.notifications).toEqual({
+    allow: ["notifications/progress"],
+    deny: ["notifications/message"],
+  });
+  expect(after.mcp.namespacing).toEqual({ requestId: "readable", sseEventId: "none" });
+  expect(after.mcp.security).toEqual(before.mcp.security);
+  expect(after.mcp.capabilities).toEqual(before.mcp.capabilities);
+  expect(after.transforms).toEqual(before.transforms);
+  await page.reload();
+  await page.getByRole("tab", { name: "Security", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "Initial call quota" })).toHaveValue("300");
+  await page.getByRole("tab", { name: "MCP settings", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "Allowed notifications" })).toHaveValue(
+    "notifications/progress",
+  );
+  await expect(
+    page.getByText("Enable native MCP above to use task routing.", { exact: false }),
+  ).toBeVisible();
+});
+
+test("OpenAPI form preserves advanced fields and HTTP drafts survive refresh, failure, and conflicts", async ({
+  page,
+}) => {
+  const headers = { Authorization: `Bearer ${tenantToken}` };
+  const sourceUrl = (id: string) => `${stack.adminBase}/tenant/v1/tool-sources/${id}`;
+  const advanced = {
+    type: "openapi",
+    enabled: true,
+    spec: `${stack.remoteUrl}/spec.json`,
+    specHash: "a".repeat(64),
+    specHashPolicy: "ignore",
+    endpoints: { "/ping": { get: { tool: "ping" } } },
+    overrides: {
+      tools: {
+        custom: {
+          match: { operationId: "ping" },
+          request: { method: "GET", path: "/ping" },
+          description: "Keep override",
+        },
+      },
+    },
+    responseOverrides: [{ match: { operationId: "ping" }, outputSchema: { type: "object" } }],
+    defaults: { timeout: 10, headers: { "X-Test": "keep" } },
+  };
+  const create = await page.request.put(sourceUrl("editor-openapi"), { headers, data: advanced });
+  expect(create.ok(), await create.text()).toBeTruthy();
+  const original = await (await page.request.get(sourceUrl("editor-openapi"), { headers })).json();
+  await page.goto(`${stack.uiBase}/sources/tool-sources/editor-openapi`);
+  await page.getByRole("textbox", { name: "Default timeout (seconds)", exact: true }).fill("19");
+  await page.getByRole("switch", { name: /^Source enabled/ }).uncheck();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Tools", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  const saved = await (await page.request.get(sourceUrl("editor-openapi"), { headers })).json();
+  expect(saved.enabled).toBe(false);
+  expect(saved.spec.defaults.timeout).toBe(19);
+  for (const key of ["specHash", "specHashPolicy", "endpoints", "overrides", "responseOverrides"])
+    expect(saved.spec[key]).toEqual(original.spec[key]);
+
+  const http = {
+    type: "http",
+    enabled: true,
+    baseUrl: stack.remoteUrl,
+    tools: { ping: { method: "GET", path: "/ping" } },
+  };
+  expect(
+    (await page.request.put(sourceUrl("editor-http"), { headers, data: http })).ok(),
+  ).toBeTruthy();
+  await page.goto(`${stack.uiBase}/sources/tool-sources/editor-http`);
+  await page.getByRole("tab", { name: "Advanced JSON", exact: true }).click();
+  const editor = page.getByRole("textbox", { name: "Source configuration JSON" });
+  const draft = JSON.stringify(
+    { ...http, tools: { ping: { method: "GET", path: "/draft" } } },
+    null,
+    2,
+  );
+  await editor.fill(draft);
+  const refresh = page.waitForResponse(
+    (r) =>
+      r.request().method() === "GET" && r.url().endsWith("/api/tenant/tool-sources/editor-http"),
+  );
+  await page.evaluate(async () => {
+    window.dispatchEvent(new Event("offline"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    window.dispatchEvent(new Event("online"));
+  });
+  await refresh;
+  await expect(editor).toHaveValue(draft);
+  let fail = true;
+  await page.route("**/api/tenant/tool-sources/editor-http", async (route) => {
+    if (fail && route.request().method() === "PUT") {
+      fail = false;
+      await route.fulfill({ status: 503, json: { error: "Temporary source outage" } });
+    } else await route.continue();
+  });
+  await page.getByRole("button", { name: "Save JSON", exact: true }).click();
+  await expect(page.getByText("Temporary source outage", { exact: true }).first()).toBeVisible();
+  await expect(editor).toHaveValue(draft);
+  expect(
+    (
+      await page.request.put(sourceUrl("editor-http"), {
+        headers,
+        data: { ...http, enabled: false },
+      })
+    ).ok(),
+  ).toBeTruthy();
+  await page.getByRole("button", { name: "Save JSON", exact: true }).click();
+  await expect(page.getByText(/Tool source changed in another window/).first()).toBeVisible();
+  await expect(editor).toHaveValue(draft);
+  await page.getByRole("button", { name: "Reload source", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Reload", exact: true }).click();
+  await page.getByRole("tab", { name: "Advanced JSON", exact: true }).click();
+  await expect.poll(async () => JSON.parse(await editor.inputValue()).enabled).toBe(false);
+  await page.getByRole("switch", { name: /^Source enabled/ }).check();
+  await page.getByRole("button", { name: "Save JSON", exact: true }).click();
+  await expect
+    .poll(
+      async () =>
+        (await (await page.request.get(sourceUrl("editor-http"), { headers })).json()).enabled,
+    )
+    .toBe(true);
+});
+
+test("catalogs expose later pages and searchable resource templates", async ({ page }) => {
+  const resources = Array.from({ length: 65 }, (_, i) => ({
+    uri: `resource:${i}`,
+    name: `Resource ${i}`,
+  }));
+  const prompts = Array.from({ length: 65 }, (_, i) => ({ name: `prompt-${i}` }));
+  const resourceTemplates = Array.from({ length: 65 }, (_, i) => ({
+    uriTemplate: `template:${i}/{id}`,
+    name: `Template ${i}`,
+  }));
+  await page.route(`**${apiPath()}/surface`, (route) =>
+    route.fulfill({
+      json: { sources: [], tools: [], allTools: [], resources, prompts, resourceTemplates },
+    }),
+  );
+  await openProfile(page);
+  await page.getByRole("tab", { name: "MCP settings", exact: true }).click();
+  await page.getByRole("button", { name: "Probe surface", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Resources pages" })
+    .getByRole("button", { name: "Next" })
+    .click();
+  await expect(page.getByText("resource:64", { exact: true })).toBeVisible();
+  await page.getByRole("textbox", { name: "Search resource templates" }).fill("64");
+  await expect(page.getByText("template:64/{id}", { exact: true })).toBeVisible();
+  await page.getByRole("textbox", { name: "Search prompts" }).fill("prompt-64");
+  await expect(page.getByText("prompt-64", { exact: true })).toBeVisible();
+});
+
+test("audit loads older pages, preserves rows on failure, and scopes outcome to events", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  let failEvents = true;
+  const eventQueries: URL[] = [];
+  await page.route("**/api/tenant/audit/events?*", async (route) => {
+    const url = new URL(route.request().url());
+    eventQueries.push(url);
+    const before = Number(url.searchParams.get("beforeId") ?? 251);
+    if (before < 251 && failEvents) {
+      await route.fulfill({ status: 503, json: { error: "Audit temporarily unavailable" } });
+      return;
+    }
+    const count = Math.min(before - 1, Number(url.searchParams.get("limit")));
+    const events = Array.from({ length: count }, (_, i) => ({
+      id: before - i - 1,
+      tsUnixSecs: 1700000000,
+      action: "mcp.tools_call",
+      toolRef: `tool-${before - i - 1}`,
+      ok: true,
+      meta: {},
+    }));
+    await route.fulfill({ json: { events } });
+  });
+  const statQueries: URL[] = [];
+  await page.route("**/api/tenant/audit/analytics/tool-calls/*?*", async (route) => {
+    const url = new URL(route.request().url());
+    statQueries.push(url);
+    const offset = Number(url.searchParams.get("offset"));
+    const items = Array.from({ length: offset === 0 ? 100 : 1 }, (_, i) => ({
+      toolRef: `stat-${offset + i}`,
+      apiKeyId: `key-${offset + i}`,
+      total: 1,
+      ok: 1,
+      err: 0,
+    }));
+    await route.fulfill({ json: { items } });
+  });
+  await page.goto(`${stack.uiBase}/audit?profileId=${profileId}`);
+  await expect(page.getByRole("combobox", { name: "Profile", exact: true })).toHaveValue(profileId);
+  await page.getByRole("combobox", { name: "Time range" }).selectOption("all");
+  await expect(page.getByText("tool-250", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Load more events", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Could not load events" })).toContainText(
+    "Audit temporarily unavailable",
+  );
+  await expect(page.getByText("tool-250", { exact: true })).toBeVisible();
+  failEvents = false;
+  await page.getByRole("button", { name: "Retry events", exact: true }).click();
+  await expect(page.getByText("tool-51", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Load more events", exact: true }).click();
+  await expect(page.getByText("tool-1", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Load more events", exact: true })).toBeHidden();
+  const lastPages = eventQueries.filter((url) => !url.searchParams.has("fromUnixSecs"));
+  expect(new Set(lastPages.map((url) => url.searchParams.get("toUnixSecs"))).size).toBe(1);
+  await page.getByRole("combobox", { name: "Outcome" }).selectOption("error");
+  await page.getByRole("tab", { name: "Analytics", exact: true }).click();
+  await expect(page.getByRole("combobox", { name: "Outcome" })).toBeHidden();
+  await page.getByRole("button", { name: "Load more tools", exact: true }).click();
+  await expect(page.getByText("stat-100", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Load more API keys", exact: true }).click();
+  await expect(page.getByText("key-100", { exact: true })).toBeVisible();
+  expect(statQueries.every((url) => !url.searchParams.has("ok"))).toBe(true);
+  expect(statQueries.some((url) => url.searchParams.get("offset") === "100")).toBe(true);
+  expect(statQueries.every((url) => url.searchParams.get("profileId") === profileId)).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test("token validation rejects a forged signature before offering to unlock", async ({ page }) => {
+  await page.goto(`${stack.uiBase}/unlock`);
+  const parts = tenantToken.split(".");
+  parts[2] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  await page.getByRole("textbox", { name: "Tenant token" }).fill(parts.join("."));
+  await page.getByRole("button", { name: "Validate token", exact: true }).click();
+  await expect(page.getByText("Token validation failed", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Unlock and enter dashboard" })).toBeHidden();
+  await page.getByRole("textbox", { name: "Tenant token" }).fill(`Bearer ${tenantToken}`);
+  await page.getByRole("button", { name: "Validate token", exact: true }).click();
+  await expect(page.getByText("Token validated", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Unlock and enter dashboard" }).click();
+  await expect(page).toHaveURL(/\/profiles$/);
+});
+
+test("profile audit shows inherited policy, retries failed saves, and shares revisions with other panels", async ({
+  page,
+}) => {
+  const headers = { Authorization: `Bearer ${tenantToken}` };
+  const tenantSettingsUrl = `${stack.adminBase}/tenant/v1/audit/settings`;
+  expect(
+    (
+      await page.request.put(tenantSettingsUrl, {
+        headers,
+        data: { enabled: true, retentionDays: 17, defaultLevel: "metadata" },
+      })
+    ).ok(),
+  ).toBeTruthy();
+  await openProfile(page);
+  await page.getByRole("tab", { name: "Security", exact: true }).click();
+  const select = page.getByRole("combobox", { name: "Profile audit detail" });
+  const effective = page.getByLabel("Effective audit level", { exact: true });
+  const status = page.getByRole("status", { name: "Profile audit save status" });
+  await expect(select).toHaveValue("inherit");
+  await expect(effective).toHaveText("Metadata");
+  await expect(page.getByText("17 days · tenant-wide", { exact: true })).toBeVisible();
+  let fail = true;
+  await page.route(`**${apiPath()}/audit/settings`, async (route) => {
+    if (fail && route.request().method() === "PUT") {
+      fail = false;
+      await route.fulfill({ status: 503, json: { error: "Temporary audit save outage" } });
+    } else await route.continue();
+  });
+  await select.selectOption("summary");
+  await page.getByRole("button", { name: "Save profile audit", exact: true }).click();
+  await expect(status).toContainText("Temporary audit save outage");
+  await expect(select).toHaveValue("summary");
+  await expect(effective).toHaveText("Metadata");
+  await status.getByRole("button", { name: "Retry save", exact: true }).click();
+  await expect(status).toHaveText("Saved");
+  await expect(effective).toHaveText("Summary");
+  await page.getByRole("button", { name: "Edit profile name and description" }).click();
+  await page
+    .getByRole("textbox", { name: "Description", exact: true })
+    .fill("Audit settings share profile revisions");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Edit profile" })).toBeHidden();
+  await select.selectOption("off");
+  await page.getByRole("button", { name: "Save profile audit", exact: true }).click();
+  await expect(status).toHaveText("Saved");
+  await expect(effective).toHaveText("Off");
+  expect((await stored(page)).description).toBe("Audit settings share profile revisions");
+  await page.reload();
+  await page.getByRole("tab", { name: "Security", exact: true }).click();
+  await expect(select).toHaveValue("off");
+  await expect(effective).toHaveText("Off");
+  const card = page.locator("section").filter({ has: select });
+  await card.screenshot({ path: "../output/playwright/profile-audit-settings.png" });
+});
+
+test("profile audit preserves conflicting drafts and shows the tenant master switch", async ({
+  page,
+}) => {
+  await openProfile(page);
+  await page.getByRole("tab", { name: "Security", exact: true }).click();
+  const select = page.getByRole("combobox", { name: "Profile audit detail" });
+  const effective = page.getByLabel("Effective audit level", { exact: true });
+  await expect(select).toHaveValue("off");
+  await select.selectOption("payload");
+  const headers = { Authorization: `Bearer ${tenantToken}` };
+  const auditUrl = `${stack.adminBase}/tenant/v1/profiles/${profileId}/audit/settings`;
+  const before = await (await page.request.get(auditUrl, { headers })).json();
+  expect(
+    (
+      await page.request.put(auditUrl, {
+        headers,
+        data: { auditSettings: { level: "summary" }, expectedRevision: before.revision },
+      })
+    ).ok(),
+  ).toBeTruthy();
+  const refresh = page.waitForResponse(
+    (r) => r.request().method() === "GET" && r.url().endsWith(`${apiPath()}/audit/settings`),
+  );
+  await page.evaluate(async () => {
+    window.dispatchEvent(new Event("offline"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    window.dispatchEvent(new Event("online"));
+  });
+  await refresh;
+  await expect(select).toHaveValue("payload");
+  await expect(effective).toHaveText("Summary");
+  await page.getByRole("button", { name: "Save profile audit", exact: true }).click();
+  const status = page.getByRole("status", { name: "Profile audit save status" });
+  await expect(status).toContainText("Profile changed in another window");
+  await expect(select).toHaveValue("payload");
+  await status.getByRole("button", { name: "Reload profile", exact: true }).click();
+  await page.getByRole("tab", { name: "Security", exact: true }).click();
+  await expect(select).toHaveValue("summary");
+  const tenantSettingsUrl = `${stack.adminBase}/tenant/v1/audit/settings`;
+  expect(
+    (
+      await page.request.put(tenantSettingsUrl, {
+        headers,
+        data: { enabled: false, retentionDays: 17, defaultLevel: "metadata" },
+      })
+    ).ok(),
+  ).toBeTruthy();
+  await page.reload();
+  await page.getByRole("tab", { name: "Security", exact: true }).click();
+  await expect(effective).toHaveText("Off");
+  await expect(
+    page.getByText("Audit logging is off for the tenant.", { exact: false }),
+  ).toBeVisible();
+  await expect(select).toHaveValue("summary");
+  expect(
+    (
+      await page.request.put(tenantSettingsUrl, {
+        headers,
+        data: { enabled: true, retentionDays: 17, defaultLevel: "payload" },
+      })
+    ).ok(),
+  ).toBeTruthy();
+  await page.reload();
+  await page.getByRole("tab", { name: "Security", exact: true }).click();
+  await expect(effective).toHaveText("Summary");
+  await select.selectOption("inherit");
+  await page.getByRole("button", { name: "Save profile audit", exact: true }).click();
+  await expect(status).toHaveText("Saved");
+  await expect(effective).toHaveText("Payload samples");
+});
+
+test("unsupported profile audit settings can be explicitly replaced with inheritance", async ({
+  page,
+}) => {
+  let legacy = true;
+  await page.route(`**${apiPath()}/audit/settings`, async (route) => {
+    if (route.request().method() === "PUT") legacy = false;
+    if (route.request().method() === "GET" && legacy) {
+      const response = await route.fetch();
+      await route.fulfill({
+        response,
+        json: { ...(await response.json()), auditSettings: {}, hasUnrecognizedSettings: true },
+      });
+    } else await route.continue();
+  });
+  await openProfile(page);
+  await page.getByRole("tab", { name: "Security", exact: true }).click();
+  const select = page.getByRole("combobox", { name: "Profile audit detail" });
+  await expect(select).toHaveValue("inherit");
+  const notice = page.getByText("The saved settings use an unsupported format.", { exact: false });
+  await expect(notice).toBeVisible();
+  await page.getByRole("button", { name: "Save profile audit", exact: true }).click();
+  await expect(page.getByRole("status", { name: "Profile audit save status" })).toHaveText("Saved");
+  await expect(notice).toBeHidden();
+  await expect(select).toHaveValue("inherit");
+});
+
+test("guided HTTP creation produces a working tool with path, query, body, and secret authentication", async ({
+  page,
+}) => {
+  const headers = { Authorization: `Bearer ${tenantToken}` };
+  expect(
+    (
+      await page.request.post(`${stack.adminBase}/tenant/v1/secrets`, {
+        headers,
+        data: { name: "EDITOR_TOKEN", value: "local-http-token" },
+      })
+    ).ok(),
+  ).toBeTruthy();
+  await page.goto(`${stack.uiBase}/sources`);
+  await page.getByRole("button", { name: "Add source", exact: true }).first().click();
+  await page
+    .getByRole("button", { name: "HTTP Define API requests as tools", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/sources\/new\/http$/);
+  await page.getByRole("textbox", { name: "Source name", exact: true }).fill("browser-http");
+  await page.getByRole("textbox", { name: "Base URL", exact: true }).fill(stack.httpBase);
+  await page.getByRole("combobox", { name: "Source authentication" }).selectOption("bearer");
+  await page.getByLabel("Bearer token", { exact: true }).fill("${secret:EDITOR_TOKEN}");
+  await page.getByRole("textbox", { name: "Timeout (seconds)" }).fill("17");
+  await page.getByRole("button", { name: "Add header", exact: true }).click();
+  await page.getByRole("textbox", { name: "Header 1 name", exact: true }).fill("X-Client");
+  await page.getByRole("textbox", { name: "Header 1 value", exact: true }).fill("guided-editor");
+  await page.getByRole("button", { name: "Add tool", exact: true }).click();
+  const tool = page.getByRole("group", { name: "Tool 1", exact: true });
+  await tool.getByRole("textbox", { name: "Tool name", exact: true }).fill("update_item");
+  await tool.getByRole("textbox", { name: "Description", exact: true }).fill("Update an item");
+  await tool.getByLabel("HTTP method", { exact: true }).fill("POST");
+  await tool.getByRole("textbox", { name: "Request path", exact: true }).fill("/items/{itemId}");
+  for (const [index, name, location, type] of [
+    [1, "id", "path", "string"],
+    [2, "limit", "query", "integer"],
+    [3, "body", "body", "object"],
+  ] as const) {
+    await tool.getByRole("button", { name: "Add parameter", exact: true }).click();
+    const param = tool.getByRole("group", { name: `Parameter ${index}`, exact: true });
+    await param.getByRole("textbox", { name: "Argument name", exact: true }).fill(name);
+    await param.getByRole("combobox", { name: "Send in", exact: true }).selectOption(location);
+    await param.getByRole("combobox", { name: "Argument type", exact: true }).selectOption(type);
+    if (index < 3)
+      await param
+        .getByRole("textbox", { name: "HTTP name (optional)", exact: true })
+        .fill(index === 1 ? "itemId" : "count");
+  }
+  await tool.getByText("Output schema", { exact: true }).click();
+  await tool
+    .getByRole("textbox", { name: "Output schema JSON", exact: true })
+    .fill('{"type":"object"}');
+  await page.getByRole("button", { name: "Create HTTP source", exact: true }).click();
+  await expect(page).toHaveURL(/\/sources\/tool-sources\/browser-http$/);
+  await expect(page.getByLabel("Bearer token", { exact: true })).toHaveValue(
+    "${secret:EDITOR_TOKEN}",
+  );
+  const created = await page.request.post(`${stack.adminBase}/tenant/v1/profiles`, {
+    headers,
+    data: {
+      name: "HTTP editor call",
+      enabled: true,
+      sources: ["browser-http"],
+      upstreams: [],
+      dataPlaneAuth: { mode: "disabled" },
+    },
+  });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  const profile = await created.json();
+  const env = {
+    ...process.env,
+    XDG_CONFIG_HOME: path.join(stack.directory, "http-client-config"),
+    XDG_CACHE_HOME: path.join(stack.directory, "http-client-cache"),
+    UNRELATED_TOKEN: undefined,
+  };
+  await exec(
+    stack.cli,
+    [
+      "context",
+      "add",
+      "http-editor",
+      "--url",
+      `${stack.dataBase}/${profile.id}/mcp`,
+      "--auth",
+      "none",
+    ],
+    { env, timeout: 15000 },
+  );
+  const search = JSON.parse(
+    (
+      await exec(stack.cli, ["--json", "tools", "search", "Update an item"], {
+        env,
+        timeout: 15000,
+      })
+    ).stdout,
+  );
+  expect(search).toHaveLength(1);
+  const response = JSON.parse(
+    (
+      await exec(
+        stack.cli,
+        [
+          "--json",
+          "tools",
+          "call",
+          search[0].toolRef,
+          "--input",
+          JSON.stringify({
+            id: "item-42",
+            limit: 5,
+            body: { title: "Saved from the guided editor" },
+          }),
+          "--yes",
+        ],
+        { env, timeout: 15000 },
+      )
+    ).stdout,
+  );
+  expect(response.structuredContent.body).toEqual({
+    id: "item-42",
+    query: { count: "5" },
+    caller: "guided-editor",
+    body: { title: "Saved from the guided editor" },
+  });
+  await page.screenshot({ path: "../output/playwright/http-source-editor.png", fullPage: true });
+  await tool.screenshot({ path: "../output/playwright/http-tool-editor.png" });
+});
+
+test("HTTP editors share drafts, preserve advanced fields, and reject invalid or conflicting saves", async ({
+  page,
+}) => {
+  const headers = { Authorization: `Bearer ${tenantToken}` };
+  const url = `${stack.adminBase}/tenant/v1/tool-sources/browser-http`;
+  const loaded = await (await page.request.get(url, { headers })).json();
+  const advanced = {
+    ...loaded.spec,
+    type: "http",
+    enabled: true,
+    responseTransforms: [{ type: "dropNulls" }],
+    tools: {
+      ...loaded.spec.tools,
+      custom: {
+        method: "PROPFIND",
+        path: "/custom",
+        params: {
+          filter: {
+            in: "query",
+            schema: { type: "object", additionalProperties: false },
+            style: "deepObject",
+            explode: true,
+            allowReserved: true,
+          },
+        },
+        response: {
+          mode: "json",
+          transforms: { mode: "append", pipeline: [{ type: "redactKeys", keys: ["token"] }] },
+        },
+      },
+    },
+  };
+  expect((await page.request.put(url, { headers, data: advanced })).ok()).toBeTruthy();
+  const canonical = (await (await page.request.get(url, { headers })).json()).spec;
+  await page.goto(`${stack.uiBase}/sources/tool-sources/browser-http`);
+  const tool = page
+    .getByRole("group", { name: /^Tool \d+$/ })
+    .filter({
+      has: page
+        .getByRole("textbox", { name: "Tool name", exact: true })
+        .and(page.locator('input[value="custom"]')),
+    })
+    .first();
+  // The source's tool order is a map; locate by its configured name.
+  await expect(tool).toBeVisible();
+  await tool.getByRole("textbox", { name: "Description", exact: true }).fill("Guided change");
+  await page.getByRole("tab", { name: "Advanced JSON", exact: true }).click();
+  const editor = page.getByRole("textbox", { name: "Source configuration JSON" });
+  const draft = JSON.parse(await editor.inputValue());
+  expect(draft.tools.custom.description).toBe("Guided change");
+  expect(draft.tools.custom.response.transforms).toEqual(
+    canonical.tools.custom.response.transforms,
+  );
+  await editor.fill("{");
+  await page.getByRole("tab", { name: "Guided editor", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Advanced JSON", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(editor).toHaveValue("{");
+  draft.tools.custom.description = "JSON change";
+  await editor.fill(JSON.stringify(draft, null, 2));
+  await page.getByRole("tab", { name: "Guided editor", exact: true }).click();
+  await expect(tool.getByRole("textbox", { name: "Description", exact: true })).toHaveValue(
+    "JSON change",
+  );
+  const parameter = tool.getByRole("group", { name: "Parameter 1", exact: true });
+  await parameter.getByText("Argument schema", { exact: true }).click();
+  const schema = parameter.getByRole("textbox", { name: "Argument schema JSON", exact: true });
+  const schemaBefore = await schema.inputValue();
+  await schema.fill("[]");
+  await expect(
+    parameter.getByRole("combobox", { name: "Argument type", exact: true }),
+  ).toBeDisabled();
+  await schema.fill(schemaBefore);
+  await expect(
+    parameter.getByRole("combobox", { name: "Argument type", exact: true }),
+  ).toBeEnabled();
+  await tool.getByRole("textbox", { name: "Tool name", exact: true }).fill("renamed_custom");
+  const timeout = page.getByRole("textbox", { name: "Timeout (seconds)" });
+  await timeout.fill("1.5");
+  await page.getByRole("button", { name: "Save HTTP source", exact: true }).click();
+  await expect(page.getByRole("alert", { name: "HTTP source error" })).toContainText(
+    "whole number",
+  );
+  await timeout.fill("0");
+  let fail = true;
+  await page.route("**/api/tenant/tool-sources/browser-http", async (route) => {
+    if (fail && route.request().method() === "PUT") {
+      fail = false;
+      await route.fulfill({ status: 503, json: { error: "Temporary HTTP source outage" } });
+    } else await route.continue();
+  });
+  await page.getByRole("button", { name: "Save HTTP source", exact: true }).click();
+  await expect(page.getByRole("alert", { name: "HTTP source error" })).toContainText(
+    "Temporary HTTP source outage",
+  );
+  await expect(
+    page
+      .getByRole("textbox", { name: "Tool name", exact: true })
+      .and(page.locator('input[value="renamed_custom"]')),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Save HTTP source", exact: true }).click();
+  await expect
+    .poll(
+      async () => (await (await page.request.get(url, { headers })).json()).spec.defaults.timeout,
+    )
+    .toBe(0);
+  const saved = await (await page.request.get(url, { headers })).json();
+  expect(saved.spec.responseTransforms).toEqual(canonical.responseTransforms);
+  expect(saved.spec.tools.renamed_custom.response.transforms).toEqual(
+    canonical.tools.custom.response.transforms,
+  );
+  expect(saved.spec.tools.renamed_custom.params.filter).toMatchObject(
+    advanced.tools.custom.params.filter,
+  );
+  expect(saved.spec.tools.custom).toBeUndefined();
+  await expect(timeout).toHaveValue("0");
+  await timeout.fill("29");
+  expect(
+    (
+      await page.request.put(url, {
+        headers,
+        data: { ...saved.spec, type: "http", enabled: false },
+      })
+    ).ok(),
+  ).toBeTruthy();
+  const refresh = page.waitForResponse(
+    (r) =>
+      r.request().method() === "GET" && r.url().endsWith("/api/tenant/tool-sources/browser-http"),
+  );
+  await page.evaluate(async () => {
+    window.dispatchEvent(new Event("offline"));
+    await new Promise((r) => setTimeout(r, 0));
+    window.dispatchEvent(new Event("online"));
+  });
+  await refresh;
+  await expect(timeout).toHaveValue("29");
+  await page.getByRole("button", { name: "Save HTTP source", exact: true }).click();
+  await expect(page.getByRole("alert", { name: "HTTP source error" })).toContainText(
+    "Tool source changed in another window",
+  );
+  await expect(timeout).toHaveValue("29");
+  await page.getByRole("button", { name: "Reload source", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Reload", exact: true }).click();
+  await expect(timeout).toHaveValue("0");
+  await expect(page.getByRole("switch", { name: /^Source enabled/ })).not.toBeChecked();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({
+    path: "../output/playwright/http-source-editor-mobile.png",
+    fullPage: true,
+  });
+});
+
+test("resource and prompt controls persist, retry, preview, and preserve tool transforms", async ({
+  page,
+}) => {
+  await page.goto(`${stack.uiBase}/sources/new/upstream`);
+  await page.getByRole("textbox", { name: "Endpoint URL" }).fill(`${stack.httpBase}/mcp`);
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await page.getByRole("textbox", { name: "Upstream name" }).fill("catalog");
+  await page.getByRole("button", { name: "Create upstream" }).click();
+  await expect(page).toHaveURL(/\/sources\/upstreams\/catalog$/);
+  const headers = { Authorization: `Bearer ${tenantToken}` };
+  const created = await page.request.post(`${stack.adminBase}/tenant/v1/profiles`, {
+    headers,
+    data: {
+      name: "Catalog controls",
+      upstreams: ["catalog"],
+      sources: [],
+      dataPlaneAuth: { mode: "disabled" },
+      mcp: { modernProtocol: true },
+    },
+  });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  const { id } = await created.json();
+  const url = `${stack.adminBase}/tenant/v1/profiles/${id}`;
+  const storedCatalog = async () => await (await page.request.get(url, { headers })).json();
+  await page.goto(`${stack.uiBase}/profiles/${id}`);
+  await page.getByRole("button", { name: "Probe surface", exact: true }).click();
+  await page.getByRole("tab", { name: "MCP settings", exact: true }).click();
+  const entry = page.getByRole("combobox", { name: "Catalog entry", exact: true });
+  await expect(entry).toContainText("Guide");
+  const source = JSON.parse(await entry.inputValue())[0];
+  await page.getByRole("textbox", { name: "Display name", exact: true }).fill("Team handbook");
+  await expect(page.getByRole("region", { name: "Client preview" })).toContainText("Team handbook");
+  let fail = true;
+  await page.route(`**/api/tenant/profiles/${id}`, async (route) => {
+    if (fail && route.request().method() === "PUT") {
+      fail = false;
+      await route.fulfill({ status: 503, json: { error: "Temporary catalog save outage" } });
+    } else await route.continue();
+  });
+  await page.getByRole("button", { name: "Save catalog settings" }).click();
+  await expect(page.getByRole("alert", { name: "Catalog settings error" })).toContainText(
+    "Temporary catalog save outage",
+  );
+  await expect(page.getByRole("textbox", { name: "Display name", exact: true })).toHaveValue(
+    "Team handbook",
+  );
+  await page.getByRole("button", { name: "Save catalog settings" }).click();
+  await expect(page.getByRole("status", { name: "Catalog settings save status" })).toHaveText(
+    "Saved",
+  );
+  expect((await storedCatalog()).transforms.resourceOverrides[source]["docs:///guide"].name).toBe(
+    "Team handbook",
+  );
+  await page.getByRole("switch", { name: /^Available to clients/ }).uncheck();
+  await page.getByRole("button", { name: "Save catalog settings" }).click();
+  await expect(page.getByRole("status", { name: "Catalog settings save status" })).toHaveText(
+    "Saved",
+  );
+  await expect(entry).toContainText("disabled");
+  await page.getByRole("tab", { name: "Resource templates", exact: true }).click();
+  await page.getByRole("textbox", { name: "Display title", exact: true }).fill("Order details");
+  await page.getByRole("button", { name: "Save catalog settings" }).click();
+  await expect(page.getByRole("status", { name: "Catalog settings save status" })).toHaveText(
+    "Saved",
+  );
+  await page.getByRole("tab", { name: "Prompts", exact: true }).click();
+  await page.getByRole("textbox", { name: "Prompt alias", exact: true }).fill("review_changes");
+  const argument = page.getByRole("group", { name: "Prompt argument topic", exact: true });
+  await argument.getByRole("textbox", { name: "Argument alias" }).fill("subject");
+  await page.getByRole("tab", { name: "Tools", exact: true }).click();
+  await page.getByRole("tab", { name: "MCP settings", exact: true }).click();
+  await expect(argument.getByRole("textbox", { name: "Argument alias" })).toHaveValue("subject");
+  await argument.getByRole("switch", { name: /^Supply a default/ }).check();
+  await argument.getByRole("textbox", { name: "Default argument value" }).fill("Recent changes");
+  await expect(page.getByRole("region", { name: "Client preview" })).toContainText("subject");
+  await expect(page.getByRole("region", { name: "Client preview" })).toContainText(
+    "Recent changes",
+  );
+  await page.getByRole("button", { name: "Save catalog settings" }).click();
+  await expect(page.getByRole("status", { name: "Catalog settings save status" })).toHaveText(
+    "Saved",
+  );
+  const catalogRules = (await storedCatalog()).transforms;
+  await page.getByRole("tab", { name: "Tools", exact: true }).click();
+  const rename = page.getByRole("textbox", { name: "(optional) New exposed tool name" });
+  await rename.fill("find_item");
+  await rename.press("Enter");
+  await expect(page.getByRole("status", { name: "Tool transforms save status" })).toHaveText(
+    "Saved",
+  );
+  const latest = await storedCatalog();
+  expect(latest.transforms.resourceOverrides).toEqual(catalogRules.resourceOverrides);
+  expect(latest.transforms.resourceTemplateOverrides).toEqual(
+    catalogRules.resourceTemplateOverrides,
+  );
+  expect(latest.transforms.promptOverrides).toEqual(catalogRules.promptOverrides);
+  expect(latest.transforms.toolOverrides.lookup.rename).toBe("find_item");
+  await page.getByRole("tab", { name: "MCP settings", exact: true }).click();
+  await page.getByRole("tab", { name: "Prompts", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "Prompt alias", exact: true })).toHaveValue(
+    "review_changes",
+  );
+  await page.getByRole("textbox", { name: "Prompt alias", exact: true }).fill("unsaved_review");
+  expect(
+    (
+      await page.request.put(url, { headers, data: { ...latest, description: "Edited elsewhere" } })
+    ).ok(),
+  ).toBeTruthy();
+  await page.getByRole("button", { name: "Save catalog settings" }).click();
+  await expect(page.getByRole("alert", { name: "Catalog settings error" })).toContainText(
+    "Profile changed in another window",
+  );
+  await expect(page.getByRole("textbox", { name: "Prompt alias", exact: true })).toHaveValue(
+    "unsaved_review",
+  );
+  await page.getByRole("button", { name: "Reload saved settings" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Reload", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "Prompt alias", exact: true })).toHaveValue(
+    "review_changes",
+  );
+  await page.getByRole("textbox", { name: "Prompt alias", exact: true }).fill("review_final");
+  await page.getByRole("button", { name: "Save catalog settings" }).click();
+  await expect(page.getByRole("status", { name: "Catalog settings save status" })).toHaveText(
+    "Saved",
+  );
+  expect((await storedCatalog()).transforms.toolOverrides.lookup.rename).toBe("find_item");
+  await page.getByRole("region", { name: "Client preview" }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "../output/playwright/catalog-transforms.png" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

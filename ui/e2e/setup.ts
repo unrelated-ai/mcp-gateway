@@ -9,6 +9,7 @@ export type Stack = {
   adminBase: string;
   dataBase: string;
   remoteUrl: string;
+  httpBase: string;
   adapterUrl: string;
   cli: string;
   uiBase: string;
