@@ -107,6 +107,7 @@ pub(super) async fn listen(
         resources.extend(target.resources.values().cloned());
         tasks.extend(target.tasks.values().map(|(token, _)| token.clone()));
         streams.push(mapped_events(
+            state.clone(),
             target,
             events,
             state.signer.clone(),
@@ -130,7 +131,7 @@ pub(super) async fn listen(
     let mut revalidate = tokio::time::interval(std::time::Duration::from_secs(30));
     revalidate.tick().await;
     let profile_id = request.profile.id.clone();
-    let initial_policy = serde_json::to_value(&request.profile.mcp).expect("profile settings");
+    let initial_policy = subscription_policy(&request.profile);
     let stream = async_stream::stream! {
         yield Ok::<_, Infallible>(axum::response::sse::Event::default().data(ack.to_string()));
         loop {
@@ -145,8 +146,7 @@ pub(super) async fn listen(
                 },
                 _ = revalidate.tick() => {
                     let Ok(Some(profile)) = state.store.get_profile(&profile_id).await else { break; };
-                    if serde_json::to_value(&profile.mcp).ok().as_ref() != Some(&initial_policy)
-                        || profile.source_ids != request.profile.source_ids
+                    if subscription_policy(&profile) != initial_policy
                         || auth::enforce_data_plane_auth(&state, &profile, &headers, payload.auth.as_ref(), payload.oidc.as_ref()).await.is_err() { break; }
                     continue;
                 }
@@ -159,6 +159,10 @@ pub(super) async fn listen(
             .keep_alive(axum::response::sse::KeepAlive::default())
             .into_response(),
     ))
+}
+
+fn subscription_policy(profile: &crate::store::Profile) -> Value {
+    json!({"mcp":profile.mcp,"transforms":profile.transforms,"sources":profile.source_ids})
 }
 
 fn finish_response(mut response: Response) -> Response {
@@ -407,6 +411,7 @@ async fn open_target(
 }
 
 fn mapped_events(
+    state: Arc<McpState>,
     target: Target,
     events: Events,
     signer: crate::session_token::SessionSigner,
@@ -416,6 +421,7 @@ fn mapped_events(
 ) -> BoxStream<'static, Option<Value>> {
     futures::stream::unfold((target, events), move |(target, mut events)| {
         let signer = signer.clone();
+        let state = state.clone();
         let profile = profile.clone();
         let id = id.clone();
         async move {
@@ -423,6 +429,19 @@ fn mapped_events(
                 let Ok(message) = next_message(&mut events, limit).await else {
                     return Some((None, (target, events)));
                 };
+                if message["method"] == "notifications/resources/updated" {
+                    let Ok(Some(current)) = state.store.get_profile(&profile.id).await else {
+                        return Some((None, (target, events)));
+                    };
+                    if !current.source_ids.contains(&target.binding.upstream)
+                        || !current.transforms.resource_allowed(
+                            &target.binding.upstream,
+                            message["params"]["uri"].as_str().unwrap_or(""),
+                        )
+                    {
+                        continue;
+                    }
+                }
                 match map_notification(message, &target, &signer, &profile, &id) {
                     Ok(Some(message)) => return Some((Some(message), (target, events))),
                     Ok(None) => {}

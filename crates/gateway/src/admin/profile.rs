@@ -306,6 +306,15 @@ async fn admin_put_profile_inner_impl(
         existing.as_ref(),
     )?;
 
+    if let Err(error) = req.transforms.validate_catalog_overrides() {
+        return Err(Box::new(AdminPutProfileInnerError {
+            resp: (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+            profile_uuid: Some(profile_uuid),
+            profile_id: Some(profile_id),
+            name: Some(name),
+            error: AuditError::new("bad_request", error.to_string()),
+        }));
+    }
     let description = resolve_profile_description(req.description.as_ref(), existing.as_ref());
     let enabled_tools = req.tools.as_deref().unwrap_or(&[]);
     let mut data_plane_auth =

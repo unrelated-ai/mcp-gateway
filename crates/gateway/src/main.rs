@@ -624,6 +624,7 @@ async fn load_config(args: &CliArgs) -> anyhow::Result<(config::GatewayConfig, b
 
 fn validate_config(cfg: &config::GatewayConfig) -> anyhow::Result<()> {
     for (profile_id, p) in &cfg.profiles {
+        p.transforms.validate_catalog_overrides()?;
         if let Some(tools) = &p.tools {
             validate_tool_allowlist(profile_id, tools)?;
         }

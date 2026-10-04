@@ -1825,3 +1825,6 @@ mod upstream_sessions;
 mod modern_protocol;
 
 mod connection_check;
+mod discovery;
+
+mod catalog_transforms;

@@ -605,6 +605,11 @@ struct ProfileSurfaceTool {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProfileSurfaceResponse {
+    all_resources: Vec<crate::mcp::catalog_transforms::CatalogEntry<rmcp::model::Resource>>,
+    all_resource_templates:
+        Vec<crate::mcp::catalog_transforms::CatalogEntry<rmcp::model::ResourceTemplate>>,
+    all_prompts: Vec<crate::mcp::catalog_transforms::CatalogEntry<rmcp::model::Prompt>>,
+    resource_templates: Vec<rmcp::model::ResourceTemplate>,
     profile_id: String,
     generated_at_unix: u64,
     sources: Vec<crate::mcp::ProfileSurfaceSource>,
@@ -621,6 +626,7 @@ struct ProfileSurfaceResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UpstreamSurfaceResponse {
+    resource_templates: Vec<rmcp::model::ResourceTemplate>,
     upstream_id: String,
     generated_at_unix: u64,
     sources: Vec<crate::mcp::ProfileSurfaceSource>,
@@ -683,11 +689,17 @@ async fn get_upstream_surface(
         mcp: McpProfileSettings::default(),
     };
 
-    let (sources, tools, _all_tools, resources, prompts) =
-        match crate::mcp::probe_profile_surface(&state.mcp_state, &profile).await {
-            Ok(r) => r,
-            Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
-        };
+    let crate::mcp::ProbedProfileSurface {
+        sources,
+        tools,
+        resources,
+        resource_templates,
+        prompts,
+        ..
+    } = match crate::mcp::probe_upstream_surface(&state.mcp_state, &profile).await {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
+    };
 
     let generated_at_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -695,6 +707,7 @@ async fn get_upstream_surface(
         .as_secs();
 
     Json(UpstreamSurfaceResponse {
+        resource_templates,
         upstream_id,
         generated_at_unix,
         sources,
@@ -783,11 +796,20 @@ async fn get_profile_surface(
         Err(response) => return response,
     };
 
-    let (sources, tools, all_tools, resources, prompts) =
-        match crate::mcp::probe_profile_surface(&state.mcp_state, &profile).await {
-            Ok(r) => r,
-            Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
-        };
+    let crate::mcp::ProbedProfileSurface {
+        all_resources,
+        all_resource_templates,
+        all_prompts,
+        sources,
+        tools,
+        all_tools,
+        resources,
+        resource_templates,
+        prompts,
+    } = match crate::mcp::probe_profile_surface(&state.mcp_state, &profile).await {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
+    };
 
     let generated_at_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -795,6 +817,10 @@ async fn get_profile_surface(
         .as_secs();
 
     Json(ProfileSurfaceResponse {
+        all_resources,
+        all_resource_templates,
+        all_prompts,
+        resource_templates,
         profile_id,
         generated_at_unix,
         sources,

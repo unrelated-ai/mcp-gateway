@@ -260,7 +260,7 @@ async fn mixed_upstreams_support_discovery_calls_streams_and_session_cleanup() -
         .await?;
     assert_eq!(deleted.status(), StatusCode::ACCEPTED);
     let profile = state.store.get_profile(&profile_id).await?.unwrap();
-    let (sources, tools, _, _, _) = probe_profile_surface(&state, &profile)
+    let ProbedProfileSurface { sources, tools, .. } = probe_profile_surface(&state, &profile)
         .await
         .map_err(anyhow::Error::msg)?;
     assert_eq!(sources.len(), 2);

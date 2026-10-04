@@ -5,11 +5,10 @@ use super::{
 };
 use crate::store::{Profile, UpstreamEndpoint, UpstreamEndpointLifecycle, UpstreamNetworkClass};
 use futures::FutureExt as _;
-use rmcp::{model::ServerResult, transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION};
+use rmcp::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
 use serde::Serialize;
-use serde_json::json;
 use std::time::Duration;
-use unrelated_mcp_support::headers::{VERSION, VERSION_META};
+use unrelated_mcp_support::headers::VERSION;
 
 // Leave time for the UI proxy's 15-second deadline, including metadata lookup.
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
@@ -188,31 +187,11 @@ async fn check_endpoint(state: &McpState, target: &Target, modern: bool) -> Resu
         })?;
     let mut headers = upstream::build_upstream_headers(target.endpoint.auth.as_ref(), 1);
     if modern {
-        headers.insert(
-            HEADER_MCP_PROTOCOL_VERSION,
-            reqwest::header::HeaderValue::from_static(VERSION),
-        );
-        let response = streamable_http::post_value(
-            state.http.for_class(class), url.into(),
-            json!({"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{(VERSION_META):VERSION}}}),
-            None, &headers, None,
-        ).await.map_err(|error| connection_error(&error.into()))?;
-        let result = upstream::read_first_response(response)
-            .await
-            .map_err(|error| connection_error(&error))?;
-        return match result {
-            ServerResult::DiscoverResult(result)
-                if result
-                    .supported_versions
-                    .iter()
-                    .any(|v| v.as_str() == VERSION) =>
-            {
-                Ok(VERSION.into())
-            }
-            _ => Err(format!(
-                "This profile requires native MCP {VERSION}; the upstream did not confirm support."
-            )),
-        };
+        return upstream::discover_server(&state.http, &url, &headers, class).await
+            .map(|_| VERSION.to_owned())
+            .map_err(|error| if error.is::<upstream::NativeProtocolMismatch>() {
+                format!("This profile requires native MCP {VERSION}; the upstream did not confirm support.")
+            } else { connection_error(&error) });
     }
     let handshake = upstream::upstream_initialize(
         &state.http,
@@ -248,7 +227,7 @@ async fn check_endpoint(state: &McpState, target: &Target, modern: bool) -> Resu
 }
 
 // Avoid returning remote response text or request URLs containing credentials.
-fn connection_error(error: &anyhow::Error) -> String {
+pub(super) fn connection_error(error: &anyhow::Error) -> String {
     use rmcp::transport::streamable_http_client::StreamableHttpError;
     if let Some(StreamableHttpError::<reqwest::Error>::UnexpectedServerResponse(message)) =
         error.downcast_ref()

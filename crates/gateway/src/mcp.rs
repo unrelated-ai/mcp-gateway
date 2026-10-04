@@ -44,6 +44,8 @@ use uuid::Uuid;
 
 mod aggregation;
 mod auth;
+mod catalog_pages;
+pub(crate) mod catalog_transforms;
 mod connection_check;
 mod ids;
 mod initialize;
@@ -78,7 +80,7 @@ use upstream::proxy_to_single_upstream;
 pub(crate) use connection_check::check_profile_connections;
 #[cfg(test)]
 use initialize::initialize_profile_sources;
-pub(crate) use probe::probe_profile_surface;
+pub(crate) use probe::{ProbedProfileSurface, probe_profile_surface, probe_upstream_surface};
 pub use transport::router;
 
 // Custom Gateway JSON-RPC server error codes (-32000..-32099 range).
@@ -206,6 +208,7 @@ pub struct ProfileSurfaceSource {
     pub error: Option<String>,
     pub tools_count: usize,
     pub resources_count: usize,
+    pub resource_templates_count: usize,
     pub prompts_count: usize,
 }
 
@@ -975,19 +978,40 @@ async fn route_and_proxy_prompt_get(
         return Err((StatusCode::BAD_REQUEST, "invalid prompts/get request").into_response());
     };
 
-    let (upstream_id, original_name) = resolve_prompt_owner(state, profile_id, payload, &name, hop)
+    let route = resolve_prompt_owner(state, profile_id, payload, &name, hop)
         .await
-        .map_err(|e| jsonrpc_error_response(req_id, ErrorCode::INVALID_PARAMS, e.to_string()))?;
+        .map_err(|e| {
+            jsonrpc_error_response(req_id.clone(), ErrorCode::INVALID_PARAMS, e.to_string())
+        })?;
 
     if let Some(param) = as_get_prompt_mut(message) {
-        param.name = original_name;
+        param.name = route.original_name;
+        let arguments = serde_json::from_value(serde_json::Value::Object(
+            param.arguments.take().unwrap_or_default(),
+        ))
+        .map_err(|e| {
+            jsonrpc_error_response(
+                req_id.clone(),
+                ErrorCode::INVALID_PARAMS,
+                format!("Prompt arguments must be strings: {e}"),
+            )
+        })?;
+        let mapped = route.rules.map_arguments(arguments).map_err(|e| {
+            jsonrpc_error_response(req_id, ErrorCode::INVALID_PARAMS, e.to_string())
+        })?;
+        param.arguments = Some(
+            mapped
+                .into_iter()
+                .map(|(name, value)| (name, serde_json::Value::String(value)))
+                .collect(),
+        );
     }
 
     proxy_to_single_upstream(
         state,
         profile_id,
         payload,
-        &upstream_id,
+        &route.source,
         message.clone(),
         hop,
     )
@@ -1010,22 +1034,27 @@ async fn route_and_proxy_completion_complete(
             .into_response());
     };
 
+    let mut prompt_rules = None;
     let (upstream_id, rewritten_ref) = match reference {
         Reference::Prompt(p) => {
-            let (upstream_id, original_name) =
-                resolve_prompt_owner(state, profile_id, payload, &p.name, hop)
-                    .await
-                    .map_err(|e| {
-                        jsonrpc_error_response(req_id, ErrorCode::INVALID_PARAMS, e.to_string())
-                    })?;
-            (upstream_id, Reference::for_prompt(original_name))
+            let route = resolve_prompt_owner(state, profile_id, payload, &p.name, hop)
+                .await
+                .map_err(|e| {
+                    jsonrpc_error_response(req_id.clone(), ErrorCode::INVALID_PARAMS, e.to_string())
+                })?;
+            prompt_rules = Some(route.rules);
+            (route.source, Reference::for_prompt(route.original_name))
         }
         Reference::Resource(r) => {
             let (upstream_id, original_uri) =
                 resolve_resource_owner(state, profile_id, payload, &r.uri, hop)
                     .await
                     .map_err(|e| {
-                        jsonrpc_error_response(req_id, ErrorCode::INVALID_PARAMS, e.to_string())
+                        jsonrpc_error_response(
+                            req_id.clone(),
+                            ErrorCode::INVALID_PARAMS,
+                            e.to_string(),
+                        )
                     })?;
             (upstream_id, Reference::for_resource(original_uri))
         }
@@ -1040,6 +1069,11 @@ async fn route_and_proxy_completion_complete(
 
     if let Some(param) = as_complete_mut(message) {
         param.r#ref = rewritten_ref;
+        if let Some(rules) = prompt_rules {
+            rules.map_completion(param).map_err(|e| {
+                jsonrpc_error_response(req_id, ErrorCode::INVALID_PARAMS, e.to_string())
+            })?;
+        }
     }
 
     proxy_to_single_upstream(

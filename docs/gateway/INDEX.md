@@ -39,7 +39,7 @@ not preserve a stateful upstream's sessions after that upstream restarts.
 
 - Native MCP `2026-07-28` is opt-in per profile and requires compatible remote
   upstreams. Adapter and compact stdio proxy connections use the legacy lifecycle.
-- Tool allowlists do not restrict resources or prompts. Separate resource and
-  prompt allowlists are not available.
+- Tool allowlists do not restrict resources or prompts. Configure their availability
+  separately with [resource and prompt overrides](MODE3_TENANT_OVERLAY.md#resource-and-prompt-overrides).
 - Routing tokens have a lifetime but no individual revocation list. Authentication
   is still checked on each request.

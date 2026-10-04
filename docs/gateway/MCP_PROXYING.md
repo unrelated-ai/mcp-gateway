@@ -152,5 +152,5 @@ the next process starts.
 Remaining boundaries: enterprise ID-JAG token exchange is not configured as a
 product feature; native response caching is deliberately disabled (`ttl: 0`,
 private hints and `Cache-Control: no-store`); legacy event-resume IDs are not used
-for native subscriptions. Tool restrictions do not imply separate resource or
-prompt allowlists.
+for native subscriptions. Resource and prompt access is controlled separately from
+tool restrictions through [profile catalog overrides](MODE3_TENANT_OVERLAY.md#resource-and-prompt-overrides).

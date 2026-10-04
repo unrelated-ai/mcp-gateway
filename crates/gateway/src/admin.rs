@@ -270,7 +270,7 @@ struct PutProfileRequest {
     /// Local tool sources attached to this profile (shared + tenant-owned).
     #[serde(default)]
     sources: Vec<String>,
-    /// Per-profile tool transforms (renames/defaults).
+    /// Per-profile tool, resource, and prompt transforms.
     #[serde(default)]
     transforms: TransformPipeline,
     /// Per-profile tool allowlist.

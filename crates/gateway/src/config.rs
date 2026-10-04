@@ -72,7 +72,7 @@ pub struct ProfileConfig {
     #[serde(default = "default_true")]
     pub allow_partial_upstreams: bool,
     pub upstreams: Vec<String>,
-    /// Per-profile tool transforms (renames/defaults).
+    /// Per-profile tool, resource, and prompt transforms.
     #[serde(default)]
     pub transforms: TransformPipeline,
     /// Optional per-profile tool allowlist.

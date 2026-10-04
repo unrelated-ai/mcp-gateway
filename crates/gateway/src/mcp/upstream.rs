@@ -23,6 +23,7 @@ pub(super) const MAX_HOPS: u32 = 8;
 pub(super) struct UpstreamHandshake {
     pub session_id: Option<String>,
     pub protocol_version: String,
+    pub capabilities: rmcp::model::ServerCapabilities,
 }
 
 pub(super) async fn upstream_initialize(
@@ -95,7 +96,48 @@ pub(super) async fn upstream_initialize(
     Ok(UpstreamHandshake {
         session_id,
         protocol_version,
+        capabilities: result.capabilities,
     })
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("The upstream did not confirm native MCP support")]
+pub(super) struct NativeProtocolMismatch;
+
+pub(super) async fn discover_server(
+    http: &crate::outbound_safety::UpstreamHttpClients,
+    url: &str,
+    headers: &reqwest::header::HeaderMap,
+    class: crate::store::UpstreamNetworkClass,
+) -> anyhow::Result<rmcp::model::DiscoverResult> {
+    use unrelated_mcp_support::headers::VERSION;
+    crate::outbound_safety::check_upstream_scheme_policy_for_class(class, url)
+        .map_err(anyhow::Error::msg)?;
+    let safety = crate::outbound_safety::gateway_outbound_http_safety_for_class(class);
+    crate::outbound_safety::check_url_allowed(&safety, url)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let mut headers = headers.clone();
+    headers.insert(
+        HEADER_MCP_PROTOCOL_VERSION,
+        HeaderValue::from_static(VERSION),
+    );
+    let response = streamable_http::post_value(
+        http.for_class(class), url.to_owned().into(),
+        serde_json::json!({"jsonrpc":"2.0","id":new_internal_request_id(),"method":"server/discover"}),
+        None, &headers, None,
+    ).await?;
+    match read_first_response(response).await? {
+        ServerResult::DiscoverResult(result)
+            if result
+                .supported_versions
+                .iter()
+                .any(|v| v.as_str() == VERSION) =>
+        {
+            Ok(result)
+        }
+        _ => Err(NativeProtocolMismatch.into()),
+    }
 }
 
 /// Headers for a request after initialization, including the upstream's negotiated version.
@@ -403,7 +445,6 @@ struct ListAllUpstreamsCtx<'a> {
     profile_id: &'a str,
     payload: &'a TokenPayloadV1,
     request_failed_message: &'static str,
-    transport_failed_message: &'static str,
     hop: u32,
 }
 
@@ -431,59 +472,46 @@ where
     } else {
         None
     };
+    let profile = &profile;
+    let build_request = &build_request;
+    let extract = &extract;
     let results = super::aggregation::AggregationPolicy::from_env().collect(
-        ctx.payload.bindings.iter().map(|binding| async {
+        ctx.payload.bindings.iter().map(|binding| async move {
             let Some(endpoint) = resolve_endpoint(ctx.state, ctx.profile_id, binding).await? else {
                 return Ok(None);
             };
             let endpoint_url = apply_query_auth(&endpoint.url, endpoint.auth.as_ref());
             let headers = build_bound_upstream_headers(binding, endpoint.auth.as_ref(), ctx.hop + 1);
-            let mut cursor = None;
-            let mut seen = HashSet::new();
-            let mut items = Vec::new();
-            for _ in 0..64 {
+            let result = super::catalog_pages::collect(|cursor| {
                 let mut request = serde_json::to_value(build_request()).expect("serializable request");
-                if let Some(cursor) = &cursor {
+                if let Some(cursor) = cursor {
                     request["params"] = serde_json::json!({"cursor": cursor});
                 }
                 if let Some(meta) = &ctx.payload.request_meta {
                     request["params"]["_meta"] = meta.clone();
-                    if let Some(profile) = &profile { rewrite_request_metadata(&mut request, &profile.mcp.security.effective_upstream_policy(&binding.upstream)); }
-                }
-                let response = streamable_http::post_value(
-                    ctx.state.http.for_class(endpoint.network_class), endpoint_url.clone().into(), request,
-                    binding.session.clone().map(Into::into), &headers, None,
-                ).await;
-                let result = match response {
-                    Ok(response) => read_first_response(response).await,
-                    Err(error) => {
-                        tracing::warn!(upstream_id = %binding.upstream, %error, "{}", ctx.transport_failed_message);
-                        return Ok(None);
+                    if let Some(profile) = &profile {
+                        rewrite_request_metadata(&mut request, &profile.mcp.security.effective_upstream_policy(&binding.upstream));
                     }
-                };
-                let (page, next) = match result {
-                    Ok(result) => match extract(result) {
-                        Some(page) => page,
-                        None => return Ok(None),
-                    },
-                    Err(error) => {
-                        tracing::warn!(upstream_id = %binding.upstream, %error, "{}", ctx.request_failed_message);
-                        return Ok(None);
-                    }
-                };
-                items.extend(page);
-                if items.len() > 100_000 {
-                    return Err((StatusCode::BAD_GATEWAY, "upstream catalog exceeds item limit").into_response());
                 }
-                let Some(next) = next else {
-                    return Ok(Some((binding.upstream.clone(), items)));
-                };
-                if !seen.insert(next.clone()) {
-                    return Err((StatusCode::BAD_GATEWAY, "upstream repeated a catalog cursor").into_response());
+                let url = endpoint_url.clone();
+                let headers = &headers;
+                async move {
+                    let response = streamable_http::post_value(
+                        ctx.state.http.for_class(endpoint.network_class), url.into(), request,
+                        binding.session.clone().map(Into::into), headers, None,
+                    ).await?;
+                    read_first_response(response).await
                 }
-                cursor = Some(next);
+            }, &extract).await;
+            match result {
+                Ok(items) => Ok(Some((binding.upstream.clone(), items))),
+                Err(error) if error.is::<super::catalog_pages::CatalogLimit>() =>
+                    Err((StatusCode::BAD_GATEWAY, error.to_string()).into_response()),
+                Err(error) => {
+                    tracing::warn!(upstream_id = %binding.upstream, %error, "{}", ctx.request_failed_message);
+                    Ok(None)
+                }
             }
-            Err((StatusCode::BAD_GATEWAY, "upstream catalog exceeds page limit").into_response())
         }.boxed()).collect(),
     ).await;
     let mut out = Vec::new();
@@ -518,7 +546,6 @@ pub(super) async fn list_tools_all_upstreams(
             profile_id,
             payload,
             request_failed_message: "tools/list failed",
-            transport_failed_message: "tools/list transport failed",
             hop,
         },
         || {
@@ -552,7 +579,6 @@ pub(super) async fn list_resources_all_upstreams(
             profile_id,
             payload,
             request_failed_message: "resources/list failed",
-            transport_failed_message: "resources/list transport failed",
             hop,
         },
         || {
@@ -586,7 +612,6 @@ pub(super) async fn list_resource_templates_all_upstreams(
             profile_id,
             payload,
             request_failed_message: "resources/templates/list failed",
-            transport_failed_message: "resources/templates/list transport failed",
             hop,
         },
         || {
@@ -624,7 +649,6 @@ pub(super) async fn list_prompts_all_upstreams(
             profile_id,
             payload,
             request_failed_message: "prompts/list failed",
-            transport_failed_message: "prompts/list transport failed",
             hop,
         },
         || {

@@ -6,8 +6,9 @@ The Gateway is the **public-facing** MCP endpoint for clients.
 
 It provides **profile-based MCP proxying + upstream aggregation** and **HA-ready session routing** (stateless session tokens), plus a bearer-token-protected **admin/control plane** (Mode 3 / Postgres).
 
-Profiles support API-key and OAuth authentication. Audit settings apply at tenant level;
-separate resource and prompt allowlists are not available.
+Profiles support API-key and OAuth authentication. Audit detail can inherit tenant
+settings or use a profile override. Profiles also control resource and prompt
+availability, metadata, and prompt argument aliases and defaults.
 
 ## Key concepts
 

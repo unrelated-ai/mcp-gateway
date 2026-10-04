@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Activity, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { AppShell, PageContent, PageHeader } from "@/components/layout";
 import type { Profile } from "@/src/lib/types";
@@ -539,15 +539,16 @@ export default function ProfileDetailPage() {
           />
         )}
 
-        {activeTab === "other" && (
+        <Activity mode={activeTab === "other" ? "visible" : "hidden"}>
           <McpSurfaceSection
+            key={profile?.id ?? "loading"}
             profile={profile}
             surface={surface}
             surfaceError={surfaceError}
             probePending={probeMutation.isPending}
             onProbe={() => probeMutation.mutate()}
           />
-        )}
+        </Activity>
 
         {activeTab === "security" && (
           <SecurityTab key={profile?.id ?? "loading"} profile={profile} />

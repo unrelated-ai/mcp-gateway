@@ -350,6 +350,7 @@ fn rewrite_upstream_sse_data(
 }
 
 struct UpstreamSseMapCtx {
+    store: Arc<dyn Store>,
     tenant_id: Arc<str>,
     profile_id: Arc<str>,
     upstream_id: Arc<str>,
@@ -475,6 +476,26 @@ async fn enforce_sse_data_limits_or_close(
     true
 }
 
+async fn resource_notification_blocked(ctx: &UpstreamSseMapCtx, data: &str) -> bool {
+    let Ok(message) = serde_json::from_str::<serde_json::Value>(data) else {
+        return false;
+    };
+    if message["method"] != "notifications/resources/updated" {
+        return false;
+    }
+    let Some(uri) = message["params"]["uri"].as_str() else {
+        return true;
+    };
+    let Ok(Some(profile)) = ctx.store.get_profile(&ctx.profile_id).await else {
+        return true;
+    };
+    !profile
+        .source_ids
+        .iter()
+        .any(|source| source == ctx.upstream_id.as_ref())
+        || !profile.transforms.resource_allowed(&ctx.upstream_id, uri)
+}
+
 async fn map_upstream_sse_event(
     ctx: &UpstreamSseMapCtx,
     evt: Result<sse_stream::Sse, sse_stream::Error>,
@@ -492,6 +513,9 @@ async fn map_upstream_sse_event(
                     return None;
                 }
 
+                if resource_notification_blocked(ctx, &data).await {
+                    return None;
+                }
                 if maybe_block_upstream_server_request(ctx, &data).await {
                     return None;
                 }
@@ -642,6 +666,7 @@ async fn open_upstream_stream(
     };
 
     let ctx = Arc::new(UpstreamSseMapCtx {
+        store: state.store.clone(),
         tenant_id: Arc::<str>::from(profile.tenant_id.clone()),
         profile_id: Arc::<str>::from(profile.id.clone()),
         upstream_id: Arc::<str>::from(binding.upstream.clone()),

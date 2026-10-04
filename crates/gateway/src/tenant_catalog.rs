@@ -61,23 +61,6 @@ impl TenantCatalog {
         }
     }
 
-    /// Check whether a tenant-owned local source exists and is enabled.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the store access fails or a stored spec is invalid.
-    pub async fn has_tool_source(
-        &self,
-        store: &dyn Store,
-        tenant_id: &str,
-        source_id: &str,
-    ) -> anyhow::Result<bool> {
-        Ok(store
-            .get_tenant_tool_source(tenant_id, source_id)
-            .await?
-            .is_some_and(|s| s.enabled))
-    }
-
     /// List tools for a tenant-owned local source.
     pub async fn list_tools(
         &self,

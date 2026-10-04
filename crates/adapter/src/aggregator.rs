@@ -585,6 +585,7 @@ mod tests {
                     ..Default::default()
                 },
             )]),
+            ..Default::default()
         };
 
         agg.register_tools(
@@ -623,6 +624,7 @@ mod tests {
                     ..Default::default()
                 },
             )]),
+            ..Default::default()
         };
 
         agg.register_tools(

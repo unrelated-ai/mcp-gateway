@@ -62,6 +62,9 @@ pub(super) fn validate_create(
     oauth_available: bool,
 ) -> Result<ValidatedSettings, ValidationError> {
     validate_name(&req.name)?;
+    req.transforms
+        .validate_catalog_overrides()
+        .map_err(|error| ValidationError::settings(error.to_string()))?;
     let settings = ValidatedSettings {
         enabled_tools: req.tools.clone().unwrap_or_default(),
         data_plane_auth: req.data_plane_auth.clone().unwrap_or_default(),
@@ -88,6 +91,9 @@ pub(super) fn plan_update(
 ) -> Result<ProfileUpdate, ValidationError> {
     let name = req.name.clone().unwrap_or_else(|| existing.name.clone());
     validate_name(&name)?;
+    req.transforms
+        .validate_catalog_overrides()
+        .map_err(|error| ValidationError::settings(error.to_string()))?;
     let description = match &req.description {
         None => existing.description.clone(),
         Some(NullableString::Null) => None,

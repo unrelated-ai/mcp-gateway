@@ -381,7 +381,7 @@ async fn resolve_request_binding(
                     Value::Null,
                 )
             })?
-            .0
+            .source
         }
         _ => return Ok(None),
     };

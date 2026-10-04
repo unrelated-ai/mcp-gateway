@@ -91,6 +91,9 @@ export type CreateProfileResponse = {
 };
 
 export type ProfileSurface = {
+  allResources?: import("./surface-transforms").CatalogEntry[];
+  allResourceTemplates?: import("./surface-transforms").CatalogEntry[];
+  allPrompts?: import("./surface-transforms").CatalogEntry[];
   profileId: string;
   generatedAtUnix: number;
   sources: {
@@ -114,6 +117,7 @@ export type ProfileSurface = {
     description?: string | null;
   }[];
   resources: { uri: string; name?: string | null }[];
+  resourceTemplates: { uriTemplate: string; name?: string | null; description?: string | null }[];
   prompts: { name: string; description?: string | null }[];
 };
 
@@ -259,6 +263,7 @@ export async function deleteUpstream(id: string): Promise<void> {
 }
 
 export type UpstreamSurface = {
+  resourceTemplates: ProfileSurface["resourceTemplates"];
   upstreamId: string;
   generatedAtUnix: number;
   sources: {

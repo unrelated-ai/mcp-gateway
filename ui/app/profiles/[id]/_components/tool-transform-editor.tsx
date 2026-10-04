@@ -4,34 +4,12 @@ import { useState } from "react";
 import type { ProfileSurface } from "@/src/lib/tenantApi";
 import { Button, Callout, Input, SectionCard, Textarea, Toggle } from "@/components/ui";
 
-// NOTE: `ui/src/lib/types.ts` defines `Profile.transforms` as `unknown`. We keep the
-// editor typed, but accept/emit `unknown`-compatible shapes.
-export type ParamOverride = {
-  rename?: string;
-  default?: unknown;
-  visible?: boolean;
-  treatNullAsMissing?: boolean;
-};
-
-export type ToolOverride = {
-  rename?: string;
-  description?: string;
-  params?: Record<string, ParamOverride>;
-};
-
-export type TransformPipeline = {
-  toolOverrides: Record<string, ToolOverride>;
-};
-
-export function normalizePipeline(input: unknown): TransformPipeline {
-  const obj = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
-  const toolOverrides =
-    (typeof obj.toolOverrides === "object" && obj.toolOverrides !== null
-      ? (obj.toolOverrides as Record<string, ToolOverride>)
-      : {}) ?? {};
-
-  return { toolOverrides: { ...toolOverrides } };
-}
+import {
+  type ParamOverride,
+  type ToolOverride,
+  type TransformPipeline,
+} from "@/src/lib/surface-transforms";
+export { normalizePipeline, type TransformPipeline } from "@/src/lib/surface-transforms";
 
 export function ToolTransformEditor({
   tool,
@@ -143,7 +121,7 @@ export function ToolTransformEditor({
       return;
     }
 
-    const next: TransformPipeline = { toolOverrides: { ...pipeline.toolOverrides } };
+    const next: TransformPipeline = { ...pipeline, toolOverrides: { ...pipeline.toolOverrides } };
     const curr: ToolOverride = { ...(next.toolOverrides[tool.originalName] ?? {}) };
 
     // Tool rename
