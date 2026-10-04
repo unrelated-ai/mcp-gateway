@@ -1,8 +1,8 @@
 use rmcp::{
     ErrorData, ServerHandler,
     model::{
-        Implementation, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig,
-        Tool,
+        Implementation, InitializeRequestParams, InitializeResult, ListToolsResult,
+        PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
     },
     service::{RequestContext, RoleServer},
     transport::streamable_http_server::{
@@ -25,6 +25,17 @@ use unrelated_cli::{
 struct ChangingCatalog(Arc<AtomicUsize>);
 
 impl ServerHandler for ChangingCatalog {
+    fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<InitializeResult, ErrorData>> {
+        // SDK defaults can move to a protocol with no initialize handshake.
+        assert_eq!(request.protocol_version.as_str(), "2025-11-25");
+        context.peer.set_peer_info(request.clone());
+        std::future::ready(self.negotiate_initialize(&request))
+    }
+
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("changing-catalog", "1"))

@@ -142,7 +142,7 @@ impl ServerHandler for AdapterMcpServer {
             .enable_prompts_list_changed()
             .build();
         ServerConfig::new(capabilities)
-            .with_protocol_version(ProtocolVersion::LATEST)
+            .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
             .with_server_info(Implementation::from_build_env())
             .with_instructions("MCP adapter that bridges stdio MCP servers and OpenAPI backends.")
     }

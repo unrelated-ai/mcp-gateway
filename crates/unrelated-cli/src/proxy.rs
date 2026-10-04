@@ -63,6 +63,7 @@ impl ServerHandler for CompactProxy {
 
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
             .with_server_info(Implementation::new("unrelated", env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "Search the authorized Gateway catalog, then execute one stable tool reference.",

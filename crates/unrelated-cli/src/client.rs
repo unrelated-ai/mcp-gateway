@@ -50,6 +50,8 @@ impl ClientHandler for GatewayClientHandler {
             ClientCapabilities::default(),
             Implementation::new("unrelated", env!("CARGO_PKG_VERSION")),
         )
+        // Native discovery selects its version through the explicit lifecycle options.
+        .with_protocol_version(rmcp::model::ProtocolVersion::LATEST_WITH_INITIALIZE)
     }
 
     async fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) {

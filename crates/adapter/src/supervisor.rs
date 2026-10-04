@@ -24,8 +24,8 @@ use rmcp::{
         CreateMessageRequestMethod, CreateMessageRequestParams, CreateMessageResult,
         ElicitRequestParams, ElicitResult, ErrorData as McpError, GetPromptRequestParams,
         GetPromptResult, ListRootsResult, LoggingMessageNotificationParam,
-        ProgressNotificationParam, Prompt, ReadResourceRequestParams, ReadResourceResult, Resource,
-        ResourceUpdatedNotificationParam, Tool,
+        ProgressNotificationParam, Prompt, ProtocolVersion, ReadResourceRequestParams,
+        ReadResourceResult, Resource, ResourceUpdatedNotificationParam, Tool,
     },
     service::{Peer, RequestContext, RoleServer, RunningService, ServiceError},
     transport::TokioChildProcess,
@@ -183,7 +183,12 @@ impl std::fmt::Debug for ProxyClientHandler {
 
 impl ClientHandler for ProxyClientHandler {
     fn get_info(&self) -> ClientConfig {
-        self.downstream_client_info.clone()
+        let mut info = self.downstream_client_info.clone();
+        // Stdio backends use initialize even when the SDK or downstream client prefers native MCP.
+        if !info.protocol_version.has_initialize() {
+            info.protocol_version = ProtocolVersion::LATEST_WITH_INITIALIZE;
+        }
+        info
     }
 
     fn create_message(

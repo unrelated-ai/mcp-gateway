@@ -69,6 +69,15 @@ fn handle_message(state: &mut ServerState, msg: &serde_json::Value) -> Option<se
 
     match method {
         "initialize" => {
+            if !matches!(
+                msg["params"]["protocolVersion"].as_str(),
+                Some("2024-11-05" | "2025-03-26" | "2025-06-18" | "2025-11-25")
+            ) {
+                return Some(jsonrpc_err(
+                    &id,
+                    &json!({"code": -32602, "message": "This backend requires a legacy initialize handshake"}),
+                ));
+            }
             let result = initialize_result(msg);
             Some(jsonrpc_ok(&id, &result))
         }

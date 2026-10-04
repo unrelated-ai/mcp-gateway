@@ -42,6 +42,10 @@ impl McpStreamableHttpSession {
 
         let init_msg = read_first_event_stream_json_message(init_resp).await?;
         anyhow::ensure!(init_msg.get("id") == Some(&json!(0)), "unexpected init id");
+        anyhow::ensure!(
+            init_msg["result"]["protocolVersion"] == "2024-11-05",
+            "legacy protocol negotiation changed"
+        );
 
         // notifications/initialized
         let initialized_resp = post_mcp(

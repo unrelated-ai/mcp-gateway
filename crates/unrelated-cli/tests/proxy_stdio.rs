@@ -174,7 +174,9 @@ async fn proxy_advertises_two_tools_and_executes_by_stable_ref() -> anyhow::Resu
         }),
     )
     .await?;
-    assert_eq!(receive(&mut stdout).await?["id"], 1);
+    let initialized = receive(&mut stdout).await?;
+    assert_eq!(initialized["id"], 1);
+    assert_eq!(initialized["result"]["protocolVersion"], "2025-11-25");
     send(
         &mut stdin,
         json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
