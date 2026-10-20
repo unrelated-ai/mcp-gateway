@@ -2,10 +2,10 @@ apiVersion: v2
 name: unrelated-mcp-gateway-managed-fixtures
 description: Optional helper chart to seed Managed MCP deployables for local testing.
 type: application
-version: 1.0.0
-appVersion: "1.0.0"
+version: 1.0.1
+appVersion: "1.0.1"
 dependencies:
   - name: unrelated-mcp-images
-    version: 1.0.0
+    version: 1.0.1
     repository: file://../unrelated-mcp-images
     alias: images
