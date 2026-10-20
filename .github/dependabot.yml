@@ -8,6 +8,10 @@ updates:
     groups:
       rust:
         patterns: ["*"]
+    # RMCP's transport API still uses sse-stream 0.2.
+    ignore:
+      - dependency-name: sse-stream
+        versions: ["0.3.x"]
   - package-ecosystem: npm
     directory: /ui
     target-branch: main
@@ -16,6 +20,10 @@ updates:
     groups:
       ui:
         patterns: ["*"]
+    # Next's React, import, and accessibility plugins require ESLint 9.
+    ignore:
+      - dependency-name: eslint
+        versions: ["10.x"]
   - package-ecosystem: gomod
     directory: /deploy/migrator
     target-branch: main
