@@ -8,6 +8,10 @@ updates:
     groups:
       rust:
         patterns: ["*"]
+    # RMCP's transport API still uses sse-stream 0.2.
+    ignore:
+      - dependency-name: sse-stream
+        versions: ["0.3.x"]
   - package-ecosystem: npm
     directory: /ui
     target-branch: main
