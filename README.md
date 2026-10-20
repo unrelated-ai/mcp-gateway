@@ -76,15 +76,15 @@ The quickest path uses published Docker images and does not require cloning this
 
 ```bash
 curl -fsSL -o mcp-gateway-compose.yml \
-  https://raw.githubusercontent.com/unrelated-ai/mcp-gateway/gateway-v1.0.0/docker-compose.quickstart.yml
+  https://raw.githubusercontent.com/unrelated-ai/mcp-gateway/gateway-v1.0.1/docker-compose.quickstart.yml
 curl -fsSL -o mcp-gateway-images.env \
-  https://raw.githubusercontent.com/unrelated-ai/mcp-gateway/gateway-v1.0.0/deploy/images.env
+  https://raw.githubusercontent.com/unrelated-ai/mcp-gateway/gateway-v1.0.1/deploy/images.env
 ```
 
 2. Start the Gateway and Web UI:
 
 ```bash
-GATEWAY_VERSION=1.0.0 UI_VERSION=1.0.0 \
+GATEWAY_VERSION=1.0.1 UI_VERSION=1.0.1 \
   docker compose --env-file mcp-gateway-images.env -f mcp-gateway-compose.yml up -d
 ```
 

@@ -1,6 +1,6 @@
 dependencies:
 - name: unrelated-mcp-postgres
   repository: file://../unrelated-mcp-postgres
-  version: 1.0.0
-digest: sha256:63295c7787e7a94ca7d2c5d45c534bd3749033928d8c2fac44e049234f82bc83
-generated: "2026-10-04T22:07:49.100313975+04:00"
+  version: 1.0.1
+digest: sha256:2ae36a514a0789dd562e702d0d1360f464d4e04314375e38531cc51f70e0305d
+generated: "2026-10-20T11:51:05.358064062+04:00"

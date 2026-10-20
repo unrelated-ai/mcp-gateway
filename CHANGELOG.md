@@ -1,5 +1,16 @@
 # Changelog
 
+## Gateway 1.0.1, Web UI 1.0.1, and Adapter 1.0.2
+
+- Updated RMCP to `3.5.1` and refreshed Rust dependencies, including JSON Schema
+  validation fixes and YAML parser updates.
+- Updated Next.js to `16.4.2` and refreshed UI dependencies.
+- Included security fixes for TLS, source maps, and the migrator's Go dependencies.
+- Updated Helm packages and quickstart defaults to the patch releases.
+
+Gateway, Operator, migrator, both CLIs, and Helm packages use `1.0.1`.
+These releases require no new database migrations or configuration changes.
+
 ## Adapter 1.0.1
 
 - Included CA certificates in the minimal Adapter image. HTTP and OpenAPI sources
