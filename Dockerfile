@@ -25,7 +25,7 @@
 ARG RUST_VERSION=1.98.1
 ARG RUST_IMAGE=rust:${RUST_VERSION}-slim-trixie
 ARG NODE_IMAGE=node:26.9.0-alpine3.24
-ARG GO_IMAGE=golang:1.27.1-alpine3.24
+ARG GO_IMAGE=golang:1.27.3-alpine3.24
 ARG ALPINE_IMAGE=alpine:3.24.2
 
 FROM ${RUST_IMAGE} AS builder
