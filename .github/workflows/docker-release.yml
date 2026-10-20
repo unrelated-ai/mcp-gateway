@@ -120,7 +120,7 @@ jobs:
         run: cargo build --release -p "${{ inputs.cargo_pkg }}"
 
       - name: Upload release binary artifact
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: ${{ inputs.binary_name }}-${{ inputs.docker_target || 'default' }}-${{ github.sha }}
           path: target/release/${{ inputs.binary_name }}
