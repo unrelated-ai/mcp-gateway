@@ -14,14 +14,14 @@
     "typecheck": "next typegen && tsc --noEmit"
   },
   "dependencies": {
-    "@hookform/resolvers": "^5.9.1",
-    "@tanstack/react-query": "^5.104.3",
+    "@hookform/resolvers": "^6.0.0",
+    "@tanstack/react-query": "^5.104.5",
     "next": "^16.4.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-hook-form": "^7.90.0",
     "zod": "^4.6.7",
-    "zustand": "^5.0.15"
+    "zustand": "^5.0.16"
   },
   "devDependencies": {
     "@eslint/compat": "^2.1.1",
