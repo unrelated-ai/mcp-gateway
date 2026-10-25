@@ -26,7 +26,7 @@ getrandom = "0.4.3"
 hex = "0.4.3"
 hmac = "0.13.0"
 hostname = "0.4.2"
-jsonschema = { version = "0.59.0", default-features = false }
+jsonschema = { version = "0.60.0", default-features = false }
 jsonwebtoken = "11.1.0"
 k8s-openapi = "0.28.0"
 keyring = "4.2.0"
@@ -35,7 +35,7 @@ kube-runtime = "4.2.0"
 mime = "0.3.17"
 openapiv3 = "2.2.0"
 owo-colors = "4.4.0"
-parking_lot = "0.12.5"
+parking_lot = "0.13.0"
 percent-encoding = "2.3.2"
 regex = "1.13.1"
 reqwest = { version = "0.13.5", default-features = false }
