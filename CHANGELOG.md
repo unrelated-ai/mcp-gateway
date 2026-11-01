@@ -1,5 +1,10 @@
 # Changelog
 
+## Gateway 1.0.2, Web UI 1.0.2, and Adapter 1.0.3
+
+- Updated RMCP to `3.8.0` and refreshed dependencies and toolchains.
+- Fixed Rust and bundled npm dependency vulnerabilities.
+
 ## Gateway 1.0.1, Web UI 1.0.1, and Adapter 1.0.2
 
 - Updated RMCP to `3.5.1` and refreshed Rust dependencies, including JSON Schema

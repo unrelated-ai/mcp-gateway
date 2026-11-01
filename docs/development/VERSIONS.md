@@ -65,9 +65,6 @@ silently change both implementation and assertion.
   plugins used by Next support it.
 - The UI uses the TypeScript 7 compiler alongside the TypeScript 6 API package
   required by ESLint. Both compiler and Next build checks must pass.
-- The migrator keeps patched gRPC-Go 1.83.2; 1.84.0 is affected by
-  [GO-2026-6443](https://pkg.go.dev/vuln/GO-2026-6443). Recheck the advisory before
-  removing the corresponding Dependabot ignore rule.
 - A PostgreSQL major version change requires a database migration. Follow the
   [upgrade procedure](../gateway/V1_UPGRADE.md#postgresql-16-to-18) instead of
   replacing the image tag on an existing volume.

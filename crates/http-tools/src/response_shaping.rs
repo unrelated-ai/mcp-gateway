@@ -569,7 +569,7 @@ mod tests {
             "required": ["a"]
         });
         let warnings = pipeline.apply_to_schema(&mut schema);
-        assert!(warnings.is_empty());
+        assert_eq!(warnings, Vec::<String>::new());
         assert!(schema.get("required").is_none());
     }
 
@@ -585,7 +585,7 @@ mod tests {
             "required": ["a", "b"]
         });
         let warnings = pipeline.apply_to_schema(&mut schema);
-        assert!(warnings.is_empty());
+        assert_eq!(warnings, Vec::<String>::new());
         assert_eq!(
             schema.get("properties").unwrap(),
             &json!({ "a": { "type": "string" } })

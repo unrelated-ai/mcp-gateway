@@ -216,7 +216,7 @@ mod tests {
         assert_eq!(update.description.as_deref(), Some("Description"));
         assert_eq!(update.settings.tool_call_timeout_secs, Some(15));
         assert_eq!(update.settings.tool_policies[0].timeout_secs, Some(10));
-        assert!(update.settings.enabled_tools.is_empty());
+        assert_eq!(update.settings.enabled_tools, Vec::<String>::new());
         assert!(update.settings.data_plane_auth.accept_x_api_key());
         assert_eq!(
             update

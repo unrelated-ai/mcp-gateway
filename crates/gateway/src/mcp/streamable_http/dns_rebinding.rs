@@ -223,7 +223,7 @@ async fn check_openapi() {
             source.start().await.unwrap();
             if case == "ref" {
                 // Discovery skips operations whose references fail to load.
-                assert!(source.list_tools().is_empty());
+                assert_eq!(source.list_tools(), Vec::<rmcp::model::Tool>::new());
             } else {
                 let result = source.call_tool("probe", serde_json::json!({})).await;
                 assert!(result.is_err(), "internal response escaped: {result:?}");

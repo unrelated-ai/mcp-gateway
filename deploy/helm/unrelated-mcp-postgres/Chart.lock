@@ -1,6 +1,6 @@
 dependencies:
 - name: unrelated-mcp-images
   repository: file://../unrelated-mcp-images
-  version: 1.0.1
-digest: sha256:1174a5e8425f8faba3d8c9c1fc8c33eac837ab350c1c2b9b240fe5ea25b6ee39
-generated: "2026-10-20T11:51:05.322525933+04:00"
+  version: 1.0.2
+digest: sha256:89fe729a8b772e56ce0900832e53877d75fac481ed99f536266c68cb01cbb2df
+generated: "2026-11-02T01:24:40.079642795+04:00"

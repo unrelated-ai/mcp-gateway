@@ -1047,10 +1047,9 @@ async fn oauth_migration_converts_legacy_modes_and_preserves_x_api_key_values() 
         "api_key"
     );
     assert!(!default.try_get::<bool, _>("accept_x_api_key")?);
-    assert!(
-        default
-            .try_get::<Vec<String>, _>("oauth_required_scopes")?
-            .is_empty()
+    assert_eq!(
+        default.try_get::<Vec<String>, _>("oauth_required_scopes")?,
+        Vec::<String>::new()
     );
     Ok(())
 }

@@ -650,7 +650,7 @@ fn resource_collision_urn_is_deterministic_and_parsable() {
 
     let (upstream_id, hash) = super::ids::parse_resource_collision_urn(&urn1).expect("parse urn");
     assert_eq!(upstream_id, "u1");
-    assert!(!hash.is_empty());
+    assert_ne!(hash, "");
 
     // Upstream id is part of the URN.
     let urn_other = resource_collision_urn("u2", original);

@@ -174,7 +174,7 @@ async fn openapi_inspect_authenticates_with_tenant_scoped_secrets() -> anyhow::R
         .error_for_status()?
         .json()
         .await?;
-    assert!(sources["sources"].as_array().context("sources")?.is_empty());
+    assert_eq!(sources["sources"], json!([]));
     drop(shutdown);
     server.await??;
     Ok(())

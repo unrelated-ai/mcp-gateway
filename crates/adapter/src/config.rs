@@ -809,8 +809,8 @@ mod tests {
     fn test_auto_discover_config_default() {
         let config = AutoDiscoverConfig::default();
         assert!(config.is_enabled());
-        assert!(config.include_patterns().is_empty());
-        assert!(config.exclude_patterns().is_empty());
+        assert_eq!(config.include_patterns(), &[] as &[String]);
+        assert_eq!(config.exclude_patterns(), &[] as &[String]);
     }
 
     #[test]

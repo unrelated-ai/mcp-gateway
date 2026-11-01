@@ -32,10 +32,6 @@ updates:
     groups:
       migrator:
         patterns: ["*"]
-    # See deploy/migrator/README.md: 1.84 is affected by GO-2026-6443.
-    ignore:
-      - dependency-name: google.golang.org/grpc
-        versions: ["1.84.x"]
   - package-ecosystem: github-actions
     directory: /
     target-branch: main

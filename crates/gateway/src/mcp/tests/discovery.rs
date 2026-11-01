@@ -164,7 +164,7 @@ async fn stalled_catalog_retains_other_results_and_closes_the_probe_session() ->
     .await?
     .map_err(anyhow::Error::msg)?;
     assert!(!surface.sources[0].ok);
-    assert!(surface.tools.is_empty());
+    assert_eq!(surface.tools, Vec::<rmcp::model::Tool>::new());
     assert_eq!(surface.prompts.len(), 2);
     assert_eq!(surface.resources.len(), 2);
     assert_eq!(surface.resource_templates.len(), 2);
