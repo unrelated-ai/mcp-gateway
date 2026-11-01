@@ -57,7 +57,7 @@ jobs:
           targets: ${{ inputs.target }}
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2.9.2
+        uses: Swatinem/rust-cache@v2.9.3
         with:
           cache-on-failure: true
 

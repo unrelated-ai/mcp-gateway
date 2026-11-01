@@ -357,7 +357,7 @@ async fn initialization_and_discovery_contact_independent_upstreams_concurrently
     )
     .await?
     .unwrap();
-    assert!(initialized.warnings.is_empty());
+    assert_eq!(initialized.warnings, Vec::<String>::new());
     assert_eq!(initialized.bindings.len(), 2);
     let payload = TokenPayloadV1 {
         request_meta: None,

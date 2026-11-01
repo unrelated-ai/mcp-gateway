@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-ARG NODE_IMAGE=node:26.9.0-alpine3.24
+ARG NODE_IMAGE=node:26.13.0-alpine3.24
 FROM ${NODE_IMAGE} AS node-base
 
 FROM node-base AS deps

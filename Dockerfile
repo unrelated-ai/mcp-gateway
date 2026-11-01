@@ -22,11 +22,11 @@
 # -----------------------------------------------------------------------------
 # Stage 1: Build
 # -----------------------------------------------------------------------------
-ARG RUST_VERSION=1.98.1
+ARG RUST_VERSION=1.99.1
 ARG RUST_IMAGE=rust:${RUST_VERSION}-slim-trixie
-ARG NODE_IMAGE=node:26.9.0-alpine3.24
+ARG NODE_IMAGE=node:26.13.0-alpine3.24
 ARG GO_IMAGE=golang:1.27.3-alpine3.24
-ARG ALPINE_IMAGE=alpine:3.24.2
+ARG ALPINE_IMAGE=alpine:3.24.3
 
 FROM ${RUST_IMAGE} AS builder
 
@@ -116,8 +116,14 @@ FROM ${NODE_IMAGE} AS stdio-node
 ARG TARGET=x86_64-unknown-linux-musl
 
 RUN apk add --no-cache ca-certificates && apk upgrade --no-cache
-ARG NPM_VERSION=12.0.2
-RUN npm install --global npm@${NPM_VERSION} && npm cache clean --force
+ARG NPM_VERSION=12.2.1
+ARG UNDICI_VERSION=6.29.1
+RUN npm install --global npm@${NPM_VERSION} && \
+    npm install --prefix /tmp/npm-patch --ignore-scripts --package-lock=false --no-audit --no-fund undici@${UNDICI_VERSION} && \
+    rm -rf /usr/local/lib/node_modules/npm/node_modules/undici && \
+    mv /tmp/npm-patch/node_modules/undici /usr/local/lib/node_modules/npm/node_modules/undici && \
+    rm -rf /tmp/npm-patch && \
+    npm cache clean --force
 RUN mkdir -p /config
 
 WORKDIR /app
