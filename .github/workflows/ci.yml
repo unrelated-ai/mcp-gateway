@@ -25,7 +25,7 @@ jobs:
         uses: ./.github/actions/setup-rust
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2.9.2
+        uses: Swatinem/rust-cache@v2.9.3
         with:
           cache-on-failure: true
 
@@ -76,7 +76,7 @@ jobs:
         uses: ./.github/actions/setup-rust
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2.9.2
+        uses: Swatinem/rust-cache@v2.9.3
 
       - name: Install UI dependencies
         working-directory: ui
