@@ -175,7 +175,7 @@ jobs:
           subject-path: dist/*.tar.gz
 
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v3.0.3
+        uses: softprops/action-gh-release@v3.0.4
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
