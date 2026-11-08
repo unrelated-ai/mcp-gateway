@@ -30,8 +30,8 @@ jsonschema = { version = "0.60.2", default-features = false }
 jsonwebtoken = "11.1.0"
 k8s-openapi = "0.28.0"
 keyring = "4.2.0"
-kube = { version = "4.2.0", default-features = false }
-kube-runtime = "4.2.0"
+kube = { version = "5.0.0", default-features = false }
+kube-runtime = "5.0.0"
 mime = "0.3.17"
 openapiv3 = "2.2.0"
 owo-colors = "4.4.0"
