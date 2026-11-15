@@ -14,26 +14,26 @@
     "typecheck": "next typegen && tsc --noEmit"
   },
   "dependencies": {
-    "@hookform/resolvers": "^7.0.1",
-    "@tanstack/react-query": "^5.105.1",
-    "next": "^16.4.3",
+    "@hookform/resolvers": "^7.0.6",
+    "@tanstack/react-query": "^5.107.1",
+    "next": "^16.4.6",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "react-hook-form": "^7.91.0",
+    "react-hook-form": "^7.92.0",
     "zod": "^4.6.7",
-    "zustand": "^5.0.16"
+    "zustand": "^5.1.0"
   },
   "devDependencies": {
     "@eslint/compat": "^2.1.1",
-    "@playwright/test": "^1.64.1",
-    "@tailwindcss/postcss": "^4.3.3",
+    "@playwright/test": "^1.65.0",
+    "@tailwindcss/postcss": "^4.3.5",
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@typescript/native": "npm:typescript@^7.0.2",
     "eslint": "^9.39.5",
-    "eslint-config-next": "^16.4.3",
-    "prettier": "^3.9.10",
+    "eslint-config-next": "^16.4.6",
+    "prettier": "^3.10.1",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
     "typescript": "npm:@typescript/typescript6@^6.0.2"
