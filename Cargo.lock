@@ -5128,7 +5128,7 @@ dependencies = [
 
 [[package]]
 name = "unrelated-cli"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5164,7 +5164,7 @@ dependencies = [
 
 [[package]]
 name = "unrelated-gateway-admin"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5212,7 +5212,7 @@ dependencies = [
 
 [[package]]
 name = "unrelated-mcp-adapter"
-version = "1.0.3"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5247,7 +5247,7 @@ dependencies = [
 
 [[package]]
 name = "unrelated-mcp-gateway"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5297,7 +5297,7 @@ dependencies = [
 
 [[package]]
 name = "unrelated-mcp-gateway-operator"
-version = "1.0.2"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "bollard",

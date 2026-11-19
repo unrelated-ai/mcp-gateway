@@ -1,5 +1,12 @@
 # Changelog
 
+## Gateway, Adapter, and Web UI 1.1.0
+
+- The Adapter and compact CLI proxy support opt-in MCP 2026-07-28 discovery, continuations, tasks, and subscriptions. Legacy initialization remains the default.
+- Native subscriptions stay open after acknowledgement, catalog reads pick up changes without an active listener, and task handles track the upstream expiry. Each protocol resolves naming collisions within its own catalog.
+- The Kubernetes operator now requires Kubernetes 1.33 or later. The standalone operator chart and operator-enabled stack enforce that minimum.
+- Updated Rust, UI, and migrator dependencies, including RMCP 3.11.0, SQLx 0.9.1, and Next.js 16.4.6. The updated SQLite and RSA dependencies clear their RustSec advisories.
+
 ## Gateway 1.0.2, Web UI 1.0.2, and Adapter 1.0.3
 
 - Updated RMCP to `3.8.0` and refreshed dependencies and toolchains.
