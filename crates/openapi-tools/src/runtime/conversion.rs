@@ -216,8 +216,7 @@ pub(super) fn match_response_override(
                     op.path,
                     op.operation_id
                         .as_deref()
-                        .map(|id| format!(" (operationId: {id})"))
-                        .unwrap_or_default(),
+                        .map_or_default(|id| format!(" (operationId: {id})")),
                 )));
             }
             matched = Some(idx);

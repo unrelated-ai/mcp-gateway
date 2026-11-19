@@ -4,7 +4,6 @@ use crate::aggregator::Aggregator;
 use crate::backend::BackendState;
 use crate::supervisor::BackendManager;
 use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
-use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::{
@@ -12,6 +11,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 use std::time::Instant;
+use time::OffsetDateTime;
 
 /// Shared application state.
 pub struct AppState {
@@ -26,8 +26,23 @@ pub struct AppState {
 }
 
 /// Create the HTTP router with all endpoints.
-pub fn create_router(state: Arc<AppState>) -> Router {
-    Router::new()
+pub fn create_router(
+    state: Arc<AppState>,
+    mcp: rmcp::transport::StreamableHttpService<
+        crate::mcp_server::AdapterMcpServer,
+        crate::session_manager::AdapterSessionManager,
+    >,
+    modern_protocol: bool,
+) -> Router {
+    let body_limit = mcp.config.max_request_body_bytes;
+    let mut mcp_routes = Router::new().nest_service("/mcp", mcp);
+    if modern_protocol {
+        mcp_routes = mcp_routes.layer(axum::middleware::from_fn_with_state(
+            body_limit,
+            preserve_native_subscription,
+        ));
+    }
+    let app = Router::new()
         // Health endpoints
         .route("/health", get(health))
         .route("/health/any", get(health_any))
@@ -38,7 +53,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/status", get(status))
         .route("/map", get(map))
         // State
-        .with_state(state)
+        .with_state(state.clone())
+        .merge(mcp_routes);
+    with_request_counting(with_optional_bearer_auth(app, state.clone()), state)
 }
 
 /// Attach request counting middleware (total + failed).
@@ -262,8 +279,11 @@ struct ServerStatusInfo {
     spec_url: Option<String>,
     tool_count: usize,
     restarts: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    last_restart: Option<DateTime<Utc>>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        with = "time::serde::rfc3339::option"
+    )]
+    last_restart: Option<OffsetDateTime>,
 }
 
 #[derive(Serialize)]
@@ -442,4 +462,95 @@ async fn map(State(state): State<Arc<AppState>>) -> Json<MapResponse> {
         prompts,
         servers,
     })
+}
+
+async fn preserve_native_subscription(
+    State(body_limit): State<usize>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::{
+        body::{Body, to_bytes},
+        http::header::CONTENT_LENGTH,
+    };
+    if request.method() != axum::http::Method::POST
+        || request
+            .headers()
+            .get("mcp-method")
+            .is_none_or(|value| value != "subscriptions/listen")
+        || request
+            .headers()
+            .get("mcp-protocol-version")
+            .is_none_or(|value| value != unrelated_mcp_support::headers::VERSION)
+    {
+        return next.run(request).await;
+    }
+    let (mut parts, body) = request.into_parts();
+    let Ok(bytes) = to_bytes(body, body_limit).await else {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    };
+    let body = if let Ok(mut message) = serde_json::from_slice::<serde_json::Value>(&bytes)
+        && message["method"] == "subscriptions/listen"
+        && message["params"]["_meta"][unrelated_mcp_support::headers::VERSION_META] == "2026-07-28"
+    {
+        if let Err(error) =
+            unrelated_mcp_support::headers::validate_request_headers(&parts.headers, &message, None)
+        {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"jsonrpc":"2.0","id":message["id"],"error":{"code":-32020,"message":error}}))).into_response();
+        }
+        unrelated_mcp_support::native::preserve_subscription(&mut message);
+        parts.headers.insert(
+            "mcp-method",
+            axum::http::HeaderValue::from_static(unrelated_mcp_support::native::LISTEN_METHOD),
+        );
+        parts.headers.remove(CONTENT_LENGTH);
+        Body::from(message.to_string())
+    } else {
+        Body::from(bytes)
+    };
+    next.run(axum::http::Request::from_parts(parts, body)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn only_native_listens_are_buffered_at_the_configured_limit() -> anyhow::Result<()> {
+        let app = Router::new()
+            .route("/mcp", axum::routing::post(|body: String| async { body }))
+            .layer(axum::middleware::from_fn_with_state(
+                1_usize,
+                preserve_native_subscription,
+            ));
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+        let url = format!("http://{}/mcp", listener.local_addr()?);
+        let server = tokio::spawn(axum::serve(listener, app).into_future());
+        let client = reqwest::Client::new();
+        let request = || client.post(&url).body("payload larger than one byte");
+        let ordinary = request()
+            .header("mcp-method", "tools/call")
+            .header(
+                "mcp-protocol-version",
+                unrelated_mcp_support::headers::VERSION,
+            )
+            .send()
+            .await?;
+        assert_eq!(
+            ordinary.error_for_status()?.text().await?,
+            "payload larger than one byte"
+        );
+        assert_eq!(request().send().await?.status(), StatusCode::OK);
+        let listen = request()
+            .header("mcp-method", "subscriptions/listen")
+            .header(
+                "mcp-protocol-version",
+                unrelated_mcp_support::headers::VERSION,
+            )
+            .send()
+            .await?;
+        assert_eq!(listen.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        server.abort();
+        Ok(())
+    }
 }

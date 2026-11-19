@@ -173,8 +173,7 @@ impl RouteState {
             state.upstream_state = result["requestState"].as_str().map(str::to_owned);
             state.input_ids = result["inputRequests"]
                 .as_object()
-                .map(|inputs| inputs.keys().cloned().collect())
-                .unwrap_or_default();
+                .map_or_default(|inputs| inputs.keys().cloned().collect());
             result["requestState"] = json!(state.seal(signer)?);
         }
         if let Some(task_id) = result["taskId"].as_str().map(str::to_owned) {

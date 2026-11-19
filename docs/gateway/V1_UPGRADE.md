@@ -67,8 +67,7 @@ authentication. Preserve the backup until the upgrade is accepted.
   automatically and retains unsaved edits until the profile is reloaded.
   API clients that omit the value continue to use unconditional updates.
 - **Native MCP:** `mcp.modernProtocol` is off by default. Enable it only for
-  profiles whose remote sources support MCP `2026-07-28`. Adapter and compact
-  stdio proxy connections continue to use the legacy lifecycle. See
+  profiles whose remote sources support MCP `2026-07-28`. See
   [MCP settings](MCP_SETTINGS.md#native-protocol).
 - **Browser clients:** configure `UNRELATED_GATEWAY_ALLOWED_ORIGINS` for browser
   origins beyond loopback. This does not configure reverse-proxy CORS.

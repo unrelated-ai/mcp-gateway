@@ -86,6 +86,7 @@ mod tests {
 pub struct AdapterMcpServer {
     /// Aggregator for tool routing
     aggregator: Arc<Aggregator>,
+    native: Option<Arc<crate::native::NativeRouter>>,
     /// Backend manager for accessing backends
     backend_manager: Arc<BackendManager>,
     /// Tool transforms (single-tenant scope).
@@ -97,15 +98,126 @@ pub struct AdapterMcpServer {
 }
 
 impl AdapterMcpServer {
+    fn catalog_for(&self, context: &RequestContext<RoleServer>) -> &Aggregator {
+        if crate::native::is_native(context)
+            && let Some(native) = &self.native
+        {
+            return &native.catalog;
+        }
+        &self.aggregator
+    }
+
+    async fn list_catalog(
+        &self,
+        context: &RequestContext<RoleServer>,
+    ) -> Result<&Aggregator, McpError> {
+        if crate::native::is_native(context)
+            && let Some(native) = &self.native
+        {
+            native
+                .refresh(true)
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        }
+        Ok(self.catalog_for(context))
+    }
+
+    fn supports_context(&self, server: &str, context: &RequestContext<RoleServer>) -> bool {
+        self.backend_manager
+            .get_backend(server)
+            .is_some_and(|backend| {
+                backend.backend_type() != crate::backend::BackendType::Stdio
+                    || backend.is_native() == crate::native::is_native(context)
+            })
+    }
+
+    async fn native_call_tool(
+        &self,
+        mut request: CallToolRequestParams,
+        context: &RequestContext<RoleServer>,
+        server: &str,
+        original: String,
+    ) -> Result<CallToolResponse, McpError> {
+        let native = self
+            .native
+            .as_ref()
+            .ok_or_else(|| McpError::invalid_params("native MCP is disabled", None))?;
+        let mut args = request.arguments.take().unwrap_or_default();
+        self.transforms.apply_call_transforms(&original, &mut args);
+        request.arguments = Some(args);
+        request.name = original.into();
+        let response = native
+            .forward(
+                server,
+                rmcp::model::ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(
+                    request,
+                )),
+                context,
+            )
+            .await?;
+        match response {
+            rmcp::model::ServerResult::CallToolResult(result) => {
+                Ok(CallToolResponse::Complete(result))
+            }
+            rmcp::model::ServerResult::InputRequiredResult(result) => {
+                Ok(CallToolResponse::InputRequired(result))
+            }
+            rmcp::model::ServerResult::CreateTaskResult(result) => {
+                Ok(CallToolResponse::Task(result))
+            }
+            _ => Err(McpError::internal_error(
+                "invalid native backend response",
+                None,
+            )),
+        }
+    }
+    async fn native_get_prompt(
+        &self,
+        mut request: GetPromptRequestParams,
+        context: &RequestContext<RoleServer>,
+    ) -> Result<GetPromptResponse, McpError> {
+        let native = self
+            .native
+            .as_ref()
+            .ok_or_else(|| McpError::invalid_params("native MCP is disabled", None))?;
+        let (server, original) = native
+            .catalog
+            .route_prompt(&request.name)
+            .ok_or_else(|| McpError::invalid_params("unknown target", None))?;
+        request.name = original;
+        let response = native
+            .forward(
+                &server,
+                rmcp::model::ClientRequest::GetPromptRequest(rmcp::model::GetPromptRequest::new(
+                    request,
+                )),
+                context,
+            )
+            .await?;
+        match response {
+            rmcp::model::ServerResult::GetPromptResult(result) => {
+                Ok(GetPromptResponse::Complete(result))
+            }
+            rmcp::model::ServerResult::InputRequiredResult(result) => {
+                Ok(GetPromptResponse::InputRequired(result))
+            }
+            _ => Err(McpError::internal_error(
+                "invalid native backend response",
+                None,
+            )),
+        }
+    }
     /// Create a new MCP server with the given aggregator and backend manager.
     pub fn new(
         aggregator: Arc<Aggregator>,
         backend_manager: Arc<BackendManager>,
         transforms: Arc<TransformPipeline>,
         contracts: Arc<ContractNotifier>,
+        native: Option<Arc<crate::native::NativeRouter>>,
     ) -> Self {
         Self {
             aggregator,
+            native,
             backend_manager,
             transforms,
             contracts,
@@ -120,13 +232,25 @@ impl AdapterMcpServer {
 )]
 impl ServerHandler for AdapterMcpServer {
     fn supported_protocol_versions(&self) -> std::borrow::Cow<'static, [ProtocolVersion]> {
-        // Per-session backends and notifications currently implement the legacy lifecycle.
+        if self.native.is_some() {
+            return std::borrow::Cow::Borrowed(ProtocolVersion::KNOWN_VERSIONS);
+        }
         std::borrow::Cow::Borrowed(&[
             ProtocolVersion::V_2024_11_05,
             ProtocolVersion::V_2025_03_26,
             ProtocolVersion::V_2025_06_18,
             ProtocolVersion::V_2025_11_25,
         ])
+    }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        // RMCP uses this lookup for native HTTP routing-header validation.
+        self.native
+            .as_ref()?
+            .catalog
+            .get_all_tools()
+            .get(name)
+            .map(tool_from_mapping)
     }
 
     fn get_info(&self) -> ServerConfig {
@@ -139,12 +263,93 @@ impl ServerHandler for AdapterMcpServer {
             .enable_resources_list_changed()
             .enable_resources_subscribe()
             .enable_prompts()
-            .enable_prompts_list_changed()
-            .build();
+            .enable_prompts_list_changed();
+        let capabilities = if self.native.is_some() {
+            capabilities.enable_tasks().build()
+        } else {
+            capabilities.build()
+        };
         ServerConfig::new(capabilities)
             .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
             .with_server_info(Implementation::new(env!("CARGO_PKG_NAME"), crate::VERSION))
             .with_instructions("MCP adapter that bridges stdio MCP servers and OpenAPI backends.")
+    }
+
+    async fn on_custom_request(
+        &self,
+        request: rmcp::model::CustomRequest,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::CustomResult, McpError> {
+        self.native
+            .as_ref()
+            .ok_or_else(|| {
+                McpError::new(
+                    rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+                    "unsupported method",
+                    None,
+                )
+            })?
+            .listen(request, context)
+            .await
+    }
+
+    async fn get_task(
+        &self,
+        request: rmcp::model::GetTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::GetTaskResult, McpError> {
+        let result: rmcp::model::GetTaskResult = self
+            .native
+            .as_ref()
+            .ok_or_else(|| McpError::invalid_params("native MCP is disabled", None))?
+            .task(
+                rmcp::model::ClientRequest::GetTaskRequest(rmcp::model::GetTaskRequest::new(
+                    request,
+                )),
+                &context,
+            )
+            .await?;
+        Ok(result)
+    }
+
+    async fn update_task(
+        &self,
+        request: rmcp::model::UpdateTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<(), McpError> {
+        let result: rmcp::model::TaskAckResult = self
+            .native
+            .as_ref()
+            .ok_or_else(|| McpError::invalid_params("native MCP is disabled", None))?
+            .task(
+                rmcp::model::ClientRequest::UpdateTaskRequest(rmcp::model::UpdateTaskRequest::new(
+                    request,
+                )),
+                &context,
+            )
+            .await?;
+        let _ = result;
+        Ok(())
+    }
+
+    async fn cancel_task(
+        &self,
+        request: rmcp::model::CancelTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<(), McpError> {
+        let result: rmcp::model::TaskAckResult = self
+            .native
+            .as_ref()
+            .ok_or_else(|| McpError::invalid_params("native MCP is disabled", None))?
+            .task(
+                rmcp::model::ClientRequest::CancelTaskRequest(rmcp::model::CancelTaskRequest::new(
+                    request,
+                )),
+                &context,
+            )
+            .await?;
+        let _ = result;
+        Ok(())
     }
 
     async fn set_level(
@@ -179,7 +384,8 @@ impl ServerHandler for AdapterMcpServer {
         let start = Instant::now();
         let (server_name, rewritten_ref) = match &request.r#ref {
             Reference::Prompt(p) => {
-                let Some((server, original)) = self.aggregator.route_prompt(&p.name) else {
+                let Some((server, original)) = self.catalog_for(&context).route_prompt(&p.name)
+                else {
                     return Err(McpError::invalid_params(
                         format!("Unknown prompt for completion: {}", p.name),
                         None,
@@ -188,7 +394,9 @@ impl ServerHandler for AdapterMcpServer {
                 (server, Reference::for_prompt(original))
             }
             Reference::Resource(r) => {
-                let Some((server, original_uri)) = self.aggregator.route_resource(&r.uri) else {
+                let Some((server, original_uri)) =
+                    self.catalog_for(&context).route_resource(&r.uri)
+                else {
                     return Err(McpError::invalid_params(
                         format!("Unknown resource for completion: {}", r.uri),
                         None,
@@ -214,6 +422,27 @@ impl ServerHandler for AdapterMcpServer {
                     None,
                 )
             })?;
+        if !crate::native::is_native(&context) && backend.is_native() {
+            return Err(McpError::invalid_params(
+                "native backend requires MCP 2026-07-28",
+                None,
+            ));
+        }
+
+        if crate::native::is_native(&context) {
+            return self
+                .native
+                .as_ref()
+                .ok_or_else(|| McpError::invalid_params("native MCP is disabled", None))?
+                .forward(
+                    &server_name,
+                    rmcp::model::ClientRequest::CompleteRequest(rmcp::model::CompleteRequest::new(
+                        request,
+                    )),
+                    &context,
+                )
+                .await;
+        }
 
         let result = backend.complete(session_id, request).await.map_err(|e| {
             McpError::internal_error(format!("completion/complete failed: {e}"), None)
@@ -262,6 +491,12 @@ impl ServerHandler for AdapterMcpServer {
             .ok_or_else(|| {
                 McpError::internal_error(format!("Backend not found: {server_name}"), None)
             })?;
+        if !crate::native::is_native(&context) && backend.is_native() {
+            return Err(McpError::invalid_params(
+                "native backend requires MCP 2026-07-28",
+                None,
+            ));
+        }
 
         let backend_type = backend.backend_type();
         backend
@@ -316,6 +551,12 @@ impl ServerHandler for AdapterMcpServer {
             .ok_or_else(|| {
                 McpError::internal_error(format!("Backend not found: {server_name}"), None)
             })?;
+        if !crate::native::is_native(&context) && backend.is_native() {
+            return Err(McpError::invalid_params(
+                "native backend requires MCP 2026-07-28",
+                None,
+            ));
+        }
 
         let backend_type = backend.backend_type();
         backend
@@ -349,34 +590,9 @@ impl ServerHandler for AdapterMcpServer {
             self.contracts.observe_peer(id, context.peer.clone());
         }
         let start = Instant::now();
-        let tools = self.aggregator.get_all_tools();
+        let tools = self.list_catalog(&context).await?.get_all_tools();
 
-        let tool_list: Vec<Tool> = tools
-            .values()
-            .map(|mapping| {
-                // Build input schema
-                let input_schema = mapping
-                    .input_schema
-                    .clone()
-                    .and_then(|v| v.as_object().cloned())
-                    .map_or_else(|| Arc::new(serde_json::Map::new()), Arc::new);
-
-                let output_schema = mapping
-                    .output_schema
-                    .clone()
-                    .and_then(|v| v.as_object().cloned())
-                    .map(Arc::new);
-
-                let mut tool = Tool::new(
-                    mapping.exposed_name.clone(),
-                    mapping.description.clone().unwrap_or_default(),
-                    input_schema,
-                );
-                tool.output_schema = output_schema;
-                tool.annotations.clone_from(&mapping.annotations);
-                tool
-            })
-            .collect();
+        let tool_list: Vec<Tool> = tools.values().map(tool_from_mapping).collect();
 
         tracing::debug!(
             mcp_session_id = session_id.unwrap_or("<none>"),
@@ -406,7 +622,9 @@ impl ServerHandler for AdapterMcpServer {
         let tool_name = &request.name;
 
         // Route the tool call
-        let Some((server_name, original_tool_name)) = self.aggregator.route_tool(tool_name) else {
+        let Some((server_name, original_tool_name)) =
+            self.catalog_for(&context).route_tool(tool_name)
+        else {
             tracing::debug!(
                 mcp_session_id = session_id.unwrap_or("<none>"),
                 request_id = %context.id,
@@ -435,6 +653,26 @@ impl ServerHandler for AdapterMcpServer {
                 );
                 McpError::internal_error(format!("Backend not found: {server_name}"), None)
             })?;
+        if !crate::native::is_native(&context) && backend.is_native() {
+            return Err(McpError::invalid_params(
+                "native backend requires MCP 2026-07-28",
+                None,
+            ));
+        }
+
+        if crate::native::is_native(&context) {
+            if backend.is_native() {
+                return self
+                    .native_call_tool(request, &context, &server_name, original_tool_name)
+                    .await;
+            }
+            if request.request_state.is_some() || request.input_responses.is_some() {
+                return Err(McpError::invalid_params(
+                    "backend does not support continuations",
+                    None,
+                ));
+            }
+        }
 
         // Get arguments
         let mut arguments = request.arguments.unwrap_or_default();
@@ -484,6 +722,13 @@ impl ServerHandler for AdapterMcpServer {
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, McpError> {
+        if crate::native::is_native(&context) {
+            let native = self
+                .native
+                .as_ref()
+                .ok_or_else(|| McpError::invalid_params("native MCP is disabled", None))?;
+            return native.read_resource(request, &context).await;
+        }
         let session_id = mcp_session_id_from_context(&context);
         if let Some(id) = session_id {
             self.contracts.observe_peer(id, context.peer.clone());
@@ -519,6 +764,12 @@ impl ServerHandler for AdapterMcpServer {
                 );
                 McpError::internal_error(format!("Backend not found: {server_name}"), None)
             })?;
+        if !crate::native::is_native(&context) && backend.is_native() {
+            return Err(McpError::invalid_params(
+                "native backend requires MCP 2026-07-28",
+                None,
+            ));
+        }
 
         let backend_type = backend.backend_type();
         let result = backend
@@ -578,6 +829,9 @@ impl ServerHandler for AdapterMcpServer {
         }
         let mut templates = Vec::new();
         for backend in self.backend_manager.get_all_backends() {
+            if !self.supports_context(backend.name(), &context) {
+                continue;
+            }
             let mut items = backend
                 .list_resource_templates(session_id)
                 .await
@@ -607,7 +861,7 @@ impl ServerHandler for AdapterMcpServer {
             self.contracts.observe_peer(id, context.peer.clone());
         }
         let start = Instant::now();
-        let resources = self.aggregator.get_all_resources();
+        let resources = self.list_catalog(&context).await?.get_all_resources();
 
         let resource_list: Vec<Resource> = resources
             .iter()
@@ -640,6 +894,9 @@ impl ServerHandler for AdapterMcpServer {
         request: GetPromptRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResponse, McpError> {
+        if crate::native::is_native(&context) {
+            return self.native_get_prompt(request, &context).await;
+        }
         let session_id = mcp_session_id_from_context(&context);
         if let Some(id) = session_id {
             self.contracts.observe_peer(id, context.peer.clone());
@@ -676,6 +933,12 @@ impl ServerHandler for AdapterMcpServer {
                 );
                 McpError::internal_error(format!("Backend not found: {server_name}"), None)
             })?;
+        if !crate::native::is_native(&context) && backend.is_native() {
+            return Err(McpError::invalid_params(
+                "native backend requires MCP 2026-07-28",
+                None,
+            ));
+        }
 
         let backend_type = backend.backend_type();
         let result = backend
@@ -718,7 +981,7 @@ impl ServerHandler for AdapterMcpServer {
             self.contracts.observe_peer(id, context.peer.clone());
         }
         let start = Instant::now();
-        let prompts = self.aggregator.get_all_prompts();
+        let prompts = self.list_catalog(&context).await?.get_all_prompts();
 
         let prompt_list: Vec<Prompt> = prompts
             .iter()
@@ -744,4 +1007,24 @@ impl ServerHandler for AdapterMcpServer {
             ..Default::default()
         })
     }
+}
+
+fn tool_from_mapping(mapping: &crate::aggregator::ToolMapping) -> Tool {
+    let input = mapping
+        .input_schema
+        .clone()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let mut tool = Tool::new(
+        mapping.exposed_name.clone(),
+        mapping.description.clone().unwrap_or_default(),
+        Arc::new(input),
+    );
+    tool.output_schema = mapping
+        .output_schema
+        .clone()
+        .and_then(|value| value.as_object().cloned())
+        .map(Arc::new);
+    tool.annotations.clone_from(&mapping.annotations);
+    tool
 }

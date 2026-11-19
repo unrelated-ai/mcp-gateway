@@ -139,9 +139,9 @@ with the same keyring. See [settings and limits](MCP_SETTINGS.md#native-protocol
 
 All remote MCP sources attached to a native profile must implement 2026-07-28.
 There is no automatic downgrade bridge. Gateway-native HTTP/OpenAPI sources can
-participate without a remote protocol lifecycle. The Adapter and compact stdio
-proxy still expose the legacy lifecycle through 2025-11-25; keep their profiles
-on that path. The `unrelated` CLI can opt into native discovery.
+participate without a remote protocol lifecycle. For native Adapter and CLI connections, see
+[Adapter configuration](../adapter/CONFIG.md#native-mcp) and
+[CLI configuration](../unrelated-cli/README.md).
 
 Resource templates preserve RFC 6570 expansion through namespaced URIs and
 Gateway chains. Gateway catalog pagination is bounded to 64 pages and 100,000

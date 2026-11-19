@@ -27,13 +27,14 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 futures = { workspace = true }
 parking_lot = { workspace = true }
-chrono = { workspace = true, features = ["serde"] }
+time = { workspace = true, features = ["formatting", "parsing", "serde"] }
 async-trait = { workspace = true }
 
 # OpenAPI support
 serde-saphyr = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 unrelated-http-tools = { path = "../http-tools" }
 unrelated-openapi-tools = { path = "../openapi-tools" }
 unrelated-tool-transforms = { path = "../tool-transforms" }

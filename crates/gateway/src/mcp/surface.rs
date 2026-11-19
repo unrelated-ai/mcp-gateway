@@ -224,8 +224,7 @@ pub(super) fn merge_tools_for_probe(
                 .input_schema
                 .get("properties")
                 .and_then(serde_json::Value::as_object)
-                .map(|o| o.keys().cloned().collect())
-                .unwrap_or_default();
+                .map_or_default(|o| o.keys().cloned().collect());
 
             // Schema transforms (param renames + default surface).
             let mut schema = serde_json::Value::Object(tool.input_schema.as_ref().clone());

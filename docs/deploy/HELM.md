@@ -1,11 +1,13 @@
 # Helm Deployment Guide (OSS)
 
 This repository now ships Helm packaging for the OSS control/data plane stack.
+When rendering the operator or an operator-enabled stack offline, pass the target
+cluster version to `helm template`, for example `--kube-version 1.33.0`.
 
 ## What Is Covered
 
 - `deploy/helm/unrelated-mcp-gateway-operator/`
-  - Kubernetes operator chart (+ CRD).
+  - Operator chart and CRD for Kubernetes 1.33 or later.
 - `deploy/helm/unrelated-mcp-gateway/`
   - Gateway runtime/admin service chart.
   - Includes a migration Job (dbmate) that runs on install/upgrade.

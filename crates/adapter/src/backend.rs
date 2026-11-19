@@ -6,7 +6,6 @@
 use crate::error::AdapterError;
 use crate::error::Result;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use rmcp::model::{
     CallToolResult, CompleteRequestParams, CompleteResult, GetPromptResult, PromptArgument,
     ReadResourceResult, ToolAnnotations,
@@ -15,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
 use std::time::Duration;
+use time::OffsetDateTime;
 
 pub type JsonObject = serde_json::Map<String, Value>;
 
@@ -127,8 +127,11 @@ pub struct BackendStatus {
     /// Restart count (for stdio backends)
     pub restart_count: u32,
     /// Timestamp of last successful start/restart (for stdio backends)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_restart: Option<DateTime<Utc>>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        with = "time::serde::rfc3339::option"
+    )]
+    pub last_restart: Option<OffsetDateTime>,
 }
 
 /// Common interface for all backend types.
@@ -137,6 +140,21 @@ pub struct BackendStatus {
 /// allowing the aggregator to manage them uniformly.
 #[async_trait]
 pub trait Backend: Send + Sync {
+    async fn native_connection(
+        &self,
+    ) -> std::result::Result<crate::native::Connection, rmcp::ErrorData> {
+        Err(rmcp::ErrorData::invalid_params(
+            "backend does not support native MCP",
+            None,
+        ))
+    }
+
+    fn invalidate_catalog(&self) {}
+
+    fn is_native(&self) -> bool {
+        false
+    }
+
     /// Get the backend's name.
     fn name(&self) -> &str;
 

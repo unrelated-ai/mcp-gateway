@@ -133,7 +133,7 @@ jobs:
         uses: actions/checkout@v7.0.1
 
       - name: Setup Helm
-        uses: azure/setup-helm@v5.0.1
+        uses: azure/setup-helm@v5.1.0
 
       - name: Validate and package deployment files
         id: deployment_meta
@@ -161,7 +161,7 @@ jobs:
           (cd dist && sha256sum *.tgz *.yml *.env > deployment-SHA256SUMS)
 
       - name: Upload deployment packages
-        uses: softprops/action-gh-release@v3.0.3
+        uses: softprops/action-gh-release@v3.0.4
         with:
           tag_name: ${{ github.ref_name }}
           prerelease: ${{ steps.deployment_meta.outputs.prerelease == 'true' }}

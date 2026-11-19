@@ -15,7 +15,6 @@ use crate::contracts::ContractNotifier;
 use crate::contracts::compute_contract_hashes;
 use crate::error::{AdapterError, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
 use rmcp::{
     ClientHandler, RoleClient, ServiceExt,
@@ -35,6 +34,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use time::OffsetDateTime;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::UnboundedSender;
@@ -44,21 +44,49 @@ async fn refresh_lists_from_peer(
     peer: &Peer<RoleClient>,
     backend_name: &str,
 ) -> Result<(Vec<Tool>, Vec<Resource>, Vec<Prompt>)> {
-    let tools = peer.list_all_tools().await.map_err(|e| {
-        AdapterError::Runtime(format!(
-            "Failed to refresh tools from '{backend_name}': {e}"
-        ))
-    })?;
-    let resources = peer.list_all_resources().await.map_err(|e| {
-        AdapterError::Runtime(format!(
-            "Failed to refresh resources from '{backend_name}': {e}",
-        ))
-    })?;
-    let prompts = peer.list_all_prompts().await.map_err(|e| {
-        AdapterError::Runtime(format!(
-            "Failed to refresh prompts from '{backend_name}': {e}"
-        ))
-    })?;
+    let info = peer.peer_info();
+    let native = info
+        .as_ref()
+        .is_some_and(|info| !info.protocol_version.has_initialize());
+    let tools = if native
+        && info
+            .as_ref()
+            .is_none_or(|info| info.capabilities.tools.is_none())
+    {
+        Vec::new()
+    } else {
+        peer.list_all_tools().await.map_err(|e| {
+            AdapterError::Runtime(format!(
+                "Failed to refresh tools from '{backend_name}': {e}"
+            ))
+        })?
+    };
+    let resources = if native
+        && info
+            .as_ref()
+            .is_none_or(|info| info.capabilities.resources.is_none())
+    {
+        Vec::new()
+    } else {
+        peer.list_all_resources().await.map_err(|e| {
+            AdapterError::Runtime(format!(
+                "Failed to refresh resources from '{backend_name}': {e}"
+            ))
+        })?
+    };
+    let prompts = if native
+        && info
+            .as_ref()
+            .is_none_or(|info| info.capabilities.prompts.is_none())
+    {
+        Vec::new()
+    } else {
+        peer.list_all_prompts().await.map_err(|e| {
+            AdapterError::Runtime(format!(
+                "Failed to refresh prompts from '{backend_name}': {e}"
+            ))
+        })?
+    };
     Ok((tools, resources, prompts))
 }
 
@@ -80,7 +108,7 @@ struct StdioServerInfo {
     /// Number of times this server has been restarted
     pub restart_count: u32,
     /// Timestamp of last restart (if any)
-    pub last_restart: Option<DateTime<Utc>>,
+    pub last_restart: Option<OffsetDateTime>,
     /// Number of tools discovered
     pub tool_count: usize,
 }
@@ -138,8 +166,7 @@ impl ProxyClientHandler {
         let downstream_client_info = downstream_peer
             .as_ref()
             .and_then(rmcp::Peer::peer_info)
-            .map(|info| (*info).clone())
-            .unwrap_or_default();
+            .map_or_default(|info| (*info).clone());
         Self {
             backend_name,
             aggregator,
@@ -328,6 +355,7 @@ pub struct StdioBackend {
     name: String,
     /// Server configuration
     config: McpServerConfig,
+    notifications: unrelated_mcp_support::native::NotificationHub,
     /// Stdio lifecycle (process reuse strategy)
     lifecycle: StdioLifecycle,
     /// Server info (state, restarts, etc.)
@@ -400,7 +428,11 @@ struct SessionProcess {
 impl StdioBackend {
     /// Create a new stdio backend.
     pub fn new(name: String, config: McpServerConfig, settings: StdioBackendSettings) -> Self {
-        let lifecycle = config.lifecycle.unwrap_or(settings.stdio_lifecycle);
+        let lifecycle = if config.modern_protocol {
+            StdioLifecycle::Persistent
+        } else {
+            config.lifecycle.unwrap_or(settings.stdio_lifecycle)
+        };
         let info = StdioServerInfo {
             state: BackendState::Dead,
             restart_count: 0,
@@ -411,6 +443,7 @@ impl StdioBackend {
         Self {
             name,
             config,
+            notifications: unrelated_mcp_support::native::NotificationHub::default(),
             lifecycle,
             info: Arc::new(RwLock::new(info)),
             client: Arc::new(Mutex::new(None)),
@@ -518,7 +551,7 @@ impl StdioBackend {
             let mut info = self.info.write();
             info.state = BackendState::Running;
             info.tool_count = tool_count;
-            info.last_restart = Some(Utc::now());
+            info.last_restart = Some(OffsetDateTime::now_utc());
             if is_restart {
                 info.restart_count = info.restart_count.saturating_add(1);
             }
@@ -566,16 +599,7 @@ impl StdioBackend {
             tracing::info!("MCP server '{}' connected (peer_info unavailable)", name);
         }
 
-        // Discover tools/resources/prompts from the server
-        let tools = client.list_all_tools().await.map_err(|e| {
-            AdapterError::Startup(format!("Failed to list tools from '{name}': {e}"))
-        })?;
-        let resources = client.list_all_resources().await.map_err(|e| {
-            AdapterError::Startup(format!("Failed to list resources from '{name}': {e}"))
-        })?;
-        let prompts = client.list_all_prompts().await.map_err(|e| {
-            AdapterError::Startup(format!("Failed to list prompts from '{name}': {e}"))
-        })?;
+        let (tools, resources, prompts) = refresh_lists_from_peer(client.peer(), &name).await?;
 
         Ok((client, tools, resources, prompts))
     }
@@ -611,6 +635,45 @@ impl StdioBackend {
         cmd.args(&config.args);
         for (key, value) in &config.env {
             cmd.env(key, value);
+        }
+
+        if config.modern_protocol {
+            use rmcp::service::{ClientLifecycleMode, ClientServiceExt as _};
+            use std::process::Stdio;
+            use unrelated_mcp_support::native::SubscriptionIo;
+            let mut child = cmd
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .kill_on_drop(true)
+                .spawn()
+                .map_err(|e| AdapterError::Startup(e.to_string()))?;
+            let input = child
+                .stdin
+                .take()
+                .ok_or_else(|| AdapterError::Startup("missing stdin".into()))?;
+            let output = child
+                .stdout
+                .take()
+                .ok_or_else(|| AdapterError::Startup("missing stdout".into()))?;
+            let transport =
+                SubscriptionIo::with_notifications(output, input, self.notifications.clone())
+                    .with_child(child);
+            let client = handler
+                .serve_with_lifecycle(
+                    transport,
+                    ClientLifecycleMode::Discover {
+                        preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                    },
+                )
+                .await
+                .map_err(|e| {
+                    AdapterError::Startup(format!("native discovery failed for '{name}': {e}"))
+                })?;
+            client
+                .set_response_cache_config(rmcp::service::ClientCacheConfig::disabled())
+                .await;
+            return Ok(client);
         }
 
         let transport = TokioChildProcess::new(cmd)
@@ -1112,9 +1175,23 @@ impl StdioBackend {
             return Ok(());
         }
 
-        let peer = self.get_peer().await?;
-
-        let (tools, resources, prompts) = refresh_lists_from_peer(&peer, &self.name).await?;
+        let (tools, resources, prompts) = if self.is_native() {
+            let connection = self
+                .native_connection()
+                .await
+                .map_err(|e| AdapterError::Runtime(e.to_string()))?;
+            timeout(
+                self.call_timeout,
+                refresh_lists_from_peer(&connection.peer, &self.name),
+            )
+            .await
+            .map_err(|_| {
+                AdapterError::Runtime(format!("Catalog refresh timed out for '{}'", self.name))
+            })??
+        } else {
+            let peer = self.get_peer().await?;
+            refresh_lists_from_peer(&peer, &self.name).await?
+        };
 
         *self.tools.write() = tools;
         *self.resources.write() = resources;
@@ -1169,6 +1246,42 @@ impl StdioBackend {
 
 #[async_trait]
 impl Backend for StdioBackend {
+    fn invalidate_catalog(&self) {
+        self.registry_dirty.store(true, Ordering::Release);
+    }
+    fn is_native(&self) -> bool {
+        self.config.modern_protocol
+    }
+
+    async fn native_connection(&self) -> std::result::Result<crate::native::Connection, McpError> {
+        if !self.config.modern_protocol {
+            return Err(McpError::invalid_params(
+                "native MCP requires a native stdio backend",
+                None,
+            ));
+        }
+        let disconnected = self
+            .client
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|client| client.is_closed() || client.peer().is_transport_closed());
+        if disconnected {
+            self.mark_dead("native backend disconnected").await;
+        }
+        let peer = self
+            .get_peer()
+            .await
+            .map_err(|_| McpError::internal_error("native backend unavailable", None))?;
+        let generation = self.info.read().restart_count;
+        Ok(crate::native::Connection {
+            peer,
+            notifications: self.notifications.clone(),
+            generation,
+            timeout: self.call_timeout,
+        })
+    }
+
     fn name(&self) -> &str {
         &self.name
     }
@@ -1364,6 +1477,13 @@ impl Backend for StdioBackend {
                 peer
             }
         };
+        if self.config.modern_protocol
+            && peer
+                .peer_info()
+                .is_none_or(|info| info.capabilities.resources.is_none())
+        {
+            return Ok(Vec::new());
+        }
         let result = timeout(self.call_timeout, peer.list_all_resource_templates()).await;
         if let Some(client) = temporary {
             let _ = client.cancel().await;

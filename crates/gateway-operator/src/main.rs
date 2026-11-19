@@ -19,11 +19,11 @@ use bollard::models::{
 use bollard::query_parameters::{
     CreateContainerOptionsBuilder, ListContainersOptionsBuilder, RemoveContainerOptionsBuilder,
 };
-use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 use futures::StreamExt as _;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::coordination::v1::{Lease, LeaseSpec};
 use k8s_openapi::api::core::v1::Service;
+use k8s_openapi::jiff::Timestamp;
 use kube::api::{DeleteParams, Patch, PatchParams};
 use kube::runtime::controller::{Action, Controller};
 use kube::runtime::watcher;
@@ -732,7 +732,7 @@ struct WorkloadApplySpec<'a> {
 }
 
 fn now_unix_secs_i64() -> i64 {
-    Utc::now().timestamp()
+    Timestamp::now().as_second()
 }
 
 #[cfg(test)]

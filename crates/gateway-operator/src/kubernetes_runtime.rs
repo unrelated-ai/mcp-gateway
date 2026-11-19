@@ -665,7 +665,7 @@ pub(super) fn set_condition(
         },
         reason: Some(reason.into()),
         message: Some(message.into()),
-        last_transition_time: Utc::now().to_rfc3339(),
+        last_transition_time: Timestamp::now().to_string(),
     };
     if let Some(existing) = conditions.iter_mut().find(|c| c.r#type == cond_type) {
         *existing = condition;

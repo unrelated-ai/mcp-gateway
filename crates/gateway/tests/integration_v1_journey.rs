@@ -3,6 +3,8 @@ mod common;
 #[path = "common/journey.rs"]
 #[allow(dead_code)]
 mod journey;
+#[path = "common/native_journey.rs"]
+mod native_journey;
 
 use anyhow::Context as _;
 use journey::{Gateway, GatewayOptions, PROFILE_ID, RemoteServer};

@@ -22,6 +22,27 @@ See:
 - [`config/SERVERS_OPENAPI.md`](config/SERVERS_OPENAPI.md)
 - Legacy import migration notes: [`config/IMPORTS.md`](config/IMPORTS.md)
 
+## Native MCP
+
+```yaml
+adapter:
+  modernProtocol: true
+servers:
+  native:
+    type: stdio
+    modernProtocol: true
+    command: native-mcp-server
+```
+
+Native stdio backends require MCP 2026-07-28 and use persistent processes.
+Discovery, continuations, tasks, and subscriptions use the native protocol;
+legacy backends retain their configured lifecycle. Each protocol resolves name
+collisions within its own catalog. HTTP and OpenAPI tools appear in both.
+Native catalog reads refresh the backend listings, including when there are no
+active subscribers. Continuations expire after 15 minutes. Task handles follow
+the backend's updated TTL, capped at 24 hours from creation.
+Routing state is local to the Adapter instance and expires on restart.
+
 ## CLI + environment variables
 
 Adapter options also support CLI flags and matching environment variables.

@@ -174,7 +174,7 @@ async fn post_mcp(
         .context("POST /mcp status")
 }
 
-async fn read_first_event_stream_json_message(
+pub async fn read_first_event_stream_json_message(
     resp: reqwest::Response,
 ) -> anyhow::Result<serde_json::Value> {
     let mut stream = resp.bytes_stream();

@@ -177,6 +177,7 @@ pub struct AdapterSettings {
     pub openapi_probe_timeout: u64,
     pub restart_policy: RestartPolicy,
     pub stdio_lifecycle: StdioLifecycle,
+    pub modern_protocol: bool,
     pub restart_backoff: RestartBackoff,
 }
 
@@ -199,6 +200,7 @@ impl Default for AdapterSettings {
             openapi_probe_timeout: DEFAULT_OPENAPI_PROBE_TIMEOUT_SECS,
             restart_policy: DEFAULT_RESTART_POLICY,
             stdio_lifecycle: DEFAULT_STDIO_LIFECYCLE,
+            modern_protocol: false,
             restart_backoff: RestartBackoff {
                 min_ms: DEFAULT_RESTART_BACKOFF_MIN_MS,
                 max_ms: DEFAULT_RESTART_BACKOFF_MAX_MS,
@@ -235,6 +237,8 @@ impl AdapterSettings {
 pub struct AdapterSection {
     #[serde(default)]
     pub bind: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_option_bool_env")]
+    pub modern_protocol: Option<bool>,
     /// Optional static bearer token required for all non-health HTTP endpoints (including `/mcp`).
     #[serde(default)]
     pub mcp_bearer_token: Option<String>,
@@ -292,6 +296,9 @@ pub struct ConfigFile {
 pub struct McpServerConfig {
     /// Command to execute
     pub command: String,
+
+    #[serde(default, rename = "modernProtocol")]
+    pub modern_protocol: bool,
 
     /// Arguments to pass to the command
     #[serde(default)]
@@ -442,6 +449,26 @@ impl AdapterConfig {
             )));
         }
 
+        for (name, server) in &servers {
+            if let ServerConfig::Stdio { config } = server
+                && config.modern_protocol
+            {
+                if !adapter.modern_protocol {
+                    return Err(AdapterError::Config(format!(
+                        "{name}: modernProtocol requires adapter.modernProtocol"
+                    )));
+                }
+                if config
+                    .lifecycle
+                    .is_some_and(|mode| mode != StdioLifecycle::Persistent)
+                {
+                    return Err(AdapterError::Config(format!(
+                        "{name}: native stdio requires lifecycle: persistent"
+                    )));
+                }
+            }
+        }
+
         // 6) Clamp tool call timeout to the shared cap (Gateway ↔ Adapter coordination).
         let cap = crate::timeouts::tool_call_timeout_max_secs();
         if adapter.call_timeout == 0 {
@@ -498,6 +525,9 @@ fn load_config_file(path: &std::path::Path) -> Result<ConfigFile> {
 }
 
 fn apply_adapter_section(adapter: &mut AdapterSettings, section: AdapterSection) -> Result<()> {
+    if let Some(value) = section.modern_protocol {
+        adapter.modern_protocol = value;
+    }
     if let Some(bind) = section.bind {
         adapter.bind = expand_env_string(&bind)?;
     }

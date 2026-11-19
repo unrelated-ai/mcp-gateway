@@ -10,11 +10,12 @@ use rmcp::{
         ListToolsResult, ProtocolVersion, ServerCapabilities, ServerConfig, Tool, ToolAnnotations,
     },
     service::{RequestContext, RoleServer},
-    transport::stdio,
+    transport::stdio_pipes,
 };
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::RwLock;
+use unrelated_mcp_support::native::{self, NativeFilter, NativeSubscription, SubscriptionIo};
 
 #[derive(Clone)]
 struct CompactProxy {
@@ -24,6 +25,12 @@ struct CompactProxy {
 }
 
 impl CompactProxy {
+    fn native(&self) -> bool {
+        self.remote
+            .peer_info()
+            .is_some_and(|info| !info.protocol_version.has_initialize())
+    }
+
     async fn refresh_if_changed(&self) -> Result<(), McpError> {
         if self.remote.service().take_tools_changed() {
             let catalog = client::fetch_catalog(&self.remote)
@@ -52,7 +59,9 @@ impl CompactProxy {
 
 impl ServerHandler for CompactProxy {
     fn supported_protocol_versions(&self) -> std::borrow::Cow<'static, [ProtocolVersion]> {
-        // Continuations and subscriptions still require end-to-end proxy support.
+        if self.native() {
+            return std::borrow::Cow::Borrowed(ProtocolVersion::KNOWN_VERSIONS);
+        }
         std::borrow::Cow::Borrowed(&[
             ProtocolVersion::V_2024_11_05,
             ProtocolVersion::V_2025_03_26,
@@ -62,7 +71,15 @@ impl ServerHandler for CompactProxy {
     }
 
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+        let capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_tool_list_changed();
+        let capabilities = if self.native() {
+            capabilities.enable_tasks().build()
+        } else {
+            capabilities.build()
+        };
+        ServerConfig::new(capabilities)
             .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
             .with_server_info(Implementation::new("unrelated", env!("CARGO_PKG_VERSION")))
             .with_instructions(
@@ -83,10 +100,10 @@ impl ServerHandler for CompactProxy {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        mut request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
-        let arguments = request.arguments.unwrap_or_default();
+        let arguments = request.arguments.take().unwrap_or_default();
         match request.name.as_ref() {
             "search_tools" => {
                 self.refresh_if_changed().await?;
@@ -139,6 +156,39 @@ impl ServerHandler for CompactProxy {
                     }
                     None => JsonObject::new(),
                 };
+                if context
+                    .protocol_version()
+                    .is_some_and(|version| !version.has_initialize())
+                {
+                    client::validate_arguments(&tool, &tool_arguments)
+                        .map_err(proxy_invalid_params)?;
+                    request.name = tool.name;
+                    request.arguments = Some(tool_arguments);
+                    let response = native::request(
+                        self.remote.peer(),
+                        rmcp::model::ClientRequest::CallToolRequest(
+                            rmcp::model::CallToolRequest::new(request),
+                        ),
+                        &context,
+                        self.timeout,
+                    )
+                    .await?;
+                    return match response {
+                        rmcp::model::ServerResult::CallToolResult(result) => {
+                            Ok(CallToolResponse::Complete(result))
+                        }
+                        rmcp::model::ServerResult::InputRequiredResult(result) => {
+                            Ok(CallToolResponse::InputRequired(result))
+                        }
+                        rmcp::model::ServerResult::CreateTaskResult(result) => {
+                            Ok(CallToolResponse::Task(result))
+                        }
+                        _ => Err(McpError::internal_error(
+                            "invalid upstream tool response",
+                            None,
+                        )),
+                    };
+                }
                 client::call_tool(&self.remote, &tool, tool_arguments, self.timeout)
                     .await
                     .map(Into::into)
@@ -149,6 +199,149 @@ impl ServerHandler for CompactProxy {
                 None,
             )),
         }
+    }
+
+    async fn get_task(
+        &self,
+        request: rmcp::model::GetTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::GetTaskResult, McpError> {
+        match native::request(
+            self.remote.peer(),
+            rmcp::model::ClientRequest::GetTaskRequest(rmcp::model::GetTaskRequest::new(request)),
+            &context,
+            self.timeout,
+        )
+        .await?
+        {
+            rmcp::model::ServerResult::GetTaskResult(result) => Ok(result),
+            _ => Err(McpError::internal_error(
+                "invalid upstream task response",
+                None,
+            )),
+        }
+    }
+
+    async fn update_task(
+        &self,
+        request: rmcp::model::UpdateTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<(), McpError> {
+        match native::request(
+            self.remote.peer(),
+            rmcp::model::ClientRequest::UpdateTaskRequest(rmcp::model::UpdateTaskRequest::new(
+                request,
+            )),
+            &context,
+            self.timeout,
+        )
+        .await?
+        {
+            rmcp::model::ServerResult::TaskAckResult(_)
+            | rmcp::model::ServerResult::EmptyResult(_) => Ok(()),
+            _ => Err(McpError::internal_error(
+                "invalid upstream task response",
+                None,
+            )),
+        }
+    }
+
+    async fn cancel_task(
+        &self,
+        request: rmcp::model::CancelTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<(), McpError> {
+        match native::request(
+            self.remote.peer(),
+            rmcp::model::ClientRequest::CancelTaskRequest(rmcp::model::CancelTaskRequest::new(
+                request,
+            )),
+            &context,
+            self.timeout,
+        )
+        .await?
+        {
+            rmcp::model::ServerResult::TaskAckResult(_)
+            | rmcp::model::ServerResult::EmptyResult(_) => Ok(()),
+            _ => Err(McpError::internal_error(
+                "invalid upstream task response",
+                None,
+            )),
+        }
+    }
+
+    async fn on_custom_request(
+        &self,
+        request: rmcp::model::CustomRequest,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::CustomResult, McpError> {
+        if request.method != native::LISTEN_METHOD
+            || !self.native()
+            || context
+                .protocol_version()
+                .is_none_or(|version| version.has_initialize())
+        {
+            return Err(McpError::new(
+                rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+                "unsupported method",
+                None,
+            ));
+        }
+        let mut filter =
+            NativeFilter::parse(request.params.unwrap_or_default()["notifications"].clone())?;
+        filter.resource_subscriptions.clear();
+        filter.resources_list_changed = None;
+        filter.prompts_list_changed = None;
+        if !filter.task_ids.is_empty()
+            && context
+                .client_capabilities()
+                .is_none_or(|caps| !caps.supports_tasks())
+        {
+            return Err(McpError::missing_required_client_capability(
+                rmcp::model::ClientCapabilities::builder()
+                    .enable_tasks()
+                    .build(),
+            ));
+        }
+        let mut stream = tokio::select! {
+            () = context.ct.cancelled() => return Err(McpError::internal_error("subscription cancelled", None)),
+            stream = NativeSubscription::open(
+                self.remote.peer(),
+                &self.remote.service().notifications,
+                filter,
+                context.meta.clone(),
+                self.timeout,
+            ) => stream?,
+        };
+        native::send_notification(
+            &context.peer,
+            "notifications/subscriptions/acknowledged",
+            json!({"notifications":stream.accepted}),
+            &context.id,
+        )
+        .await?;
+        loop {
+            let next = tokio::select! {
+                () = context.ct.cancelled() => break,
+                next = stream.next() => next?,
+            };
+            let Some(message) = next else { break };
+            if message["method"] == "notifications/tools/list_changed" {
+                *self.catalog.write().await = client::fetch_catalog(&self.remote)
+                    .await
+                    .map_err(proxy_error)?;
+            }
+            native::send_notification(
+                &context.peer,
+                message["method"].as_str().unwrap_or_default(),
+                message["params"].clone(),
+                &context.id,
+            )
+            .await?;
+        }
+        Ok(rmcp::model::CustomResult(
+            json!({"resultType":"complete","_meta":{"io.modelcontextprotocol/subscriptionId":context.id}}),
+        ))
     }
 }
 
@@ -164,7 +357,8 @@ pub async fn run(
         catalog: Arc::new(RwLock::new(catalog)),
         timeout,
     };
-    let service = proxy.serve(stdio()).await?;
+    let (read, write) = stdio_pipes();
+    let service = proxy.serve(SubscriptionIo::new(read, write)).await?;
     service.waiting().await?;
     Ok(())
 }

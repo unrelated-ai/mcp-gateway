@@ -8,7 +8,6 @@ repository.workspace = true
 description = "Shared OpenAPI->MCP tooling (used by adapter and gateway)"
 
 [dependencies]
-anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
