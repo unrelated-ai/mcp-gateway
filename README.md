@@ -58,10 +58,14 @@ Common uses include:
 - Put authentication, quotas, timeouts, retries, and audit logging in front of MCP tools.
 - Isolate teams or projects without deploying a separate gateway for each one.
 
-## Version 1.0
+## Version 1.1
 
-Version 1.0 includes OAuth resource-server support, the `unrelated` client CLI with
-compact tool discovery, and stateful/sessionless upstream interoperability.
+The Adapter and the `unrelated` CLI proxy now support opt-in MCP 2026-07-28
+discovery, tasks, continuations, and subscriptions. Legacy initialization remains
+the default. The Kubernetes operator requires Kubernetes 1.33 or later.
+
+The Gateway also supports OAuth resource servers, compact tool discovery, and
+stateful and sessionless upstreams.
 
 > **Upgrading from 0.x:** The [v1 migration guide](docs/gateway/V1_UPGRADE.md)
 > covers configuration changes, database migration, and rollback for existing installations.
