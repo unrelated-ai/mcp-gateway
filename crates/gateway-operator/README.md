@@ -7,6 +7,8 @@ the repository's local Compose stack.
 
 ### Kubernetes mode
 
+The operator requires Kubernetes 1.33 or later.
+
 - Ensures CRD `mcpservers.gateway.unrelated.ai` is installed.
 - Reconciles each `McpServer` into:
   - a Kubernetes `Deployment`

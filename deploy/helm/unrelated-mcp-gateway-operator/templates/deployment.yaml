@@ -1,3 +1,7 @@
+{{- /* Helm checks kubeVersion only on the top-level chart. */ -}}
+{{- if not (semverCompare .Chart.KubeVersion .Capabilities.KubeVersion.Version) -}}
+{{- fail (printf "Gateway operator requires Kubernetes %s (cluster version %s)" .Chart.KubeVersion .Capabilities.KubeVersion.Version) -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

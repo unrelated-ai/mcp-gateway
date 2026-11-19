@@ -13,7 +13,7 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
 hostname = { workspace = true }
-k8s-openapi = { workspace = true, features = ["v1_32"] }
+k8s-openapi = { workspace = true, features = ["v1_33"] }
 kube = { workspace = true, features = ["runtime", "derive", "client", "rustls-tls", "aws-lc-rs"] }
 kube-runtime = { workspace = true }
 schemars = { workspace = true }
