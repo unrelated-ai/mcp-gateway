@@ -153,7 +153,7 @@ async fn record_control_plane_auth_event(
             meta: serde_json::json!({
                 "auth_kind": principal.map_or("none", |p| p.auth_kind),
                 "required_scopes": required_scopes,
-                "granted_scopes": principal.map(|p| p.scopes.clone()).unwrap_or_default(),
+                "granted_scopes": principal.map_or_default(|p| p.scopes.clone()),
             }),
         })
         .await;

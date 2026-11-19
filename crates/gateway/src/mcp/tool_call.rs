@@ -1020,10 +1020,7 @@ fn should_retry_upstream_error(
     let Some(category) = upstream_error_category(e) else {
         return false;
     };
-    if policy.is_some_and(|p| retry_policy_disallows(p, category)) {
-        return false;
-    }
-    true
+    !policy.is_some_and(|p| retry_policy_disallows(p, category))
 }
 
 pub(super) fn validate_tool_arguments(

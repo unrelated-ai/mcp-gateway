@@ -21,9 +21,8 @@ jobs:
         uses: ./.github/actions/setup-rust
 
       - name: Cargo audit
-        uses: actions-rust-lang/audit@v1
+        uses: actions-rust-lang/audit@v1.2.7
         with:
           # Keep PR checks non-invasive: no automatic GitHub issue creation.
           createIssues: false
-          # Use repo config (.cargo/audit.toml) and Cargo.lock by default.
           TOKEN: ${{ github.token }}

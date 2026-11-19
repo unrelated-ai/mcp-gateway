@@ -60,7 +60,7 @@ pub(super) async fn try_acquire_or_renew_lease(
     cfg: &LeaderElectionConfig,
 ) -> anyhow::Result<bool> {
     let leases: Api<Lease> = Api::namespaced(client, &cfg.lease_namespace);
-    let now = Utc::now();
+    let now = Timestamp::now();
     let mut allow_takeover = true;
     if let Some(existing) = leases.get_opt(&cfg.lease_name).await?
         && let Some(spec) = existing.spec.as_ref()
@@ -84,7 +84,7 @@ pub(super) async fn try_acquire_or_renew_lease(
         "spec": {
             "holderIdentity": cfg.holder_identity,
             "leaseDurationSeconds": cfg.lease_duration_secs,
-            "renewTime": now.to_rfc3339_opts(SecondsFormat::Micros, false),
+            "renewTime": k8s_openapi::apimachinery::pkg::apis::meta::v1::MicroTime(now),
         }
     }));
     leases
@@ -97,7 +97,7 @@ pub(super) async fn try_acquire_or_renew_lease(
     Ok(true)
 }
 
-pub(super) fn lease_expired(spec: &LeaseSpec, now: DateTime<Utc>) -> bool {
+pub(super) fn lease_expired(spec: &LeaseSpec, now: Timestamp) -> bool {
     let Some(renew_time) = spec.renew_time.as_ref() else {
         return true;
     };
@@ -105,8 +105,27 @@ pub(super) fn lease_expired(spec: &LeaseSpec, now: DateTime<Utc>) -> bool {
     if duration <= 0 {
         return true;
     }
-    let Ok(renew_at) = DateTime::parse_from_rfc3339(&renew_time.0.to_string()) else {
-        return true;
-    };
-    now > renew_at.with_timezone(&Utc) + ChronoDuration::seconds(duration)
+    now.duration_since(renew_time.0) > k8s_openapi::jiff::SignedDuration::from_secs(duration)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k8s_openapi::{apimachinery::pkg::apis::meta::v1::MicroTime, jiff::SignedDuration};
+
+    #[test]
+    fn lease_expires_only_after_its_full_duration() {
+        let renewed: Timestamp = "2026-10-01T23:59:59.123456Z".parse().unwrap();
+        let spec = LeaseSpec {
+            renew_time: Some(MicroTime(renewed)),
+            lease_duration_seconds: Some(1),
+            ..LeaseSpec::default()
+        };
+        let deadline = renewed + SignedDuration::from_secs(1);
+        assert!(!lease_expired(&spec, deadline));
+        assert!(lease_expired(
+            &spec,
+            deadline + SignedDuration::from_micros(1)
+        ));
+    }
 }

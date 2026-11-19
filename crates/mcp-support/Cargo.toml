@@ -9,6 +9,11 @@ repository.workspace = true
 [dependencies]
 base64.workspace = true
 http.workspace = true
-rmcp.workspace = true
+rmcp = { workspace = true, features = ["client", "server", "transport-io", "transport-streamable-http-client"] }
+futures.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+sse-stream.workspace = true
+tokio = { workspace = true, features = ["io-util", "sync", "rt", "process", "time"] }
+tokio-util = { workspace = true, features = ["codec"] }
 unrelated-env = { path = "../env" }

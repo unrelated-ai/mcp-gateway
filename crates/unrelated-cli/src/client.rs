@@ -30,11 +30,13 @@ use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::TcpListener,
 };
+use unrelated_mcp_support::native::{NotificationHub, SubscriptionHttpClient};
 use url::Url;
 
 #[derive(Clone, Default)]
 pub struct GatewayClientHandler {
     tools_changed: Arc<AtomicBool>,
+    pub notifications: NotificationHub,
 }
 
 impl GatewayClientHandler {
@@ -90,11 +92,16 @@ async fn connect_with_auth(
         Ok(value) => bail!("unsupported UNRELATED_MCP_PROTOCOL: {value}"),
     };
     let handler = GatewayClientHandler::default();
-    let http = reqwest::Client::builder()
-        .timeout(timeout)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .context("failed to build HTTP client")?;
+    let http = || {
+        reqwest::Client::builder()
+            .connect_timeout(timeout)
+            .redirect(reqwest::redirect::Policy::none())
+    };
+    let http = SubscriptionHttpClient {
+        ordinary: http().timeout(timeout).build()?,
+        subscriptions: http().build()?,
+        notifications: handler.notifications.clone(),
+    };
     let config = StreamableHttpClientTransportConfig::with_uri(context.mcp_url.clone())
         .reinit_on_expired_session(true);
 

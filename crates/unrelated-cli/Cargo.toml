@@ -23,6 +23,7 @@ sha2 = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 toml = { workspace = true }
 url = { workspace = true }
+unrelated-mcp-support = { path = "../mcp-support" }
 webbrowser = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -32,6 +33,7 @@ keyring = { workspace = true }
 keyring = { workspace = true }
 
 [dev-dependencies]
+async-stream = { workspace = true }
 axum = { workspace = true }
 tempfile = { workspace = true }
 tokio-util = { workspace = true }

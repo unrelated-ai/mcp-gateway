@@ -36,6 +36,12 @@ adapter:
 
 ## Fields
 
+### `modernProtocol`
+
+- **Type**: boolean
+- **Default**: `false`
+- Enables MCP 2026-07-28 alongside legacy protocols.
+
 ### `bind`
 
 - **Type**: string (`ip:port`)

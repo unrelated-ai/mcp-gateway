@@ -8,14 +8,12 @@ repository.workspace = true
 description = "Shared HTTP tool DSL + runtime for Unrelated MCP (used by adapter and gateway)"
 
 [dependencies]
-anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 unrelated-env = { path = "../env" }
 reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 url = { workspace = true }
-parking_lot = { workspace = true }
 openapiv3 = { workspace = true }
 rmcp = { workspace = true }
 tokio = { workspace = true, features = ["net"] }

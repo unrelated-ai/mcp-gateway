@@ -489,6 +489,7 @@ crd-sync-check:
 	}
 
 ## Validate Helm charts (deps + lint + render smoke)
+HELM_KUBE_VERSION ?= 1.33.0
 helm-validate:
 	@command -v helm >/dev/null 2>&1 || { echo "ERROR: helm is not installed"; exit 1; }
 	helm dependency build deploy/helm/unrelated-mcp-postgres
@@ -496,18 +497,20 @@ helm-validate:
 	helm dependency build deploy/helm/unrelated-mcp-gateway
 	helm dependency build deploy/helm/unrelated-mcp-gateway-stack
 	helm lint deploy/helm/unrelated-mcp-postgres
-	helm lint deploy/helm/unrelated-mcp-gateway-operator
+	helm lint --kube-version $(HELM_KUBE_VERSION) deploy/helm/unrelated-mcp-gateway-operator
 	helm lint deploy/helm/unrelated-mcp-gateway --set database.url='postgres://postgres:postgres@db:5432/gateway?sslmode=disable' --set auth.adminToken.value=dev-admin-token --set session.secret.value=dev-session-secret --set session.secretKeys.value=dev-secret-keys
 	helm lint deploy/helm/unrelated-mcp-gateway-ui --set gateway.dataBase=http://localhost:27100
-	helm lint deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml
-	helm lint deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token
+	helm lint --kube-version $(HELM_KUBE_VERSION) deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml
+	helm lint --kube-version $(HELM_KUBE_VERSION) deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml -f deploy/helm/unrelated-mcp-gateway-stack/values-kind-local.yaml
+	helm lint --kube-version $(HELM_KUBE_VERSION) deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token
 	helm template unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway --set database.url='postgres://postgres:postgres@db:5432/gateway?sslmode=disable' --set auth.adminToken.value=dev-admin-token --set session.secret.value=dev-session-secret --set session.secretKeys.value=dev-secret-keys >/dev/null
 	helm template unrelated-mcp-gateway-ui deploy/helm/unrelated-mcp-gateway-ui --set gateway.dataBase=http://localhost:27100 >/dev/null
-	helm template unrelated-mcp-gateway-stack deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml >/dev/null
-	helm template unrelated-mcp-gateway-stack deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token >/dev/null
+	helm template --kube-version $(HELM_KUBE_VERSION) unrelated-mcp-gateway-stack deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml >/dev/null
+	helm template --kube-version $(HELM_KUBE_VERSION) unrelated-mcp-gateway-stack deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml -f deploy/helm/unrelated-mcp-gateway-stack/values-kind-local.yaml >/dev/null
+	helm template --kube-version $(HELM_KUBE_VERSION) unrelated-mcp-gateway-stack deploy/helm/unrelated-mcp-gateway-stack -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token >/dev/null
 	# Render upgrade-only branches without contacting the current Kubernetes context.
-	helm template unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway-stack --namespace mcp-gateway --is-upgrade -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml >/dev/null
-	helm template unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway-stack --namespace mcp-gateway --is-upgrade -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token >/dev/null
+	helm template --kube-version $(HELM_KUBE_VERSION) unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway-stack --namespace mcp-gateway --is-upgrade -f deploy/helm/unrelated-mcp-gateway-stack/values-dev.yaml >/dev/null
+	helm template --kube-version $(HELM_KUBE_VERSION) unrelated-mcp-gateway deploy/helm/unrelated-mcp-gateway-stack --namespace mcp-gateway --is-upgrade -f deploy/helm/unrelated-mcp-gateway-stack/values-prod.yaml --set gatewayui.gateway.dataBase=https://gateway.example.com --set operator.gateway.bearerToken=lint-token >/dev/null
 
 ## Validate Helm charts if helm exists (skip otherwise)
 helm-validate-optional:

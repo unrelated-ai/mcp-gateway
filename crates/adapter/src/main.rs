@@ -10,6 +10,7 @@ mod error;
 mod http;
 mod http_backend;
 mod mcp_server;
+mod native;
 mod openapi;
 mod session_manager;
 mod supervisor;
@@ -17,7 +18,7 @@ use unrelated_mcp_support::timeouts;
 
 use crate::aggregator::Aggregator;
 use crate::config::{AdapterConfig, CliArgs, ServerConfig};
-use crate::http::{AppState, create_router, with_optional_bearer_auth, with_request_counting};
+use crate::http::{AppState, create_router};
 use crate::mcp_server::AdapterMcpServer;
 use crate::openapi::OpenApiBackend;
 use crate::session_manager::AdapterSessionManager;
@@ -75,6 +76,13 @@ async fn main() -> anyhow::Result<()> {
 
     let contract_notifier = Arc::new(contracts::ContractNotifier::default());
 
+    let native = config.adapter.modern_protocol.then(|| {
+        Arc::new(native::NativeRouter::new(
+            backend_manager.clone(),
+            transforms.clone(),
+        ))
+    });
+
     // Registry refresh channel (used by stdio backends to trigger a rebuild after restart).
     let (refresh_tx, refresh_rx) = mpsc::unbounded_channel::<String>();
     spawn_registry_refresh_loop(
@@ -82,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
         aggregator.clone(),
         transforms.clone(),
         contract_notifier.clone(),
+        native.clone(),
         refresh_rx,
     );
 
@@ -110,12 +119,17 @@ async fn main() -> anyhow::Result<()> {
             contract_notifier.as_ref(),
         )
         .await?;
+        if let Some(native) = &native {
+            native.refresh(false).await?;
+        }
     }
 
     // Create app state for HTTP endpoints
     let state = Arc::new(AppState {
         backend_manager: backend_manager.clone(),
-        aggregator: aggregator.clone(),
+        aggregator: native
+            .as_ref()
+            .map_or_else(|| aggregator.clone(), |router| router.inventory.clone()),
         start_time: Instant::now(),
         version: VERSION,
         mcp_bearer_token: config.adapter.mcp_bearer_token.clone(),
@@ -141,16 +155,14 @@ async fn main() -> anyhow::Result<()> {
         transforms.clone(),
         contract_notifier.clone(),
         &ct,
+        native,
     );
 
     // Build combined router: auxiliary endpoints + MCP endpoint.
-    let http_router = create_router(state.clone());
-    let app = with_request_counting(
-        with_optional_bearer_auth(
-            http_router.nest_service("/mcp", streamable_http_service),
-            state.clone(),
-        ),
-        state.clone(),
+    let app = create_router(
+        state,
+        streamable_http_service,
+        config.adapter.modern_protocol,
     );
 
     tracing::info!("Starting HTTP server (MCP + aux) on {}", addr);
@@ -180,6 +192,7 @@ fn build_streamable_http_service(
     transforms: Arc<TransformPipeline>,
     contract_notifier: Arc<contracts::ContractNotifier>,
     ct: &CancellationToken,
+    native: Option<Arc<native::NativeRouter>>,
 ) -> StreamableHttpService<AdapterMcpServer, AdapterSessionManager> {
     let session_manager = Arc::new(AdapterSessionManager::new(
         backend_manager.clone(),
@@ -193,6 +206,7 @@ fn build_streamable_http_service(
                 backend_manager.clone(),
                 transforms.clone(),
                 contract_notifier.clone(),
+                native.clone(),
             ))
         },
         session_manager,
@@ -215,6 +229,7 @@ fn spawn_registry_refresh_loop(
     aggregator: Arc<Aggregator>,
     transforms: Arc<TransformPipeline>,
     contract_notifier: Arc<contracts::ContractNotifier>,
+    native: Option<Arc<native::NativeRouter>>,
     mut refresh_rx: mpsc::UnboundedReceiver<String>,
 ) {
     // Background registry refresh loop (best-effort).
@@ -231,6 +246,11 @@ fn spawn_registry_refresh_loop(
                 restarted
             );
 
+            if let Some(native) = &native
+                && let Err(error) = native.refresh(false).await
+            {
+                tracing::warn!(%error, "Failed to refresh native registry after backend change");
+            }
             if let Err(e) = refresh_aggregator(
                 &aggregator,
                 &backend_manager,
@@ -309,39 +329,7 @@ async fn refresh_aggregator(
     transforms: &TransformPipeline,
     contract_notifier: &contracts::ContractNotifier,
 ) -> crate::error::Result<()> {
-    let snapshot = Aggregator::new();
-
-    for backend in backend_manager.get_all_backends() {
-        let tools = backend.list_tools().await?;
-        tracing::debug!(
-            "Refreshing registry: backend '{}' ({}) has {} tool(s)",
-            backend.name(),
-            backend.backend_type(),
-            tools.len()
-        );
-        let tool_infos: Vec<crate::aggregator::ToolInfo> = tools
-            .into_iter()
-            .map(|t| {
-                let mut schema = t.input_schema;
-                transforms.apply_schema_transforms(&t.original_name, &mut schema);
-
-                crate::aggregator::ToolInfo {
-                    name: t.original_name,
-                    description: t.description,
-                    input_schema: Some(schema),
-                    output_schema: t.output_schema,
-                    annotations: t.annotations,
-                }
-            })
-            .collect();
-        snapshot.register_tools(backend.name(), tool_infos, transforms);
-
-        let resources = backend.list_resources().await?;
-        snapshot.register_resources(backend.name(), resources);
-
-        let prompts = backend.list_prompts().await?;
-        snapshot.register_prompts(backend.name(), prompts);
-    }
+    let snapshot = build_catalog(backend_manager, transforms, CatalogScope::Legacy, false).await?;
 
     // Best-effort: compute exposed surfaces from the new snapshot and notify if they changed.
     // This keeps Adapter sessions in sync when the registry refreshes after backend restarts.
@@ -401,6 +389,70 @@ async fn refresh_aggregator(
 
     aggregator.overwrite_from(&snapshot);
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum CatalogScope {
+    Legacy,
+    Native,
+    Inventory,
+}
+
+/// Resolve collisions only among the backends visible in this catalog.
+async fn build_catalog(
+    backend_manager: &BackendManager,
+    transforms: &TransformPipeline,
+    scope: CatalogScope,
+    revalidate: bool,
+) -> crate::error::Result<Aggregator> {
+    let snapshot = Aggregator::new();
+
+    for backend in backend_manager.get_all_backends() {
+        let stdio = backend.backend_type() == backend::BackendType::Stdio;
+        if stdio
+            && match scope {
+                CatalogScope::Legacy => backend.is_native(),
+                CatalogScope::Native => !backend.is_native(),
+                CatalogScope::Inventory => false,
+            }
+        {
+            continue;
+        }
+        if revalidate && backend.is_native() {
+            backend.invalidate_catalog();
+        }
+        let tools = backend.list_tools().await?;
+        tracing::debug!(
+            "Refreshing registry: backend '{}' ({}) has {} tool(s)",
+            backend.name(),
+            backend.backend_type(),
+            tools.len()
+        );
+        let tool_infos: Vec<crate::aggregator::ToolInfo> = tools
+            .into_iter()
+            .map(|t| {
+                let mut schema = t.input_schema;
+                transforms.apply_schema_transforms(&t.original_name, &mut schema);
+
+                crate::aggregator::ToolInfo {
+                    name: t.original_name,
+                    description: t.description,
+                    input_schema: Some(schema),
+                    output_schema: t.output_schema,
+                    annotations: t.annotations,
+                }
+            })
+            .collect();
+        snapshot.register_tools(backend.name(), tool_infos, transforms);
+
+        let resources = backend.list_resources().await?;
+        snapshot.register_resources(backend.name(), resources);
+
+        let prompts = backend.list_prompts().await?;
+        snapshot.register_prompts(backend.name(), prompts);
+    }
+
+    Ok(snapshot)
 }
 
 /// Initialize logging based on the log level string.

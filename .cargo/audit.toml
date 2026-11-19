@@ -1,7 +1,0 @@
-[advisories]
-# RUSTSEC-2023-0071 affects *private-key* RSA operations via non-constant-time behavior.
-# In this repo, `rsa` is a dev-dependency used only for ephemeral test-key generation
-# in integration tests (not in the gateway runtime). The advisory currently has no
-# patched release; we track it here so audits stay actionable.
-ignore = ["RUSTSEC-2023-0071"]
-

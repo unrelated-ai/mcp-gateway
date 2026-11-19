@@ -21,7 +21,7 @@ jobs:
         uses: ./.github/actions/setup-rust
 
       - name: Install cargo-deny
-        run: cargo install cargo-deny --locked --version 0.20.2
+        run: cargo install cargo-deny --locked --version 0.22.0
 
       - name: Cargo deny
         run: cargo deny check advisories

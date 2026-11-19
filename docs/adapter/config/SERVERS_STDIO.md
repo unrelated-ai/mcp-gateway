@@ -19,6 +19,13 @@ servers:
 
 ## Fields
 
+### `modernProtocol`
+
+- **Type**: boolean
+- **Default**: `false`
+- Requires `adapter.modernProtocol: true` and a native MCP 2026-07-28 backend.
+- Uses `persistent`; other explicit lifecycle values are rejected.
+
 ### `command`
 
 - **Type**: string

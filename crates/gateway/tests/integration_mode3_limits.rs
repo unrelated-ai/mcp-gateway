@@ -265,19 +265,17 @@ async fn start_jwks_server(jwks_json: serde_json::Value) -> anyhow::Result<JwksS
 fn generate_test_keypair_and_jwks(kid: &str) -> anyhow::Result<(String, serde_json::Value)> {
     use base64::Engine as _;
     use rsa::pkcs8::{EncodePrivateKey as _, LineEnding};
-    use rsa::rand_core::OsRng;
     use rsa::traits::PublicKeyParts as _;
 
-    let mut rng = OsRng;
-    let key = rsa::RsaPrivateKey::new(&mut rng, 2048).context("generate rsa key")?;
+    let key = rsa::PrivateKey::new(&mut getrandom::SysRng, 2048).context("generate rsa key")?;
     let pem = key
         .to_pkcs8_pem(LineEnding::LF)
         .context("encode private key to pkcs8 pem")?
         .to_string();
     let public = key.to_public_key();
     let b64u = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    let n = b64u.encode(public.n().to_bytes_be());
-    let e = b64u.encode(public.e().to_bytes_be());
+    let n = b64u.encode(public.n_bytes());
+    let e = b64u.encode(public.e_bytes());
 
     Ok((
         pem,

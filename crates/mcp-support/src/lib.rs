@@ -2,6 +2,7 @@
 use base64::Engine as _;
 
 pub mod headers;
+pub mod native;
 pub mod timeouts;
 
 const TEMPLATE_PREFIX: &str = "urn:unrelated:template:";

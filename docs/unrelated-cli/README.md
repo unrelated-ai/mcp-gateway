@@ -52,6 +52,9 @@ supported; no switch to the compact proxy is required.
 The default connection uses legacy initialization. For a Gateway profile with
 `mcp.modernProtocol: true`, set `UNRELATED_MCP_PROTOCOL=2026-07-28` to select
 RMCP discovery and native stateless HTTP. Authentication settings are unchanged.
-Unset the variable (or set `legacy`) for Adapter-backed profiles. Automatic
-protocol response caching remains disabled. The compact stdio proxy's downstream
-interface continues to negotiate legacy versions through 2025-11-25.
+The compact stdio proxy supports native discovery, continuations, tasks, and
+subscriptions with a native upstream. The CLI timeout bounds subscription setup.
+After acknowledgement the stream stays open until cancellation, completion, or
+disconnect. Its tool surface remains `search_tools` and
+`execute_tool`. Unset the variable (or set `legacy`) for legacy upstreams.
+Automatic protocol response caching remains disabled.

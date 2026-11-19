@@ -58,7 +58,7 @@ jobs:
       - name: Set up Trivy
         uses: aquasecurity/setup-trivy@v0.3.1
         with:
-          version: v0.76.1
+          version: v0.76.2
 
       - name: Build image (default target)
         if: ${{ inputs.docker_target == '' }}
