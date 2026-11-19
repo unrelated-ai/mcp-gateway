@@ -3,5 +3,5 @@ name: unrelated-mcp-gateway-operator
 description: OSS Kubernetes operator for unrelated MCP Gateway managed servers.
 type: application
 kubeVersion: ">=1.33.0-0"
-version: 1.0.2
-appVersion: "1.0.2"
+version: 1.1.0
+appVersion: "1.1.0"
